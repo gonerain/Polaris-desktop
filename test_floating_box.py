@@ -92,7 +92,7 @@ class FloatingBoxTests(unittest.TestCase):
         self.assertIn(".webp", str(self.find("petFrameImage").property("source")))
         self.assertFalse(self.find("expandedContent").isVisible())
         board = self.find("componentBoard")
-        self.assertEqual((board.width(), board.height()), (528, 256))
+        self.assertEqual((board.width(), board.height()), (528, 300))
         calendar = self.find("calendarTasks")
         self.assertFalse(calendar.isVisible())
         self.assertFalse(calendar.property("calendarVisible"))
@@ -175,7 +175,7 @@ class FloatingBoxTests(unittest.TestCase):
         self.expand()
         self.assertEqual((self.window.width(), self.window.height()), (800, 500))
         self.assertEqual((self.find("calendarTasks").width(),
-                          self.find("calendarTasks").height()), (800, 456))
+                          self.find("calendarTasks").height()), (800, 500))
 
     def test_tasks_survive_collapse_and_expand(self) -> None:
         self.expand()

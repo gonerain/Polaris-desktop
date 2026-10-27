@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Window
 import "Theme.js" as Theme
 
 ColumnLayout {
@@ -12,6 +13,7 @@ ColumnLayout {
     property bool composerOpen: false
     property bool timeError: false
     signal calendarRequested()
+    signal dragActiveChanged(bool active)
 
     spacing: 12
 
@@ -19,6 +21,17 @@ ColumnLayout {
         id: header
         Layout.fillWidth: true
         spacing: 12
+
+        DragHandler {
+            objectName: "agendaMoveHandler"
+            target: null
+            acceptedButtons: Qt.LeftButton
+            onActiveChanged: {
+                root.dragActiveChanged(active)
+                if (active && Window.window)
+                    Window.window.startSystemMove()
+            }
+        }
 
         Text {
             Layout.alignment: Qt.AlignVCenter
@@ -75,8 +88,8 @@ ColumnLayout {
             textSize: root.composerOpen ? 16 : 20
             buttonSize: 32
             filled: !root.composerOpen
-            accessibleName: root.composerOpen ? qsTr("关闭添加") : qsTr("添加日程")
-            tooltip: root.composerOpen ? qsTr("关闭添加") : qsTr("添加日程")
+            accessibleName: root.composerOpen ? qsTr("关闭") : qsTr("添加")
+            tooltip: root.composerOpen ? qsTr("关闭") : qsTr("添加")
             onClicked: root.toggleComposer()
         }
     }
@@ -156,7 +169,7 @@ ColumnLayout {
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
                     bare: true
-                    placeholderText: qsTr("添加日程")
+                    placeholderText: qsTr("添加…")
                     font.pixelSize: 12
                     onAccepted: root.addTask()
                 }
@@ -167,8 +180,8 @@ ColumnLayout {
                     filled: true
                     textSize: 16
                     buttonSize: 26
-                    accessibleName: qsTr("保存日程")
-                    tooltip: qsTr("保存日程")
+                    accessibleName: qsTr("保存")
+                    tooltip: qsTr("保存")
                     onClicked: root.addTask()
                 }
             }

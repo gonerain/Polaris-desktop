@@ -54,7 +54,6 @@ class MainWindowTests(unittest.TestCase):
         self.assertFalse(self.window.property("compact"))
         self.board = self.find("componentBoard")
         self.calendar = self.find("calendarTasks")
-        self.title_bar = self.find("titleBar")
         self.store = self.calendar.property("taskStore")
         self.assertIsNotNone(self.store)
 
@@ -100,8 +99,8 @@ class MainWindowTests(unittest.TestCase):
         self.assertNotIn("DISPLAY", os.environ)
         self.assertNotIn("WAYLAND_DISPLAY", os.environ)
 
-    def test_title_drag_gesture_activates_in_offscreen_scene(self) -> None:
-        handler = self.window.findChild(QObject, "windowMoveHandler")
+    def test_header_drag_gesture_activates_in_offscreen_scene(self) -> None:
+        handler = self.window.findChild(QObject, "agendaMoveHandler")
         self.assertIsNotNone(handler)
         changes = QSignalSpy(handler, SIGNAL("activeChanged()"))
         QTest.mousePress(self.window, Qt.MouseButton.LeftButton, pos=QPoint(60, 20))
@@ -156,9 +155,10 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(self.board.property("columns"), 2)
         self.assertEqual(self.board.property("rows"), 1)
         self.assertAlmostEqual(self.board.property("cellWidth"), 260.0)
-        self.assertAlmostEqual(self.board.property("cellHeight"), 256.0)
+        self.assertAlmostEqual(self.board.property("cellHeight"), 300.0)
         self.assertEqual(self.calendar.width(), self.window.width())
-        self.assertEqual(self.calendar.height(), self.window.height() - self.title_bar.height())
+        self.assertEqual(self.calendar.height(), self.window.height())
+        self.assertIsNone(self.window.findChild(QQuickItem, "titleBar"))
         self.assertFalse(self.calendar.property("calendarVisible"))
         self.assertTrue(self.find("openCalendarButton").isVisible())
         self.assertTrue(self.find("openComposerButton").isVisible())
@@ -176,10 +176,10 @@ class MainWindowTests(unittest.TestCase):
         self.app.processEvents()
         QTest.qWait(100)
 
-        self.assertEqual((self.board.width(), self.board.height()), (1000, 556))
+        self.assertEqual((self.board.width(), self.board.height()), (1000, 600))
         self.assertAlmostEqual(self.board.property("cellWidth"), 496.0)
-        self.assertAlmostEqual(self.board.property("cellHeight"), 556.0)
-        self.assertEqual((self.calendar.width(), self.calendar.height()), (1000, 556))
+        self.assertAlmostEqual(self.board.property("cellHeight"), 600.0)
+        self.assertEqual((self.calendar.width(), self.calendar.height()), (1000, 600))
         self.assertGreater(self.find("newTaskInput").width(), initial_task_width)
 
         self.open_calendar()

@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Window
 import "Theme.js" as Theme
 
 ColumnLayout {
@@ -12,6 +13,7 @@ ColumnLayout {
     readonly property real dayHeight: Math.max(24, Math.min(40, (height - 64) / 6))
 
     signal agendaRequested()
+    signal dragActiveChanged(bool active)
 
     spacing: 6
 
@@ -19,13 +21,24 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 2
 
+        DragHandler {
+            objectName: "calendarMoveHandler"
+            target: null
+            acceptedButtons: Qt.LeftButton
+            onActiveChanged: {
+                root.dragActiveChanged(active)
+                if (active && Window.window)
+                    Window.window.startSystemMove()
+            }
+        }
+
         IconButton {
             objectName: "closeCalendarButton"
             text: "‹"
             textSize: 18
             buttonSize: 26
-            accessibleName: qsTr("返回日程")
-            tooltip: qsTr("返回日程")
+            accessibleName: qsTr("返回")
+            tooltip: qsTr("返回")
             onClicked: root.agendaRequested()
         }
 

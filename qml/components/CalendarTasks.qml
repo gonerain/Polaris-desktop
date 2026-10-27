@@ -17,6 +17,7 @@ Rectangle {
 
     property bool calendarVisible: false
     readonly property var taskStore: store
+    signal dragActiveChanged(bool active)
 
     CalendarTaskStore {
         id: store
@@ -34,6 +35,7 @@ Rectangle {
             visible: !widget.calendarVisible
             taskStore: store
             onCalendarRequested: widget.calendarVisible = true
+            onDragActiveChanged: function(active) { widget.dragActiveChanged(active) }
         }
 
         CalendarMonthView {
@@ -42,6 +44,7 @@ Rectangle {
             visible: widget.calendarVisible
             taskStore: store
             onAgendaRequested: widget.calendarVisible = false
+            onDragActiveChanged: function(active) { widget.dragActiveChanged(active) }
         }
     }
 }

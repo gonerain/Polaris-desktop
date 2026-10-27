@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import "components"
@@ -11,7 +13,7 @@ Window {
     minimumWidth: compactSize
     minimumHeight: compactSize
     visible: true
-    title: qsTr("悬浮日程")
+    title: "Polaris"
     color: "transparent"
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
@@ -168,77 +170,10 @@ Window {
                 NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic }
             }
 
-            Rectangle {
-                id: titleBar
-                objectName: "titleBar"
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: 44
-                color: Theme.surface
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    height: 1
-                    color: Theme.border
-                }
-
-                Rectangle {
-                    x: 14
-                    y: 14
-                    width: 3
-                    height: 16
-                    radius: 1.5
-                    color: Theme.primary
-                }
-
-                Item {
-                    objectName: "titleDragArea"
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-
-                    Text {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 24
-                        anchors.right: parent.right
-                        anchors.rightMargin: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: window.title
-                        color: Theme.ink
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                        elide: Text.ElideRight
-                    }
-
-                    DragHandler {
-                        objectName: "windowMoveHandler"
-                        target: null
-                        acceptedButtons: Qt.LeftButton
-                        onActiveChanged: {
-                            window.moving = active
-                            if (active) {
-                                window.startSystemMove()
-                            } else if (!windowHover.hovered && !window.compact && !window.collapsing) {
-                                autoCollapse.restart()
-                            }
-                        }
-                    }
-                }
-
-            }
-
             ComponentBoard {
                 id: board
                 objectName: "componentBoard"
-                anchors.top: titleBar.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
+                anchors.fill: parent
                 panelSize: Qt.size(260, 260)
                 panelCount: 2
                 gap: 8
@@ -267,7 +202,7 @@ Window {
             opacity: window.compact ? 1 : 0
             scale: window.compact ? 1 : 0.92
             Accessible.role: Accessible.Button
-            Accessible.name: qsTr("打开日程")
+            Accessible.name: qsTr("打开")
 
             Behavior on opacity {
                 NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic }
@@ -321,7 +256,15 @@ Window {
 
     Component {
         id: calendarFactory
-        CalendarTasks { objectName: "calendarTasks" }
+        CalendarTasks {
+            objectName: "calendarTasks"
+
+            onDragActiveChanged: function(active) {
+                window.moving = active
+                if (!active && !windowHover.hovered && !window.compact && !window.collapsing)
+                    autoCollapse.restart()
+            }
+        }
     }
 
     Component.onCompleted: {
