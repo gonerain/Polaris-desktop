@@ -16,6 +16,21 @@ class DesktopLifecycleTests(unittest.TestCase):
                               cwd=Path(__file__).resolve().parent, env=env,
                               capture_output=True, text=True, timeout=15)
 
+    def test_windows_default_uses_software_renderer_and_honors_override(self):
+        from unittest.mock import patch
+        from PySide6.QtQuick import QQuickWindow
+        import main
+        with patch.object(main.sys, "platform", "win32"), \
+             patch.dict(os.environ, {"QT_QUICK_BACKEND": ""}), \
+             patch.object(QQuickWindow, "setSceneGraphBackend") as configure:
+            main.configure_rendering()
+            configure.assert_called_once_with("software")
+        with patch.object(main.sys, "platform", "win32"), \
+             patch.dict(os.environ, {"QT_QUICK_BACKEND": "rhi"}), \
+             patch.object(QQuickWindow, "setSceneGraphBackend") as configure:
+            main.configure_rendering()
+            configure.assert_not_called()
+
     def test_real_entry_point_saves_exits_and_releases_lock(self):
         script = '''
 import sys
