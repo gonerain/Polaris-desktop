@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import "components"
 import "components/Theme.js" as Theme
 
@@ -21,8 +22,19 @@ Window {
     property bool moving: false
     property bool applyingState: false
     property bool collapsing: false
+    property bool allowQuit: false
     property real expandedWidth: 528
     property real expandedHeight: 300
+
+    onClosing: function(close) {
+        if (!window.allowQuit)
+            close.accepted = false
+    }
+
+    function requestQuit() {
+        window.allowQuit = true
+        window.close()
+    }
 
     onWidthChanged: if (!compact && !applyingState) expandedWidth = width
     onHeightChanged: if (!compact && !applyingState) expandedHeight = height
@@ -78,6 +90,50 @@ Window {
     Item {
         id: root
         anchors.fill: parent
+
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+
+            onSingleTapped: function(eventPoint, button) {
+                contextMenu.popup(eventPoint.position)
+            }
+        }
+
+        Menu {
+            id: contextMenu
+            objectName: "quitMenu"
+            parent: root
+            padding: 4
+
+            background: Rectangle {
+                color: Theme.surface
+                radius: 8
+                border.width: 1
+                border.color: Theme.border
+            }
+
+            MenuItem {
+                id: quitItem
+                objectName: "quitMenuItem"
+                text: qsTr("退出")
+                implicitWidth: 112
+                implicitHeight: 30
+
+                contentItem: Text {
+                    text: quitItem.text
+                    color: Theme.danger
+                    font.pixelSize: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                background: Rectangle {
+                    radius: 6
+                    color: quitItem.hovered ? "#FEF2F2" : "transparent"
+                }
+
+                onTriggered: window.requestQuit()
+            }
+        }
 
         HoverHandler {
             id: windowHover
@@ -143,7 +199,8 @@ Window {
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     anchors.left: parent.left
-                    anchors.right: windowControls.left
+                    anchors.right: parent.right
+                    anchors.rightMargin: 10
 
                     Text {
                         anchors.left: parent.left
@@ -173,24 +230,6 @@ Window {
                     }
                 }
 
-                Row {
-                    id: windowControls
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 3
-
-                    WindowButton {
-                        objectName: "collapseButton"
-                        onClicked: window.collapse()
-                    }
-
-                    WindowButton {
-                        objectName: "closeButton"
-                        isCloseButton: true
-                        onClicked: window.close()
-                    }
-                }
             }
 
             ComponentBoard {

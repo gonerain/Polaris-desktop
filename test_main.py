@@ -9,7 +9,7 @@ os.environ["QT_QUICK_BACKEND"] = "software"
 os.environ.pop("DISPLAY", None)
 os.environ.pop("WAYLAND_DISPLAY", None)
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, Qt, SIGNAL
+from PySide6.QtCore import QCoreApplication, QEvent, QMetaObject, QObject, QPoint, QPointF, Qt, SIGNAL
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickItem, QQuickWindow
 from PySide6.QtTest import QSignalSpy, QTest
@@ -207,21 +207,33 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(self.window.minimumWidth(), 528)
         self.assertEqual(self.window.minimumHeight(), 300)
 
-    def test_collapse_button_returns_to_floating_plus_and_preserves_tasks(self) -> None:
-        self.store.addTask("收起后保留")
-        self.click("collapseButton")
-        QTest.qWait(250)
-        self.assertTrue(self.window.property("compact"))
-        self.assertEqual(self.window.width(), 180)
-        self.click("compactBox")
-        QTest.qWait(300)
-        self.assertFalse(self.window.property("compact"))
-        self.assertEqual([task.title for task in self.store.tasks], ["收起后保留"])
-        self.assertTrue(self.window.flags() & Qt.WindowType.WindowStaysOnTopHint)
+    def test_window_close_is_guarded_until_explicit_quit(self) -> None:
+        self.window.close()
+        QTest.qWait(100)
+        self.assertTrue(self.window.isVisible())
 
-    def test_close_button_closes_window(self) -> None:
-        self.click("closeButton")
+        self.window.setProperty("allowQuit", True)
+        self.window.close()
+        QTest.qWait(100)
         self.assertFalse(self.window.isVisible())
+
+    def test_request_quit_closes_the_window(self) -> None:
+        self.assertTrue(QMetaObject.invokeMethod(self.window, "requestQuit"))
+        QTest.qWait(100)
+        self.assertFalse(self.window.isVisible())
+
+    def test_right_click_opens_the_quit_menu(self) -> None:
+        menu = self.window.findChild(QObject, "quitMenu")
+        self.assertIsNotNone(menu)
+        self.assertFalse(menu.property("visible"))
+
+        QTest.mouseClick(self.window, Qt.MouseButton.RightButton, pos=QPoint(60, 20))
+        QTest.qWait(120)
+        self.assertTrue(menu.property("visible"))
+
+        menu.setProperty("visible", False)
+        QTest.qWait(80)
+        self.assertFalse(menu.property("visible"))
 
 
 if __name__ == "__main__":

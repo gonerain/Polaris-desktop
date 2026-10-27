@@ -99,6 +99,17 @@ class FloatingBoxTests(unittest.TestCase):
         self.assertFalse(self.find("calendarMonthView").isVisible())
         self.assertFalse(self.find("newTaskInput").isVisible())
 
+    def test_right_click_on_pet_opens_quit_menu(self) -> None:
+        menu = self.window.findChild(QObject, "quitMenu")
+        self.assertIsNotNone(menu)
+        self.assertFalse(menu.property("visible"))
+
+        QTest.mouseClick(self.window, Qt.MouseButton.RightButton, pos=QPoint(90, 90))
+        QTest.qWait(120)
+        self.assertTrue(menu.property("visible"))
+
+        menu.setProperty("visible", False)
+
     def test_click_compact_box_expands(self) -> None:
         self.expand()
         self.assertEqual((self.window.width(), self.window.height()), (528, 300))
