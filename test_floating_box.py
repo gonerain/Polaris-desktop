@@ -110,6 +110,29 @@ class FloatingBoxTests(unittest.TestCase):
 
         menu.setProperty("visible", False)
 
+    def test_quit_menu_is_in_separate_window_and_exit_is_clickable(self) -> None:
+        # Open at the lower-right edge: an in-window popup used to be clipped.
+        QTest.mouseClick(self.window, Qt.MouseButton.RightButton, pos=QPoint(170, 170))
+        QTest.qWait(180)
+        menu = self.window.findChild(QObject, "quitMenu")
+        self.assertTrue(menu.property("visible"))
+        button = self.window.findChild(QQuickItem, "quitMenuItem")
+        self.assertIsNotNone(button)
+        popup_window = button.window()
+        self.assertIsNotNone(popup_window)
+        self.assertIsNot(popup_window, self.window)
+        position = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+        self.assertTrue(popup_window.contentItem().contains(QPointF(position)))
+        self.assertTrue(button.isVisible())
+        self.assertTrue(button.isEnabled())
+        QTest.mouseMove(popup_window, position)
+        QTest.qWait(60)
+        self.assertGreaterEqual(button.width(), 100)
+        QTest.mouseClick(popup_window, Qt.MouseButton.LeftButton, pos=position)
+        QTest.qWait(100)
+        self.assertTrue(self.window.property("allowQuit"))
+        self.assertFalse(self.window.isVisible())
+
     def test_click_compact_box_expands(self) -> None:
         self.expand()
         self.assertEqual((self.window.width(), self.window.height()), (528, 300))

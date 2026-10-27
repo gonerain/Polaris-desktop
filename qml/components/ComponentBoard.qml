@@ -15,6 +15,32 @@ Item {
     readonly property real cellWidth: Math.max(1, (width - (columns - 1) * gap) / columns)
     readonly property real cellHeight: Math.max(1, (height - (rows - 1) * gap) / rows)
     property var _handles: ({})
+    // The presenter belongs to the window, not the allocator.
+    property var presenter: null
+
+    function present(handle, factory, options, properties): bool {
+        if (!presenter || !handle || _handles[String(handle.id)] !== handle)
+            return false
+        const resolved = Object.assign({}, options || {})
+        if (resolved.span !== undefined) {
+            const span = resolved.span
+            if (!Number.isInteger(span.width) || !Number.isInteger(span.height)
+                    || span.width < 1 || span.height < 1)
+                return false
+            resolved.size = Qt.size(span.width * panelSize.width + (span.width - 1) * gap,
+                                    span.height * panelSize.height + (span.height - 1) * gap)
+        }
+        return presenter.open(handle, factory, resolved, properties)
+    }
+
+    function presentItem(item, factory, options, properties): bool {
+        for (const key in _handles) {
+            const handle = _handles[key]
+            if (handle.item === item)
+                return present(handle, factory, options, properties)
+        }
+        return false
+    }
 
     implicitWidth: allocator.boardWidth
     implicitHeight: allocator.boardHeight
@@ -58,6 +84,8 @@ Item {
 
     function release(handle: var): bool {
         if (!handle || _handles[String(handle.id)] !== handle)
+            return false
+        if (presenter && presenter.busy && presenter.sourceHandle === handle)
             return false
         delete _handles[String(handle.id)]
         handle.host.visible = false

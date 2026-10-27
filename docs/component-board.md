@@ -140,6 +140,33 @@ const handle = board.request(labeledFactory, {cells: [[0, 0]]}, {caption: "示�
 
 这是受信任 QML 组件的布局协议，不是安全沙箱。自行创建顶层 Window/Popup 等越界内容不受画板裁剪保护。Qt 软件后端本身不支持所有 GPU 特效，画板不会解除这一限制。
 
+## 组件完整视图（独立于画布）
+
+组件可在画布内完成所有常用操作，再通过明确入口请求独立的完整视图；完整视图不参与 panel 分配，也不改变原有占用。原有组件无需改造即可继续使用。
+
+窗口层创建 `FocusPresenter { targetWindow: window }`，并设置 `board.presenter`。打开接口：
+
+```qml
+// 省略尺寸：覆盖当前画布，窗口大小不变。
+board.present(handle, fullViewFactory, {}, {model: sharedModel})
+// 期望 6×4 个基础 panel 的大小，与画布容量无关。
+board.present(handle, fullViewFactory, {span: Qt.size(6, 4)}, {model: sharedModel})
+// 也可直接指定逻辑像素尺寸。
+board.present(handle, fullViewFactory, {size: Qt.size(1000, 720)}, {model: sharedModel})
+// 组件发出请求时，窗口也可用业务 Item 查找原 handle。
+board.presentItem(componentItem, fullViewFactory, options, properties)
+```
+
+`span` 必须是正整数宽高，按基础 `panelSize` 与 `gap` 换算，优先于 `size`；省略 `size` 或尺寸为零时保留原窗口对应尺寸。实际尺寸会按屏幕空间与窗口最小尺寸约束。完整视图必须以 `Item` 为根，自动绑定展示区域宽高，通过 `parent.presentationContext.close()` 返回。工厂及其数据模型应由长生命周期组件持有，不要在完整视图内重新创建业务数据。
+
+管理器只接受一个活动请求；`present()` 的 true 表示已接受异步截图请求，不代表视图已经创建成功，最终由 `opened` / `failed(reason)` 信号报告。活动请求期间不能释放来源 handle。视图创建失败会恢复空闲状态，不改变画布占用。
+
+过渡使用来源组件快照、背景扩张、内容交叉淡入淡出及窗口几何插值（320ms），不是拉伸活的控件。返回沿原路径恢复原始窗口位置和尺寸；快照是打开瞬间的视觉占位，真实画布一直保留，返回后显示最新数据。完整视图在返回时销毁，业务数据不销毁。
+
+主窗口在完整态冻结画布尺寸、暂停自动缩回并禁止边缘缩放。点击返回或按 Esc 退出；过渡期间阻止重复切换。完整视图内部仍可自由布局、编辑和导航。第一版完整态为矩形区域；画布态的不规则区域能力不变。桌面实际动画效果仍需人工验证，离屏测试只验证状态及几何往返。
+
+日程右上角的 `↗` 打开独立的 `4×3` 总览（月历 + 当日日程），窄窗口改为上下排列；两个视图共用同一个 `CalendarTaskStore`，日期和任务实时一致。原 `2×1` 日程的添加、编辑、子任务和月历切换保留。
+
 ## 两格日程组件
 
 `CalendarTasks.qml` 占两个横向 panel，但默认只显示一个全宽的日程视图；月历藏在“月历”按钮后面，不占默认空间。
@@ -160,7 +187,7 @@ const handle = board.request(labeledFactory, {cells: [[0, 0]]}, {caption: "示�
 
 默认主窗口只申请 2 个 panel，全部给日程组件；不创建之前占位的写字板 panel，也不存在 2×2 网格里空出来的第 4 格。`Notepad.qml` 仍保留为可申请的单格组件，只是默认不占用画板。
 
-不包含提醒、重复日程、保存、远程同步或拖拽改期。日程时间只精确到分钟，不包含结束时间、地点和参与人。
+包含前述运行期提前提醒；不包含重复日程、保存、远程同步或拖拽改期。日程时间只精确到分钟，不包含结束时间、地点和参与人。
 
 ## 文件
 

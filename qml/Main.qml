@@ -42,8 +42,8 @@ Window {
         window.close()
     }
 
-    onWidthChanged: if (!compact && !applyingState) expandedWidth = width
-    onHeightChanged: if (!compact && !applyingState) expandedHeight = height
+    onWidthChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedWidth = width
+    onHeightChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedHeight = height
 
     function expand() {
         if (!compact) {
@@ -65,7 +65,7 @@ Window {
     }
 
     function collapse() {
-        if (compact || collapsing)
+        if (compact || collapsing || focusPresenter.busy)
             return
         autoCollapse.stop()
         collapsing = true
@@ -136,6 +136,22 @@ Window {
         onTriggered: window.hideBubble()
     }
 
+    FocusPresenter {
+        id: focusPresenter
+        objectName: "focusPresenter"
+        anchors.fill: parent
+        targetWindow: window
+        onOpened: {
+            autoCollapse.stop()
+            window.cancelCollapse()
+        }
+        onClosed: {
+            if (!windowHover.hovered)
+                autoCollapse.restart()
+        }
+        onFailed: function(reason) { console.warn("完整视图打开失败", reason) }
+    }
+
     Item {
         id: root
         anchors.fill: parent
@@ -152,7 +168,17 @@ Window {
             id: contextMenu
             objectName: "quitMenu"
             parent: root
+            // A window popup cannot be clipped by the 180px transparent pet.
+            popupType: Popup.Window
+            // Custom backgrounds have no implicit size: explicitly size the menu,
+            // otherwise the list can collapse to padding-only (8px) on Windows.
+            implicitWidth: 120
             padding: 4
+            onOpened: autoCollapse.stop()
+            onClosed: {
+                if (!window.compact && !windowHover.hovered && !focusPresenter.busy)
+                    autoCollapse.restart()
+            }
 
             background: Rectangle {
                 color: Theme.surface
@@ -192,7 +218,7 @@ Window {
                     autoCollapse.stop()
                     if (window.collapsing)
                         window.cancelCollapse()
-                } else if (!window.compact && !window.moving && !window.collapsing) {
+                } else if (!window.compact && !window.moving && !window.collapsing && !contextMenu.visible) {
                     autoCollapse.restart()
                 }
             }
@@ -205,11 +231,12 @@ Window {
             height: window.compact ? window.expandedHeight : window.height
             visible: !window.compact || window.collapsing
             enabled: !window.compact && !window.collapsing
-            opacity: (window.compact || window.collapsing) ? 0 : 1
+            opacity: (window.compact || window.collapsing) ? 0 : 1 - focusPresenter.progress
             scale: (window.compact || window.collapsing) ? 0.985 : 1
             transformOrigin: Item.Center
 
             Behavior on opacity {
+                enabled: !focusPresenter.busy
                 NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic }
             }
 
@@ -220,7 +247,9 @@ Window {
             ComponentBoard {
                 id: board
                 objectName: "componentBoard"
-                anchors.fill: parent
+                width: focusPresenter.busy ? focusPresenter.savedGeometry.width : parent.width
+                height: focusPresenter.busy ? focusPresenter.savedGeometry.height : parent.height
+                presenter: focusPresenter
                 panelSize: Qt.size(260, 260)
                 panelCount: 2
                 gap: 8
@@ -231,7 +260,7 @@ Window {
                 z: 10
                 anchors.fill: parent
                 targetWindow: window
-                enabled: !window.collapsing
+                enabled: !window.collapsing && !focusPresenter.busy
             }
         }
 
@@ -331,6 +360,9 @@ Window {
         CalendarTasks {
             objectName: "calendarTasks"
 
+            onFocusRequested: function(factory, options, properties) {
+                board.presentItem(this, factory, options, properties)
+            }
             onDragActiveChanged: function(active) {
                 window.moving = active
                 if (!active && !windowHover.hovered && !window.compact && !window.collapsing)

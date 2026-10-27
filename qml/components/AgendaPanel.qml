@@ -12,6 +12,9 @@ ColumnLayout {
     property var taskStore
     property bool composerOpen: false
     property bool timeError: false
+    property bool showFocusButton: false
+    property bool showCalendarButton: true
+    signal focusRequested()
     signal calendarRequested()
     signal dragActiveChanged(bool active)
 
@@ -70,7 +73,21 @@ ColumnLayout {
         }
 
         IconButton {
+            objectName: "openFocusButton"
+            visible: root.showFocusButton
+            text: "↗"
+            buttonSize: 28
+            accessibleName: qsTr("打开日程总览")
+            tooltip: qsTr("日程总览")
+            onClicked: {
+                root.closeComposer()
+                root.focusRequested()
+            }
+        }
+
+        IconButton {
             objectName: "openCalendarButton"
+            visible: root.showCalendarButton
             text: qsTr("月历")
             textSize: 10
             buttonSize: 28
