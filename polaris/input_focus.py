@@ -24,6 +24,8 @@ class InputFocusFilter(QObject):
             point = event.points()[0].position() if kind == QEvent.Type.TouchBegin else event.position()
             if item.contains(item.mapFromScene(point)):
                 return False
-        watched.contentItem().forceActiveFocus(Qt.FocusReason.MouseFocusReason)
+        # The window content item is a FocusScope: focusing it restores its
+        # remembered child. Clear the actual input's focus instead.
+        item.setFocus(False, Qt.FocusReason.MouseFocusReason)
         # Do not consume the event: the newly clicked input/control handles it normally.
         return False
