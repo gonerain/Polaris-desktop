@@ -13,7 +13,7 @@ AbstractButton {
     implicitWidth: 20
     implicitHeight: 20
     hoverEnabled: true
-    focusPolicy: Qt.TabFocus
+    focusPolicy: Qt.StrongFocus
     padding: 0
     Accessible.role: Accessible.CheckBox
     Accessible.name: control.accessibleName

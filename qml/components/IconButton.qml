@@ -16,7 +16,7 @@ AbstractButton {
     implicitWidth: Math.max(buttonSize, label.implicitWidth + 12)
     implicitHeight: buttonSize
     hoverEnabled: true
-    focusPolicy: Qt.TabFocus
+    focusPolicy: Qt.StrongFocus
     Accessible.name: control.accessibleName.length > 0 ? control.accessibleName : control.text
     ToolTip.visible: hovered && tooltip.length > 0
     ToolTip.text: tooltip

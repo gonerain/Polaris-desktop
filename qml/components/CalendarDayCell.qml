@@ -15,7 +15,7 @@ AbstractButton {
     implicitHeight: cellHeight
     enabled: modelData.date !== ""
     hoverEnabled: true
-    focusPolicy: Qt.NoFocus
+    focusPolicy: Qt.StrongFocus
     padding: 0
     Accessible.role: Accessible.Button
     Accessible.name: modelData.date

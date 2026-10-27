@@ -185,6 +185,30 @@ class FocusPresentationTests(unittest.TestCase):
         self.find("focusPresenter").close()
         QTest.qWait(380)
 
+    def test_overview_button_releases_input_focus_and_keeps_action(self):
+        from PySide6.QtCore import QPointF, Qt
+        from test_floating_box import find_visual_item
+        self.expand()
+        store = self.window.findChild(QObject, "calendarTaskStore")
+        task = store.addTask("Original")
+        self.click("openFocusButton")
+        QTest.qWait(450)
+        self.click("overviewModeButton")
+        view = self.find("focusPresenter").property("view")
+        field = find_visual_item(view, "taskTitle" + str(task.entryId))
+        field.forceActiveFocus()
+        field.setProperty("text", "Committed on leaving")
+        button = find_visual_item(view, "toggleTask" + str(task.entryId))
+        point = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+        QTest.mousePress(self.window, Qt.MouseButton.LeftButton, pos=point)
+        QTest.qWait(80)
+        QTest.mouseRelease(self.window, Qt.MouseButton.LeftButton, pos=point)
+        QTest.qWait(100)
+        self.assertEqual(task.title, "Committed on leaving")
+        self.assertTrue(task.done)
+        self.find("focusPresenter").close()
+        QTest.qWait(380)
+
     def test_repeated_open_and_escape(self):
         from PySide6.QtCore import Qt
         self.expand()

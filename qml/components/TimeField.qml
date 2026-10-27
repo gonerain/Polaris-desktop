@@ -9,6 +9,7 @@ import "Theme.js" as Theme
 InlineField {
     id: field
     readOnly: true
+    focusPolicy: Qt.TabFocus
     selectByMouse: false
     horizontalAlignment: TextInput.AlignHCenter
     placeholderText: qsTr("全天")
