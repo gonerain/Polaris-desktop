@@ -55,8 +55,14 @@ Module {
         exports: ["Polaris/CalendarTaskStore 1.0"]
         exportMetaObjectRevisions: [256]
         Property { name: "selectedDate"; type: "QString"; isReadonly: true }
+        Property { name: "selectedDateLabel"; type: "QString"; isReadonly: true }
+        Property { name: "selectedWeekday"; type: "QString"; isReadonly: true }
+        Property { name: "selectedDayNumber"; type: "int"; isReadonly: true }
         Property { name: "monthLabel"; type: "QString"; isReadonly: true }
         Property { name: "tasks"; type: "QVariantList"; isReadonly: true }
+        Property { name: "taskCount"; type: "int"; isReadonly: true }
+        Property { name: "completedCount"; type: "int"; isReadonly: true }
+        Property { name: "lastAddedTaskId"; type: "int"; isReadonly: true }
         Property { name: "calendarCells"; type: "QVariantList"; isReadonly: true }
         Method {
             name: "selectDate"; type: "bool"
@@ -67,8 +73,16 @@ Module {
             Parameter { name: "delta"; type: "int" }
         }
         Method {
+            name: "goToday"; type: "bool"
+        }
+        Method {
+            name: "isValidTime"; type: "bool"
+            Parameter { name: "value"; type: "QString" }
+        }
+        Method {
             name: "addTask"; type: "QObject*"
             Parameter { name: "title"; type: "QString" }
+            Parameter { name: "time_value"; type: "QString" }
         }
         Method {
             name: "removeTask"; type: "bool"

@@ -67,6 +67,7 @@ class FloatingBoxTests(unittest.TestCase):
 
     def expand(self) -> None:
         self.click("compactBox")
+        QTest.qWait(220)
         self.assertFalse(self.window.property("compact"))
 
     def hover_inside(self) -> None:
@@ -85,8 +86,12 @@ class FloatingBoxTests(unittest.TestCase):
         self.assertTrue(self.find("compactBox").isVisible())
         self.assertFalse(self.find("expandedContent").isVisible())
         board = self.find("componentBoard")
-        self.assertEqual((board.width(), board.height()), (528, 260))
-        self.assertFalse(self.find("calendarTasks").isVisible())
+        self.assertEqual((board.width(), board.height()), (528, 256))
+        calendar = self.find("calendarTasks")
+        self.assertFalse(calendar.isVisible())
+        self.assertFalse(calendar.property("calendarVisible"))
+        self.assertFalse(self.find("calendarMonthView").isVisible())
+        self.assertFalse(self.find("newTaskInput").isVisible())
 
     def test_click_compact_box_expands(self) -> None:
         self.expand()
@@ -95,6 +100,9 @@ class FloatingBoxTests(unittest.TestCase):
         self.assertFalse(self.find("compactBox").isVisible())
         self.assertTrue(self.find("expandedContent").isVisible())
         self.assertTrue(self.find("calendarTasks").isVisible())
+        self.assertFalse(self.find("calendarTasks").property("calendarVisible"))
+        self.assertTrue(self.find("openComposerButton").isVisible())
+        self.assertFalse(self.find("newTaskInput").isVisible())
         self.assertEqual(self.find("componentBoard").property("freePanelCount"), 0)
 
     def test_mouse_leave_collapses_and_reenter_cancels(self) -> None:
@@ -110,9 +118,22 @@ class FloatingBoxTests(unittest.TestCase):
         self.assertFalse(self.window.property("compact"))
 
         self.hover_outside()
-        QTest.qWait(550)
+        QTest.qWait(700)
         self.assertTrue(self.window.property("compact"))
         self.assertEqual((self.window.width(), self.window.height()), (64, 64))
+
+    def test_collapse_can_be_cancelled_during_fade(self) -> None:
+        self.expand()
+        self.hover_inside()
+        self.hover_outside()
+        QTest.qWait(450)
+        self.assertTrue(self.window.property("collapsing"))
+        self.assertFalse(self.window.property("compact"))
+
+        self.hover_inside()
+        QTest.qWait(300)
+        self.assertFalse(self.window.property("collapsing"))
+        self.assertFalse(self.window.property("compact"))
 
     def test_expanded_size_is_remembered(self) -> None:
         self.expand()
@@ -120,20 +141,20 @@ class FloatingBoxTests(unittest.TestCase):
         self.app.processEvents()
         QTest.qWait(100)
         self.hover_outside()
-        QTest.qWait(550)
+        QTest.qWait(700)
         self.assertTrue(self.window.property("compact"))
 
         self.expand()
         self.assertEqual((self.window.width(), self.window.height()), (800, 500))
         self.assertEqual((self.find("calendarTasks").width(),
-                          self.find("calendarTasks").height()), (800, 460))
+                          self.find("calendarTasks").height()), (800, 456))
 
     def test_tasks_survive_collapse_and_expand(self) -> None:
         self.expand()
         store = self.find("calendarTasks").property("taskStore")
         store.addTask("保留任务")
         self.hover_outside()
-        QTest.qWait(550)
+        QTest.qWait(700)
         self.assertTrue(self.window.property("compact"))
 
         self.expand()

@@ -49,7 +49,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(QTest.qWaitForWindowExposed(self.window, 3000))
         QTest.qWait(50)
         self.click("compactBox")
-        QTest.qWait(100)
+        QTest.qWait(300)
         self.assertFalse(self.window.property("compact"))
         self.board = self.find("componentBoard")
         self.calendar = self.find("calendarTasks")
@@ -73,6 +73,22 @@ class MainWindowTests(unittest.TestCase):
         position = item.mapToScene(QPointF(item.width() / 2, item.height() / 2))
         QTest.mouseClick(self.window, Qt.MouseButton.LeftButton, pos=position.toPoint())
         self.app.processEvents()
+        QTest.qWait(200)
+
+    def open_calendar(self) -> None:
+        if not self.calendar.property("calendarVisible"):
+            self.click("openCalendarButton")
+        self.assertTrue(self.calendar.property("calendarVisible"))
+
+    def close_calendar(self) -> None:
+        if self.calendar.property("calendarVisible"):
+            self.click("closeCalendarButton")
+        self.assertFalse(self.calendar.property("calendarVisible"))
+
+    def open_composer(self) -> None:
+        if not self.find("newTaskInput").isVisible():
+            self.click("openComposerButton")
+        self.assertTrue(self.find("newTaskInput").isVisible())
 
     def day_item(self):
         return self.find("calendarDay" + self.store.property("selectedDate"))
@@ -134,29 +150,36 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(self.board.property("columns"), 2)
         self.assertEqual(self.board.property("rows"), 1)
         self.assertAlmostEqual(self.board.property("cellWidth"), 260.0)
-        self.assertAlmostEqual(self.board.property("cellHeight"), 260.0)
+        self.assertAlmostEqual(self.board.property("cellHeight"), 256.0)
         self.assertEqual(self.calendar.width(), self.window.width())
         self.assertEqual(self.calendar.height(), self.window.height() - self.title_bar.height())
+        self.assertFalse(self.calendar.property("calendarVisible"))
+        self.assertTrue(self.find("openCalendarButton").isVisible())
+        self.assertTrue(self.find("openComposerButton").isVisible())
         self.assertIsNone(self.window.findChild(QQuickItem, "editor"))
 
     def test_calendar_panels_grow_with_the_window(self) -> None:
+        self.open_calendar()
         day = self.day_item()
         initial_day_width, initial_day_height = day.width(), day.height()
+        self.close_calendar()
+        self.open_composer()
         initial_task_width = self.find("newTaskInput").width()
 
         self.window.resize(1000, 600)
         self.app.processEvents()
         QTest.qWait(100)
 
-        self.assertEqual((self.board.width(), self.board.height()), (1000, 560))
+        self.assertEqual((self.board.width(), self.board.height()), (1000, 556))
         self.assertAlmostEqual(self.board.property("cellWidth"), 496.0)
-        self.assertAlmostEqual(self.board.property("cellHeight"), 560.0)
-        self.assertEqual((self.calendar.width(), self.calendar.height()), (1000, 560))
+        self.assertAlmostEqual(self.board.property("cellHeight"), 556.0)
+        self.assertEqual((self.calendar.width(), self.calendar.height()), (1000, 556))
+        self.assertGreater(self.find("newTaskInput").width(), initial_task_width)
 
+        self.open_calendar()
         day = self.day_item()
         self.assertGreater(day.width(), initial_day_width)
         self.assertGreater(day.height(), initial_day_height)
-        self.assertGreater(self.find("newTaskInput").width(), initial_task_width)
 
     def test_calendar_remains_editable_after_resize(self) -> None:
         self.window.resize(900, 520)
@@ -164,9 +187,12 @@ class MainWindowTests(unittest.TestCase):
         QTest.qWait(100)
 
         initial_date = self.store.property("selectedDate")
+        self.open_calendar()
         self.click("nextMonthButton")
         self.assertNotEqual(self.store.property("selectedDate"), initial_date)
+        self.close_calendar()
 
+        self.open_composer()
         self.find("newTaskInput").setProperty("text", "放大后任务")
         self.click("addTaskButton")
         self.assertIn("放大后任务", [task.title for task in self.store.tasks])
