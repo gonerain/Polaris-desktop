@@ -1,0 +1,78 @@
+// Python 类型的静态工具描述，供 qmllint 使用；运行时由 polaris.qml 注册。
+import QtQuick.tooling 1.2
+
+Module {
+    Component {
+        name: "PanelLayout"
+        prototype: "QObject"
+        exports: ["Polaris/PanelLayout 1.0"]
+        exportMetaObjectRevisions: [256]
+        Property { name: "panelSize"; type: "QSizeF" }
+        Property { name: "panelCount"; type: "int" }
+        Property { name: "gap"; type: "double" }
+        Property { name: "columns"; type: "int"; isReadonly: true }
+        Property { name: "rows"; type: "int"; isReadonly: true }
+        Property { name: "boardWidth"; type: "double"; isReadonly: true }
+        Property { name: "boardHeight"; type: "double"; isReadonly: true }
+        Property { name: "freeCount"; type: "int"; isReadonly: true }
+        Property { name: "lastError"; type: "QString"; isReadonly: true }
+        Method {
+            name: "configure"; type: "bool"
+            Parameter { name: "size"; type: "QSizeF" }
+            Parameter { name: "count"; type: "int" }
+            Parameter { name: "gap"; type: "double" }
+        }
+        Method {
+            name: "reserve"; type: "QVariantMap"
+            Parameter { name: "cells"; type: "QVariantList" }
+        }
+        Method {
+            name: "release"; type: "bool"
+            Parameter { name: "allocation_id"; type: "int" }
+        }
+        Method {
+            name: "regionsFor"; type: "QVariantList"
+            Parameter { name: "cells"; type: "QVariantList" }
+            Parameter { name: "cellWidth"; type: "double" }
+            Parameter { name: "cellHeight"; type: "double" }
+            Parameter { name: "gap"; type: "double" }
+        }
+    }
+    Component {
+        name: "RegionSurface"
+        prototype: "QQuickItem"
+        exports: ["Polaris/RegionSurface 1.0"]
+        exportMetaObjectRevisions: [256]
+        Property { name: "regions"; type: "QVariantList" }
+        Method {
+            name: "containsPoint"; type: "bool"
+            Parameter { name: "point"; type: "QPointF" }
+        }
+    }
+    Component {
+        name: "CalendarTaskStore"
+        prototype: "QObject"
+        exports: ["Polaris/CalendarTaskStore 1.0"]
+        exportMetaObjectRevisions: [256]
+        Property { name: "selectedDate"; type: "QString"; isReadonly: true }
+        Property { name: "monthLabel"; type: "QString"; isReadonly: true }
+        Property { name: "tasks"; type: "QVariantList"; isReadonly: true }
+        Property { name: "calendarCells"; type: "QVariantList"; isReadonly: true }
+        Method {
+            name: "selectDate"; type: "bool"
+            Parameter { name: "value"; type: "QString" }
+        }
+        Method {
+            name: "changeMonth"; type: "bool"
+            Parameter { name: "delta"; type: "int" }
+        }
+        Method {
+            name: "addTask"; type: "QObject*"
+            Parameter { name: "title"; type: "QString" }
+        }
+        Method {
+            name: "removeTask"; type: "bool"
+            Parameter { name: "entry_id"; type: "int" }
+        }
+    }
+}
