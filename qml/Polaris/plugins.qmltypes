@@ -3,6 +3,18 @@ import QtQuick.tooling 1.2
 
 Module {
     Component {
+        name: "InteractionCoordinator"
+        prototype: "QObject"
+        exports: ["Polaris/InteractionCoordinator 1.0"]
+        exportMetaObjectRevisions: [256]
+        Signal {
+            name: "notification"
+            Parameter { name: "kind"; type: "QString" }
+            Parameter { name: "entryId"; type: "int" }
+            Parameter { name: "text"; type: "QString" }
+        }
+    }
+    Component {
         name: "PanelLayout"
         prototype: "QObject"
         exports: ["Polaris/PanelLayout 1.0"]

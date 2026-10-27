@@ -2,6 +2,7 @@
 
 from PySide6.QtQml import qmlRegisterType, qmlRegisterUncreatableType
 
+from .interactions import InteractionCoordinator
 from .qt_board import PanelLayout, RegionSurface
 from .tasks import CalendarTaskStore, TaskEntry
 
@@ -15,5 +16,6 @@ def register_types() -> None:
     qmlRegisterType(PanelLayout, "Polaris", 1, 0, "PanelLayout")
     qmlRegisterType(RegionSurface, "Polaris", 1, 0, "RegionSurface")
     qmlRegisterType(CalendarTaskStore, "Polaris", 1, 0, "CalendarTaskStore")
+    qmlRegisterType(InteractionCoordinator, "Polaris", 1, 0, "InteractionCoordinator")
     qmlRegisterUncreatableType(TaskEntry, "Polaris", 1, 0, "TaskEntry", "任务由日历组件创建")
     _registered = True

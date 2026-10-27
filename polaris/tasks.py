@@ -1,4 +1,4 @@
-"""按日期管理的内存日程与一级子任务，不包含持久化或提醒。"""
+"""按日期管理的内存日程与一级子任务；提醒由应用级联动协调器负责。"""
 
 import calendar
 import re
@@ -125,6 +125,7 @@ class CalendarTaskStore(QObject):
     tasksChanged = Signal()
     summaryChanged = Signal()
     lastAddedTaskIdChanged = Signal()
+    scheduleChanged = Signal()
 
     def __init__(self, parent=None, *, today=None):
         super().__init__(parent)
@@ -180,15 +181,23 @@ class CalendarTaskStore(QObject):
     def _entries_for(self, day):
         return self._tasks_by_day.get(day, ())
 
+    def scheduled_entries(self):
+        """供应用级联动读取全部日期；与当前选中的日期无关。"""
+        for day, entries in self._tasks_by_day.items():
+            for entry in entries:
+                yield day, entry
+
     def _sorted_tasks(self, entries):
         return sorted(entries, key=lambda entry: (entry.time != "", entry.time))
 
     def _task_done_changed(self):
         self.summaryChanged.emit()
         self.calendarChanged.emit()
+        self.scheduleChanged.emit()
 
     def _task_time_changed(self):
         self.tasksChanged.emit()
+        self.scheduleChanged.emit()
 
     def _clear_last_added(self):
         if self._last_added_id:
@@ -239,6 +248,7 @@ class CalendarTaskStore(QObject):
         entry = TaskEntry(title, self._ids, self, time=cleaned_time)
         entry.doneChanged.connect(self._task_done_changed)
         entry.timeChanged.connect(self._task_time_changed)
+        entry.titleChanged.connect(self.scheduleChanged.emit)
         self._tasks_by_day.setdefault(self._selected, []).append(entry)
         self._last_added_id = entry.entryId
         if QCoreApplication.instance() is not None:
@@ -247,6 +257,7 @@ class CalendarTaskStore(QObject):
         self.tasksChanged.emit()
         self.summaryChanged.emit()
         self.calendarChanged.emit()
+        self.scheduleChanged.emit()
         return entry
 
     @Slot(int, result=bool)
@@ -261,6 +272,7 @@ class CalendarTaskStore(QObject):
                 self.tasksChanged.emit()
                 self.summaryChanged.emit()
                 self.calendarChanged.emit()
+                self.scheduleChanged.emit()
                 entry.deleteLater()
                 return True
         return False

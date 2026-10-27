@@ -3,7 +3,7 @@
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import QObject, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -22,6 +22,11 @@ def create_engine() -> QQmlApplicationEngine:
     if not engine.rootObjects():
         raise RuntimeError(f"无法加载日程界面：{QML_FILE}")
     window = engine.rootObjects()[0]
+    store = window.findChild(QObject, "calendarTaskStore")
+    coordinator = window.findChild(QObject, "interactionCoordinator")
+    if store is None or coordinator is None:
+        raise RuntimeError("找不到日程组件或联动协调器")
+    coordinator.attach(store)
     if QGuiApplication.instance() is not None:
         # 首次在窗口映射前设置；再延迟一次，确保窗口管理器已创建原生窗口。
         apply_skip_taskbar(window)

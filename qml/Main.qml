@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls.Basic
+import Polaris 1.0
 import "components"
 import "components/Theme.js" as Theme
 
@@ -18,6 +19,9 @@ Window {
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
     readonly property int compactSize: 180
+    readonly property int bubbleHeight: 58
+    property bool bubbleVisible: false
+    property string bubbleText: ""
     readonly property int expandedMinimumWidth: 528
     readonly property int expandedMinimumHeight: 300
     property bool compact: true
@@ -47,6 +51,7 @@ Window {
                 cancelCollapse()
             return
         }
+        hideBubble()
         autoCollapse.stop()
         collapseTimer.stop()
         collapsing = false
@@ -87,6 +92,48 @@ Window {
             return
         collapseTimer.stop()
         collapsing = false
+    }
+
+    function showBubble(message) {
+        if (!compact)
+            return
+        bubbleText = message
+        if (!bubbleVisible) {
+            bubbleVisible = true
+            y -= bubbleHeight
+            height = compactSize + bubbleHeight
+            minimumHeight = height
+        }
+        bubbleTimer.restart()
+    }
+
+    function hideBubble() {
+        bubbleTimer.stop()
+        if (!bubbleVisible)
+            return
+        bubbleVisible = false
+        y += bubbleHeight
+        minimumHeight = compactSize
+        height = compactSize
+    }
+
+    InteractionCoordinator {
+        id: interactionCoordinator
+        objectName: "interactionCoordinator"
+    }
+
+    Connections {
+        target: interactionCoordinator
+        function onNotification(kind, entryId, text) {
+            if (kind === "task.upcoming")
+                window.showBubble(text)
+        }
+    }
+
+    Timer {
+        id: bubbleTimer
+        interval: 6500
+        onTriggered: window.hideBubble()
     }
 
     Item {
@@ -195,6 +242,7 @@ Window {
             width: window.compactSize
             height: window.compactSize
             anchors.top: parent.top
+            anchors.topMargin: window.bubbleVisible ? window.bubbleHeight : 0
             anchors.left: parent.left
             color: "transparent"
             visible: opacity > 0
@@ -215,6 +263,30 @@ Window {
             PetMascot {
                 objectName: "petMascot"
                 anchors.fill: parent
+            }
+
+            Rectangle {
+                objectName: "petSpeechBubble"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.top
+                anchors.bottomMargin: 6
+                height: 46
+                radius: 12
+                color: Theme.surface
+                border.width: 1
+                border.color: Theme.border
+                visible: window.bubbleVisible && window.compact
+
+                Text {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    verticalAlignment: Text.AlignVCenter
+                    font.pixelSize: 12
+                    color: Theme.ink
+                    text: window.bubbleText
+                    elide: Text.ElideRight
+                }
             }
 
             TapHandler {
