@@ -36,12 +36,30 @@ ColumnLayout {
             }
         }
 
+        IconButton {
+            text: "‹"
+            buttonSize: 22
+            textSize: 18
+            accessibleName: qsTr("前一天")
+            tooltip: qsTr("前一天 · Alt+←")
+            onClicked: if (root.taskStore) root.taskStore.changeDay(-1)
+        }
+
         Text {
             Layout.alignment: Qt.AlignVCenter
             text: root.taskStore ? root.taskStore.selectedDayNumber : ""
             color: Theme.ink
             font.pixelSize: 32
             font.weight: Font.DemiBold
+        }
+
+        IconButton {
+            text: "›"
+            buttonSize: 22
+            textSize: 18
+            accessibleName: qsTr("后一天")
+            tooltip: qsTr("后一天 · Alt+→")
+            onClicked: if (root.taskStore) root.taskStore.changeDay(1)
         }
 
         ColumnLayout {
@@ -70,6 +88,16 @@ ColumnLayout {
                 font.pixelSize: 10
                 elide: Text.ElideRight
             }
+        }
+
+        IconButton {
+            visible: !!root.taskStore && root.taskStore.selectedDate !== root.taskStore.todayDate
+            text: qsTr("今")
+            buttonSize: 24
+            textSize: 11
+            accessibleName: qsTr("回到今天")
+            tooltip: qsTr("回到今天 · Ctrl+T")
+            onClicked: root.taskStore.goToday()
         }
 
         IconButton {
@@ -290,8 +318,30 @@ ColumnLayout {
     }
 
     Shortcut {
+        sequence: "Ctrl+N"
+        enabled: root.visible && root.enabled
+        onActivated: {
+            if (!root.composerOpen) root.toggleComposer()
+        }
+    }
+    Shortcut {
+        sequence: "Ctrl+T"
+        enabled: root.visible && root.enabled
+        onActivated: if (root.taskStore) root.taskStore.goToday()
+    }
+    Shortcut {
+        sequence: "Alt+Left"
+        enabled: root.visible && root.enabled
+        onActivated: if (root.taskStore) root.taskStore.changeDay(-1)
+    }
+    Shortcut {
+        sequence: "Alt+Right"
+        enabled: root.visible && root.enabled
+        onActivated: if (root.taskStore) root.taskStore.changeDay(1)
+    }
+    Shortcut {
         sequence: "Esc"
-        enabled: root.composerOpen
+        enabled: root.composerOpen && root.visible && root.enabled
         onActivated: root.closeComposer()
     }
 

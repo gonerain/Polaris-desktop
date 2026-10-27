@@ -257,9 +257,9 @@ Rectangle {
                 }
             }
 
-            IconButton {
+            ChevronButton {
                 objectName: "toggleSubtasks" + (card.entry ? card.entry.entryId : "")
-                text: card.expanded ? "⌃" : "⌄"
+                up: card.expanded
                 textSize: 12
                 buttonSize: 22
                 accessibleName: card.expanded ? qsTr("收起子任务") : qsTr("展开子任务")

@@ -29,6 +29,7 @@ Window {
     property bool applyingState: false
     property bool collapsing: false
     property bool allowQuit: false
+    property var calendarStore: null
     property real expandedWidth: 528
     property real expandedHeight: 300
 
@@ -38,8 +39,21 @@ Window {
     }
 
     function requestQuit() {
+        // Commit active inline edits before stopping the event loop.
+        root.forceActiveFocus()
+        if (calendarStore && calendarStore.storageError && !calendarStore.retrySave()) {
+            autoCollapse.stop()
+            unsavedQuitDialog.open()
+            return
+        }
+        finishQuit()
+    }
+
+    function finishQuit() {
         window.allowQuit = true
         window.close()
+        // Tool windows and a live tray must not leave an invisible process behind.
+        Qt.quit()
     }
 
     onWidthChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedWidth = width
@@ -65,9 +79,10 @@ Window {
     }
 
     function collapse() {
-        if (compact || collapsing || focusPresenter.busy)
+        if (compact || collapsing || focusPresenter.busy || unsavedQuitDialog.visible)
             return
         autoCollapse.stop()
+        root.forceActiveFocus()
         collapsing = true
         collapseTimer.restart()
     }
@@ -164,6 +179,27 @@ Window {
             }
         }
 
+        Dialog {
+            id: unsavedQuitDialog
+            objectName: "unsavedQuitDialog"
+            anchors.centerIn: parent
+            popupType: Popup.Window
+            modal: true
+            width: 360
+            title: qsTr("日程尚未保存")
+            standardButtons: Dialog.Discard | Dialog.Cancel
+            onOpened: {
+                standardButton(Dialog.Discard).text = qsTr("仍然退出")
+                standardButton(Dialog.Cancel).text = qsTr("返回")
+            }
+            Label {
+                width: parent.width
+                text: qsTr("保存失败，退出会丢失尚未写入的修改。建议返回后重试保存或备份数据。")
+                wrapMode: Text.Wrap
+            }
+            onDiscarded: window.finishQuit()
+        }
+
         Menu {
             id: contextMenu
             objectName: "quitMenu"
@@ -230,7 +266,7 @@ Window {
             width: window.compact ? window.expandedWidth : window.width
             height: window.compact ? window.expandedHeight : window.height
             visible: !window.compact || window.collapsing
-            enabled: !window.compact && !window.collapsing
+            enabled: !window.compact && !window.collapsing && !focusPresenter.busy
             opacity: (window.compact || window.collapsing) ? 0 : 1 - focusPresenter.progress
             scale: (window.compact || window.collapsing) ? 0.985 : 1
             transformOrigin: Item.Center
@@ -375,5 +411,7 @@ Window {
         const calendar = board.request(calendarFactory, {cells: [[0, 0], [1, 0]]})
         if (!calendar.ok)
             console.error("初始化画板失败", calendar.error)
+        else
+            window.calendarStore = calendar.item.taskStore
     }
 }

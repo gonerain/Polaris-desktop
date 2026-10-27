@@ -1,11 +1,13 @@
-"""按日期管理的内存日程与一级子任务；提醒由应用级联动协调器负责。"""
+"""Calendar tasks, shared view state, safe persistence and one-step delete recovery."""
 
 import calendar
 import re
-from datetime import date
+from datetime import date, timedelta
 from itertools import count
 
-from PySide6.QtCore import QCoreApplication, QObject, Property, QTimer, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QObject, Property, QTimer, Signal, Slot, QUrl
+
+from .storage import SnapshotRepository, StorageError
 
 _WEEKDAYS = "一二三四五六日"
 _TIME_PATTERN = re.compile(r"^(\d{1,2})[:：](\d{1,2})$")
@@ -34,6 +36,7 @@ def clean_time(value):
 
 
 class TaskEntry(QObject):
+    dataChanged = Signal()
     titleChanged = Signal()
     timeChanged = Signal()
     doneChanged = Signal()
@@ -49,6 +52,8 @@ class TaskEntry(QObject):
         self._done = False
         self._subtasks = []
         self._is_subtask = is_subtask
+        for signal in (self.titleChanged, self.timeChanged, self.doneChanged, self.subtasksChanged):
+            signal.connect(self.dataChanged.emit)
 
     entryId = Property(int, lambda self: self._id, constant=True)
     title = Property(str, lambda self: self._title, notify=titleChanged)
@@ -99,6 +104,7 @@ class TaskEntry(QObject):
             return None
         entry = TaskEntry(title, self._ids, self, is_subtask=True)
         entry.doneChanged.connect(self._subtask_done_changed)
+        entry.dataChanged.connect(self.dataChanged.emit)
         self._subtasks.append(entry)
         self.subtasksChanged.emit()
         self.subtaskProgressChanged.emit()
@@ -126,6 +132,10 @@ class CalendarTaskStore(QObject):
     summaryChanged = Signal()
     lastAddedTaskIdChanged = Signal()
     scheduleChanged = Signal()
+    agendaChanged = Signal()
+    contentChanged = Signal()
+    undoChanged = Signal()
+    storageChanged = Signal()
 
     def __init__(self, parent=None, *, today=None):
         super().__init__(parent)
@@ -138,7 +148,155 @@ class CalendarTaskStore(QObject):
         self._last_added_timer.setSingleShot(True)
         self._last_added_timer.setInterval(500)
         self._last_added_timer.timeout.connect(self._clear_last_added)
+        self._repository = None
+        self._storage_error = ""
+        self._storage_notice = ""
+        self._undo = None
+        self._today_override = today is not None
+        self._day_timer = QTimer(self)
+        self._day_timer.setInterval(30_000)
+        self._day_timer.timeout.connect(self.refreshToday)
+        if QCoreApplication.instance() is not None:
+            self._day_timer.start()
+        self.contentChanged.connect(self._save)
 
+    storageError = Property(str, lambda self: self._storage_error, notify=storageChanged)
+    storageNotice = Property(str, lambda self: self._storage_notice, notify=storageChanged)
+    storagePath = Property(str, lambda self: str(self._repository.path) if self._repository else "",
+                           notify=storageChanged)
+    storageDirectoryUrl = Property(str, lambda self: QUrl.fromLocalFile(str(self._repository.path.parent)).toString()
+                                   if self._repository else "", notify=storageChanged)
+    canUndoDelete = Property(bool, lambda self: self._undo is not None, notify=undoChanged)
+    allEntries = Property("QVariantList", lambda self: self._all_entries(), notify=agendaChanged)
+
+    def initialize_storage(self, path):
+        if self._repository is not None or self._tasks_by_day:
+            raise RuntimeError("存储必须在添加任务前初始化")
+        self._repository = SnapshotRepository(path)
+        try:
+            document = self._repository.load()
+            maximum = max((entry["id"] for entries in document["days"].values()
+                           for task in entries for entry in [task, *task.get("subtasks", [])]), default=0)
+            self._ids = count(maximum + 1)
+            for value, entries in document["days"].items():
+                self._tasks_by_day[date.fromisoformat(value)] = [self._restore(entry) for entry in entries]
+            self._storage_notice = self._repository.warning
+        except StorageError as error:
+            self._storage_error = str(error)
+        self.storageChanged.emit()
+        self.tasksChanged.emit()
+        self.summaryChanged.emit()
+        self.calendarChanged.emit()
+        self.scheduleChanged.emit()
+        # View refresh is separate from content changes: never save on load.
+        self.agendaChanged.emit()
+
+    def _restore(self, record, parent=None, subtask=False):
+        entry = TaskEntry(record["title"], count(record["id"]), parent or self,
+                          is_subtask=subtask, time=record.get("time", ""))
+        entry._ids = self._ids
+        entry._done = record["done"]
+        for child_record in record.get("subtasks", []):
+            child = self._restore(child_record, entry, True)
+            child.doneChanged.connect(entry._subtask_done_changed)
+            child.dataChanged.connect(entry.dataChanged.emit)
+            entry._subtasks.append(child)
+        if not subtask:
+            self._connect_entry(entry)
+        return entry
+
+    def _connect_entry(self, entry):
+        entry.doneChanged.connect(self._task_done_changed)
+        entry.timeChanged.connect(self._task_time_changed)
+        entry.titleChanged.connect(self.scheduleChanged.emit)
+        entry.dataChanged.connect(self.agendaChanged.emit)
+        entry.dataChanged.connect(self.contentChanged.emit)
+
+    @staticmethod
+    def _record(entry):
+        return {"id": entry.entryId, "title": entry.title, "time": entry.time,
+                "done": entry.done, "subtasks": [CalendarTaskStore._record(child) for child in entry.subtasks]}
+
+    def _snapshot(self):
+        return {"version": 1, "days": {day.isoformat(): [self._record(entry) for entry in entries]
+                                       for day, entries in self._tasks_by_day.items() if entries}}
+
+    @Slot(result=bool)
+    def retrySave(self):
+        return self._save()
+
+    def _save(self):
+        if self._repository is None:
+            return True
+        try:
+            self._repository.save(self._snapshot())
+            self._storage_error = ""
+        except StorageError as error:
+            self._storage_error = "保存失败：" + str(error)
+            self.storageChanged.emit()
+            return False
+        self.storageChanged.emit()
+        return True
+
+    def _all_entries(self):
+        return [{"date": day.isoformat(), "task": entry, "overdue": day < self._today and not entry.done}
+                for day in sorted(self._tasks_by_day)
+                for entry in self._sorted_tasks(self._tasks_by_day[day])]
+
+    @Slot()
+    def refreshToday(self):
+        if self._today_override:
+            return
+        current = date.today()
+        if current == self._today:
+            return
+        followed_today = self._selected == self._today
+        self._today = current
+        if followed_today:
+            self.selectDate(current.isoformat())
+        else:
+            self.calendarChanged.emit()
+        # Refresh date-dependent overdues without writing unchanged data.
+        self.agendaChanged.emit()
+
+    def _notify_tasks(self):
+        self.tasksChanged.emit()
+        self.summaryChanged.emit()
+        self.calendarChanged.emit()
+        self.scheduleChanged.emit()
+        self.agendaChanged.emit()
+        self.contentChanged.emit()
+
+    @Slot(int, str, result=bool)
+    def moveTask(self, entry_id, value):
+        try:
+            target = date.fromisoformat(value)
+            if target.isoformat() != value:
+                return False
+        except (ValueError, TypeError):
+            return False
+        for day, entries in list(self._tasks_by_day.items()):
+            for entry in list(entries):
+                if entry.entryId == entry_id:
+                    if day != target:
+                        entries.remove(entry)
+                        self._tasks_by_day.setdefault(target, []).append(entry)
+                        self._notify_tasks()
+                    return True
+        return False
+
+    @Slot(result=bool)
+    def undoDelete(self):
+        if self._undo is None:
+            return False
+        day, index, entry = self._undo
+        self._undo = None
+        self._tasks_by_day.setdefault(day, []).insert(index, entry)
+        self.undoChanged.emit()
+        self._notify_tasks()
+        return True
+
+    todayDate = Property(str, lambda self: self._today.isoformat(), notify=calendarChanged)
     selectedDate = Property(str, lambda self: self._selected.isoformat(), notify=selectedDateChanged)
     selectedDateLabel = Property(
         str, lambda self: f"{self._selected.month}月{self._selected.day}日", notify=selectedDateChanged
@@ -221,6 +379,13 @@ class CalendarTaskStore(QObject):
             self.summaryChanged.emit()
         return True
 
+    @Slot(int, result=bool)
+    def changeDay(self, delta):
+        try:
+            return self.selectDate((self._selected + timedelta(days=delta)).isoformat())
+        except (OverflowError, ValueError):
+            return False
+
     @Slot(result=bool)
     def goToday(self):
         return self.selectDate(self._today.isoformat())
@@ -246,9 +411,7 @@ class CalendarTaskStore(QObject):
         if not title or cleaned_time is None:
             return None
         entry = TaskEntry(title, self._ids, self, time=cleaned_time)
-        entry.doneChanged.connect(self._task_done_changed)
-        entry.timeChanged.connect(self._task_time_changed)
-        entry.titleChanged.connect(self.scheduleChanged.emit)
+        self._connect_entry(entry)
         self._tasks_by_day.setdefault(self._selected, []).append(entry)
         self._last_added_id = entry.entryId
         if QCoreApplication.instance() is not None:
@@ -258,21 +421,23 @@ class CalendarTaskStore(QObject):
         self.summaryChanged.emit()
         self.calendarChanged.emit()
         self.scheduleChanged.emit()
+        self.agendaChanged.emit()
+        self.contentChanged.emit()
         return entry
 
     @Slot(int, result=bool)
     def removeTask(self, entry_id):
-        entries = self._tasks_by_day.get(self._selected, [])
-        for index, entry in enumerate(entries):
-            if entry.entryId == entry_id:
-                entries.pop(index)
-                if self._last_added_id == entry_id:
-                    self._last_added_id = 0
-                    self.lastAddedTaskIdChanged.emit()
-                self.tasksChanged.emit()
-                self.summaryChanged.emit()
-                self.calendarChanged.emit()
-                self.scheduleChanged.emit()
-                entry.deleteLater()
-                return True
+        for day, entries in self._tasks_by_day.items():
+            for index, entry in enumerate(entries):
+                if entry.entryId == entry_id:
+                    if self._undo is not None:
+                        self._undo[2].deleteLater()
+                    self._undo = (day, index, entry)
+                    entries.pop(index)
+                    if self._last_added_id == entry_id:
+                        self._last_added_id = 0
+                        self.lastAddedTaskIdChanged.emit()
+                    self.undoChanged.emit()
+                    self._notify_tasks()
+                    return True
         return False

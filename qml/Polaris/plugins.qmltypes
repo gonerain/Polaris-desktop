@@ -76,6 +76,25 @@ Module {
         Property { name: "completedCount"; type: "int"; isReadonly: true }
         Property { name: "lastAddedTaskId"; type: "int"; isReadonly: true }
         Property { name: "calendarCells"; type: "QVariantList"; isReadonly: true }
+        Property { name: "todayDate"; type: "QString"; isReadonly: true }
+        Property { name: "allEntries"; type: "QVariantList"; isReadonly: true }
+        Property { name: "canUndoDelete"; type: "bool"; isReadonly: true }
+        Property { name: "storageError"; type: "QString"; isReadonly: true }
+        Property { name: "storageNotice"; type: "QString"; isReadonly: true }
+        Property { name: "storagePath"; type: "QString"; isReadonly: true }
+        Property { name: "storageDirectoryUrl"; type: "QString"; isReadonly: true }
+        Method { name: "retrySave"; type: "bool" }
+        Method { name: "undoDelete"; type: "bool" }
+        Method { name: "refreshToday" }
+        Method {
+            name: "changeDay"; type: "bool"
+            Parameter { name: "delta"; type: "int" }
+        }
+        Method {
+            name: "moveTask"; type: "bool"
+            Parameter { name: "entry_id"; type: "int" }
+            Parameter { name: "value"; type: "QString" }
+        }
         Method {
             name: "selectDate"; type: "bool"
             Parameter { name: "value"; type: "QString" }

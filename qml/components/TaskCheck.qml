@@ -33,13 +33,28 @@ AbstractButton {
         }
     }
 
-    contentItem: Text {
-        text: "✓"
-        color: "white"
-        font.pixelSize: 12
-        font.weight: Font.Bold
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
+    contentItem: Item {
+        // Vector strokes render consistently even when the system font lacks ✓.
+        Rectangle {
+            x: parent.width / 2 - 6
+            y: parent.height / 2 - 1
+            width: 5
+            height: 2
+            radius: 1
+            color: "white"
+            rotation: 45
+            transformOrigin: Item.Left
+        }
+        Rectangle {
+            x: parent.width / 2 - 2.5
+            y: parent.height / 2 + 2.5
+            width: 9
+            height: 2
+            radius: 1
+            color: "white"
+            rotation: -45
+            transformOrigin: Item.Left
+        }
         opacity: control.checkedState ? 1 : 0
         scale: control.checkedState ? 1 : 0.55
 

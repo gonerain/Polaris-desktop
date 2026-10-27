@@ -9,8 +9,10 @@ ColumnLayout {
     id: root
 
     property var taskStore
+    property bool showBackButton: true
     property int slideDirection: 1
-    readonly property real dayHeight: Math.max(24, Math.min(40, (height - 64) / 6))
+    property real maximumDayHeight: 40
+    readonly property real dayHeight: Math.max(24, Math.min(maximumDayHeight, (height - 76) / 6))
 
     signal agendaRequested()
     signal dragActiveChanged(bool active)
@@ -34,6 +36,7 @@ ColumnLayout {
 
         IconButton {
             objectName: "closeCalendarButton"
+            visible: root.showBackButton
             text: "‹"
             textSize: 18
             buttonSize: 26

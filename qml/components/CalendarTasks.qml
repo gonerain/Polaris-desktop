@@ -30,9 +30,20 @@ Rectangle {
         objectName: "calendarTaskStore"
     }
 
+    StoreStatus {
+        id: status
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 12
+        height: implicitHeight
+        taskStore: store
+    }
+
     Item {
         anchors.fill: parent
         anchors.margins: 18
+        anchors.bottomMargin: status.visible ? status.height + 20 : 18
 
         AgendaPanel {
             id: agendaPanel

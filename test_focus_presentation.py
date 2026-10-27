@@ -80,6 +80,71 @@ class FocusPresentationTests(unittest.TestCase):
         self.assertEqual(self.window.geometry(), original)
         self.assertEqual(self.find("componentBoard").property("freePanelCount"), 0)
 
+    def test_overview_search_completion_and_reschedule(self):
+        from PySide6.QtCore import Qt
+        self.expand()
+        store = self.window.findChild(QObject, "calendarTaskStore")
+        store.selectDate("2024-01-01")
+        task = store.addTask("Alpha")
+        child = task.addSubtask("needle")
+        other = store.addTask("Beta")
+        other.setDone(True)
+        self.click("openFocusButton")
+        QTest.qWait(450)
+        self.click("overviewModeButton")
+        listing = self.find("overviewList")
+        self.assertEqual(listing.property("count"), 1)
+        search = self.find("overviewSearch")
+        search.setProperty("text", "needle")
+        self.app.processEvents()
+        self.assertEqual(listing.property("count"), 1)
+        child.rename("renamed")
+        self.app.processEvents()
+        self.assertEqual(listing.property("count"), 0)
+        search.setProperty("text", "")
+        self.click("overviewShowCompleted")
+        self.assertEqual(listing.property("count"), 2)
+        self.click("taskDate" + str(task.entryId))
+        QTest.keyClick(self.window, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        self.find("taskDate" + str(task.entryId)).setProperty("text", "2024-02-03")
+        QTest.keyClick(self.window, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        self.assertEqual(next(row["date"] for row in store.allEntries if row["task"] == task), "2024-02-03")
+        self.find("focusPresenter").close()
+        QTest.qWait(380)
+
+    def test_escape_closes_composer_before_full_view(self):
+        from PySide6.QtCore import Qt
+        self.expand()
+        self.click("openFocusButton")
+        QTest.qWait(450)
+        agenda = self.find("focusAgenda")
+        agenda.toggleComposer()
+        QTest.qWait(100)
+        self.assertTrue(agenda.property("composerOpen"))
+        QTest.keyClick(self.window, Qt.Key.Key_Escape)
+        QTest.qWait(100)
+        self.assertFalse(agenda.property("composerOpen"))
+        self.assertTrue(self.find("focusPresenter").property("active"))
+        QTest.keyClick(self.window, Qt.Key.Key_Escape)
+        QTest.qWait(380)
+        self.assertFalse(self.find("focusPresenter").property("active"))
+
+    def test_unsaved_failure_requires_explicit_discard_before_quit(self):
+        store = self.window.findChild(QObject, "calendarTaskStore")
+        store._storage_error = "simulated write failure"
+        store._save = lambda: False
+        self.window.requestQuit()
+        QTest.qWait(100)
+        dialog = self.window.findChild(QObject, "unsavedQuitDialog")
+        self.assertTrue(dialog.property("visible"))
+        self.assertFalse(self.window.property("allowQuit"))
+        self.assertTrue(self.window.isVisible())
+        dialog.discarded.emit()
+        QTest.qWait(50)
+        self.assertTrue(self.window.property("allowQuit"))
+        self.assertFalse(self.window.isVisible())
+
     def test_repeated_open_and_escape(self):
         from PySide6.QtCore import Qt
         self.expand()
