@@ -277,7 +277,7 @@ Window {
         button = field.findChild(QQuickItem, name)
         self.assertIsNotNone(button)
         position = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
-        QTest.mouseClick(button.window(), Qt.LeftButton, pos=position)
+        QTest.mouseClick(self.window, Qt.LeftButton, pos=position)
         QTest.qWait(120)
 
     def test_time_is_selected_without_keyboard_and_can_be_cleared(self):
@@ -346,6 +346,68 @@ Window {
         QTest.qWait(150)
         self.assertFalse(popup.property('visible'))
         self.assertEqual(task.time, '09:15')
+
+    def send_picker_wheel(self, field, name, angle=0, pixels=0):
+        from PySide6.QtCore import QCoreApplication, QPoint
+        from PySide6.QtGui import QWheelEvent
+        from PySide6.QtQuick import QQuickItem
+        control = field.findChild(QQuickItem, name)
+        target = self.window
+        point = control.mapToScene(QPointF(control.width() / 2, control.height() / 2))
+        event = QWheelEvent(point, QPointF(target.mapToGlobal(point.toPoint())),
+                            QPoint(0, pixels), QPoint(0, angle), Qt.NoButton,
+                            Qt.NoModifier, Qt.NoScrollPhase, False)
+        QCoreApplication.sendEvent(target, event)
+        QTest.qWait(30)
+
+    def test_mouse_wheel_changes_time_and_wraps_without_changing_other_column(self):
+        self.open_composer()
+        self.click('newTaskTimeInput')
+        field = self.item(self.window, 'newTaskTimeInput')
+        hour = field.findChild(QObject, 'timePickerHour')
+        minute = field.findChild(QObject, 'timePickerMinute')
+        hour.setProperty('currentIndex', 0)
+        minute.setProperty('currentIndex', 10)
+        self.send_picker_wheel(field, 'timePickerHour', angle=120)
+        self.assertEqual(hour.property('currentIndex'), 23)
+        self.assertEqual(minute.property('currentIndex'), 10)
+        self.send_picker_wheel(field, 'timePickerMinute', angle=-240)
+        self.assertEqual(minute.property('currentIndex'), 12)
+        self.assertEqual(hour.property('currentIndex'), 23)
+        self.click_popup_button(field, 'timeConfirmButton')
+        self.assertEqual(field.property('text'), '23:12')
+
+    def test_high_resolution_wheel_and_touchpad_accumulate_small_deltas(self):
+        self.open_composer()
+        self.click('newTaskTimeInput')
+        field = self.item(self.window, 'newTaskTimeInput')
+        minute = field.findChild(QObject, 'timePickerMinute')
+        minute.setProperty('currentIndex', 20)
+        for _ in range(3):
+            self.send_picker_wheel(field, 'timePickerMinute', angle=30)
+        self.assertEqual(minute.property('currentIndex'), 20)
+        self.send_picker_wheel(field, 'timePickerMinute', angle=30)
+        self.assertEqual(minute.property('currentIndex'), 19)
+        self.send_picker_wheel(field, 'timePickerMinute', pixels=-15)
+        self.assertEqual(minute.property('currentIndex'), 19)
+        self.send_picker_wheel(field, 'timePickerMinute', pixels=-15)
+        self.assertEqual(minute.property('currentIndex'), 20)
+
+    def test_time_editor_reuses_main_surface_and_fits_inside_it(self):
+        self.open_composer()
+        self.click('newTaskTimeInput')
+        field = self.item(self.window, 'newTaskTimeInput')
+        popup = field.findChild(QObject, 'timePicker')
+        content = popup.property('contentItem')
+        ancestor = content
+        while ancestor.parentItem() is not None:
+            ancestor = ancestor.parentItem()
+        self.assertIs(ancestor, self.window.contentItem())
+        point = content.mapToScene(QPointF(0, 0))
+        self.assertGreaterEqual(point.x(), 0)
+        self.assertGreaterEqual(point.y(), 0)
+        self.assertLessEqual(point.x() + content.width(), self.window.width())
+        self.assertLessEqual(point.y() + content.height(), self.window.height())
 
     def test_subtasks_can_be_collapsed(self):
         task = self.store.addTask('带子任务')

@@ -7,7 +7,28 @@ import "Theme.js" as Theme
 Tumbler {
     id: wheel
     visibleItemCount: 5
-    wheelEnabled: true
+    // Control.wheelEnabled only consumes the event; Tumbler does not step it.
+    // Handle actual mouse wheels and high-resolution touchpad deltas explicitly.
+    wheelEnabled: false
+    property real wheelRemainder: 0
+    WheelHandler {
+        target: null
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        onWheel: function(event) {
+            const delta = event.angleDelta.y !== 0
+                ? event.angleDelta.y / 120 : event.pixelDelta.y / 30
+            if (delta === 0) return
+            wheel.wheelRemainder += delta
+            const steps = wheel.wheelRemainder > 0
+                ? Math.floor(wheel.wheelRemainder) : Math.ceil(wheel.wheelRemainder)
+            if (steps !== 0 && wheel.count > 0) {
+                wheel.currentIndex = ((wheel.currentIndex - steps) % wheel.count + wheel.count) % wheel.count
+                wheel.wheelRemainder -= steps
+                wheel.positionViewAtIndex(wheel.currentIndex, Tumbler.Center)
+            }
+            event.accepted = true
+        }
+    }
     clip: true
     background: Rectangle { color: Theme.background; radius: 8 }
     Rectangle {

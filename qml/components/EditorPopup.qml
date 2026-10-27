@@ -9,7 +9,12 @@ Popup {
     required property Item anchorItem
     parent: anchorItem
     y: anchorItem.height + 6
-    popupType: Popup.Window
+    // Editors are only shown in the expanded (>=528x300) window and fit its
+    // overlay. Avoid a new translucent native window and its first-frame flash.
+    popupType: Popup.Item
+    margins: 8
+    enter: Transition { }
+    exit: Transition { }
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     property var _owner: null

@@ -24,6 +24,8 @@ InlineField {
         // Position after the popup's wheel view has received its final size.
         Qt.callLater(function() {
             if (!picker.visible) return
+            hour.wheelRemainder = 0
+            minute.wheelRemainder = 0
             hour.currentIndex = selectedHour
             minute.currentIndex = selectedMinute
             hour.positionViewAtIndex(selectedHour, Tumbler.Center)
