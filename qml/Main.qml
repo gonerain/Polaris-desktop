@@ -11,10 +11,10 @@ Window {
     minimumHeight: compactSize
     visible: true
     title: qsTr("悬浮日程")
-    color: Theme.background
-    flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+    color: "transparent"
+    flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
-    readonly property int compactSize: 64
+    readonly property int compactSize: 180
     readonly property int expandedMinimumWidth: 528
     readonly property int expandedMinimumHeight: 300
     property bool compact: true
@@ -181,8 +181,8 @@ Window {
                     spacing: 3
 
                     WindowButton {
-                        objectName: "minimizeButton"
-                        onClicked: window.showMinimized()
+                        objectName: "collapseButton"
+                        onClicked: window.collapse()
                     }
 
                     WindowButton {
@@ -238,42 +238,9 @@ Window {
                 NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic }
             }
 
-            Rectangle {
-                id: compactButton
-                anchors.centerIn: parent
-                width: 52
-                height: 52
-                radius: 17
-                color: compactHover.hovered ? Theme.primaryDark : Theme.primary
-                scale: compactHover.hovered ? 1.03 : 1
-
-                Behavior on color {
-                    ColorAnimation { duration: Theme.fast }
-                }
-
-                Behavior on scale {
-                    NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic }
-                }
-
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: 18
-                    height: 2
-                    radius: 1
-                    color: "white"
-                }
-
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: 2
-                    height: 18
-                    radius: 1
-                    color: "white"
-                }
-            }
-
-            HoverHandler {
-                id: compactHover
+            PetMascot {
+                objectName: "petMascot"
+                anchors.fill: parent
             }
 
             TapHandler {

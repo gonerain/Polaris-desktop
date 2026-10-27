@@ -81,9 +81,15 @@ class FloatingBoxTests(unittest.TestCase):
 
     def test_starts_as_compact_floating_box(self) -> None:
         self.assertTrue(self.window.property("compact"))
-        self.assertEqual((self.window.width(), self.window.height()), (64, 64))
-        self.assertEqual((self.window.minimumWidth(), self.window.minimumHeight()), (64, 64))
+        self.assertEqual((self.window.width(), self.window.height()), (180, 180))
+        self.assertEqual((self.window.minimumWidth(), self.window.minimumHeight()), (180, 180))
         self.assertTrue(self.find("compactBox").isVisible())
+        self.assertEqual(self.window.color().alpha(), 0)
+        pet = self.find("petMascot")
+        self.assertTrue(pet.isVisible())
+        self.assertEqual((pet.width(), pet.height()), (180, 180))
+        self.assertIn(pet.property("frameName"), ["idle_pillow_awake", "idle_pillow_blink"])
+        self.assertIn(".webp", str(self.find("petFrameImage").property("source")))
         self.assertFalse(self.find("expandedContent").isVisible())
         board = self.find("componentBoard")
         self.assertEqual((board.width(), board.height()), (528, 256))
@@ -120,7 +126,18 @@ class FloatingBoxTests(unittest.TestCase):
         self.hover_outside()
         QTest.qWait(700)
         self.assertTrue(self.window.property("compact"))
-        self.assertEqual((self.window.width(), self.window.height()), (64, 64))
+        self.assertEqual((self.window.width(), self.window.height()), (180, 180))
+
+    def test_pet_waves_when_the_pointer_enters(self) -> None:
+        QTest.mouseMove(self.window, QPoint(320, 320))
+        QTest.qWait(800)
+        pet = self.find("petMascot")
+        self.assertFalse(pet.property("waving"))
+
+        QTest.mouseMove(self.window, QPoint(90, 90))
+        QTest.qWait(80)
+        self.assertTrue(pet.property("waving"))
+        self.assertTrue(str(pet.property("frameName")).startswith("idle_pillow_"))
 
     def test_collapse_can_be_cancelled_during_fade(self) -> None:
         self.expand()

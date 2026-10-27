@@ -10,11 +10,12 @@ os.environ.pop("DISPLAY", None)
 os.environ.pop("WAYLAND_DISPLAY", None)
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, Qt, SIGNAL
-from PySide6.QtGui import QGuiApplication, QWindow
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickItem, QQuickWindow
 from PySide6.QtTest import QSignalSpy, QTest
 
 from main import create_engine
+from polaris.x11_hints import apply_skip_taskbar
 
 
 def find_visual_item(parent, name):
@@ -144,6 +145,11 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(self.window.isVisible())
         self.assertTrue(self.window.flags() & Qt.WindowType.WindowStaysOnTopHint)
 
+    def test_window_is_a_tool_window_and_skips_task_switcher(self) -> None:
+        self.assertEqual(int(self.window.flags()) & 0xff, int(Qt.WindowType.Tool))
+        # 离屏测试没有 X11 连接，辅助函数应当安全地不做任何事。
+        self.assertFalse(apply_skip_taskbar(self.window))
+
     def test_default_board_uses_exactly_two_panels_for_the_calendar(self) -> None:
         self.assertEqual(self.board.property("panelCount"), 2)
         self.assertEqual(self.board.property("freePanelCount"), 0)
@@ -201,13 +207,16 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(self.window.minimumWidth(), 528)
         self.assertEqual(self.window.minimumHeight(), 300)
 
-    def test_minimize_button_preserves_tasks_after_restore(self) -> None:
-        self.store.addTask("最小化后保留")
-        self.click("minimizeButton")
-        self.assertEqual(self.window.visibility(), QWindow.Visibility.Minimized)
-        self.window.showNormal()
-        self.assertTrue(QTest.qWaitForWindowExposed(self.window, 3000))
-        self.assertEqual([task.title for task in self.store.tasks], ["最小化后保留"])
+    def test_collapse_button_returns_to_floating_plus_and_preserves_tasks(self) -> None:
+        self.store.addTask("收起后保留")
+        self.click("collapseButton")
+        QTest.qWait(250)
+        self.assertTrue(self.window.property("compact"))
+        self.assertEqual(self.window.width(), 180)
+        self.click("compactBox")
+        QTest.qWait(300)
+        self.assertFalse(self.window.property("compact"))
+        self.assertEqual([task.title for task in self.store.tasks], ["收起后保留"])
         self.assertTrue(self.window.flags() & Qt.WindowType.WindowStaysOnTopHint)
 
     def test_close_button_closes_window(self) -> None:

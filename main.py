@@ -1,13 +1,14 @@
-"""Linux 悬浮写字板的 Python 入口，界面由 Qt Quick/QML 实现。"""
+"""Linux 悬浮日程的 Python 入口，界面由 Qt Quick/QML 实现。"""
 
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from polaris.qml import register_types
+from polaris.x11_hints import apply_skip_taskbar
 
 
 QML_FILE = Path(__file__).resolve().parent / "qml" / "Main.qml"
@@ -19,7 +20,16 @@ def create_engine() -> QQmlApplicationEngine:
     engine.addImportPath(str(QML_FILE.parent))
     engine.load(QUrl.fromLocalFile(str(QML_FILE)))
     if not engine.rootObjects():
-        raise RuntimeError(f"无法加载写字板界面：{QML_FILE}")
+        raise RuntimeError(f"无法加载日程界面：{QML_FILE}")
+    window = engine.rootObjects()[0]
+    if QGuiApplication.instance() is not None:
+        # 首次在窗口映射前设置；再延迟一次，确保窗口管理器已创建原生窗口。
+        apply_skip_taskbar(window)
+        timer = QTimer(window)
+        timer.setSingleShot(True)
+        timer.setInterval(200)
+        timer.timeout.connect(lambda: apply_skip_taskbar(window))
+        timer.start()
     return engine
 
 

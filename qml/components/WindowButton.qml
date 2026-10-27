@@ -13,7 +13,7 @@ AbstractButton {
     implicitHeight: 26
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
-    text: isCloseButton ? qsTr("关闭") : qsTr("最小化")
+    text: isCloseButton ? qsTr("关闭") : qsTr("收起")
     Accessible.name: text
     ToolTip.visible: hovered
     ToolTip.delay: 600
