@@ -28,6 +28,15 @@ Window {
     property bool moving: false
     property bool applyingState: false
     property bool collapsing: false
+    property int editorPopupCount: 0
+    onEditorPopupCountChanged: {
+        if (editorPopupCount > 0) {
+            autoCollapse.stop()
+            cancelCollapse()
+        } else if (!compact && !windowHover.hovered && !focusPresenter.busy) {
+            autoCollapse.restart()
+        }
+    }
     property bool allowQuit: false
     property var calendarStore: null
     property real expandedWidth: 528
@@ -79,7 +88,7 @@ Window {
     }
 
     function collapse() {
-        if (compact || collapsing || focusPresenter.busy || unsavedQuitDialog.visible)
+        if (compact || collapsing || focusPresenter.busy || unsavedQuitDialog.visible || editorPopupCount > 0)
             return
         autoCollapse.stop()
         root.forceActiveFocus()
@@ -254,7 +263,7 @@ Window {
                     autoCollapse.stop()
                     if (window.collapsing)
                         window.cancelCollapse()
-                } else if (!window.compact && !window.moving && !window.collapsing && !contextMenu.visible) {
+                } else if (!window.compact && !window.moving && !window.collapsing && !contextMenu.visible && window.editorPopupCount === 0) {
                     autoCollapse.restart()
                 }
             }

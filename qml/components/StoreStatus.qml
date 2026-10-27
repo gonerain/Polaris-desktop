@@ -6,11 +6,11 @@ import "Theme.js" as Theme
 
 Rectangle {
     id: root
+    objectName: "storeStatus"
     required property var taskStore
-    property bool showSavedHint: false
     readonly property bool hasError: !!taskStore.storageError
     readonly property bool hasNotice: !!taskStore.storageNotice
-    visible: hasError || hasNotice || taskStore.canUndoDelete || showSavedHint
+    visible: hasError || hasNotice || taskStore.canUndoDelete
     implicitHeight: visible ? row.implicitHeight + 12 : 0
     color: hasError ? "#FFF1F0" : Theme.background
     radius: 8
@@ -25,8 +25,7 @@ Rectangle {
             Layout.minimumWidth: 0
             text: root.hasError ? root.taskStore.storageError
                 : root.hasNotice ? root.taskStore.storageNotice
-                : root.taskStore.canUndoDelete ? qsTr("已删除任务")
-                : root.taskStore.storagePath ? qsTr("已自动保存到本机") : qsTr("本次会话")
+                : root.taskStore.canUndoDelete ? qsTr("已删除任务") : ""
             color: root.hasError ? Theme.danger : Theme.muted
             font.pixelSize: 11
             wrapMode: Text.Wrap
@@ -47,14 +46,6 @@ Rectangle {
             buttonSize: 30
             accessibleName: qsTr("撤销删除任务")
             onClicked: root.taskStore.undoDelete()
-        }
-        IconButton {
-            visible: root.showSavedHint && !!root.taskStore.storagePath
-            text: "…"
-            buttonSize: 26
-            accessibleName: qsTr("打开数据文件夹")
-            tooltip: qsTr("打开数据文件夹，可复制日程文件备份")
-            onClicked: Qt.openUrlExternally(root.taskStore.storageDirectoryUrl)
         }
     }
 }

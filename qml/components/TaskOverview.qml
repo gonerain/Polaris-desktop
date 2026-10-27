@@ -34,6 +34,7 @@ ColumnLayout {
         }
         CheckBox {
             id: showCompleted
+            readonly property bool editBoundary: true
             objectName: "overviewShowCompleted"
             text: qsTr("含已完成")
             font.pixelSize: 12
@@ -139,7 +140,10 @@ ColumnLayout {
                 color: Theme.border
             }
         }
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: ScrollBar {
+            readonly property bool editBoundary: true
+            policy: ScrollBar.AsNeeded
+        }
         Text {
             anchors.centerIn: parent
             visible: list.count === 0

@@ -145,6 +145,46 @@ class FocusPresentationTests(unittest.TestCase):
         self.assertTrue(self.window.property("allowQuit"))
         self.assertFalse(self.window.isVisible())
 
+    def test_normal_calendar_has_no_persistent_save_status(self):
+        self.expand()
+        self.click("openFocusButton")
+        QTest.qWait(450)
+        statuses = self.window.findChildren(QObject, "storeStatus")
+        self.assertGreaterEqual(len(statuses), 2)
+        self.assertFalse(any(status.isVisible() for status in statuses))
+        self.find("focusPresenter").close()
+        QTest.qWait(380)
+
+    def test_time_picker_holds_window_open_until_dismissed(self):
+        self.expand()
+        self.click("openComposerButton")
+        self.click("newTaskTimeInput")
+        field = self.find("newTaskTimeInput")
+        picker = field.findChild(QObject, "timePicker")
+        self.assertTrue(picker.property("visible"))
+        self.assertEqual(self.window.property("editorPopupCount"), 1)
+        self.window.collapse()
+        self.assertFalse(self.window.property("collapsing"))
+        picker.close()
+        QTest.qWait(60)
+        self.assertEqual(self.window.property("editorPopupCount"), 0)
+
+    def test_full_view_background_dismisses_composer(self):
+        from PySide6.QtCore import QPoint, Qt
+        self.expand()
+        self.click("openFocusButton")
+        QTest.qWait(450)
+        agenda = self.find("focusAgenda")
+        agenda.toggleComposer()
+        QTest.qWait(100)
+        self.assertTrue(agenda.property("composerOpen"))
+        QTest.mouseClick(self.window, Qt.MouseButton.LeftButton,
+                         pos=QPoint(self.window.width() - 8, self.window.height() - 8))
+        QTest.qWait(250)
+        self.assertFalse(agenda.property("composerOpen"))
+        self.find("focusPresenter").close()
+        QTest.qWait(380)
+
     def test_repeated_open_and_escape(self):
         from PySide6.QtCore import Qt
         self.expand()

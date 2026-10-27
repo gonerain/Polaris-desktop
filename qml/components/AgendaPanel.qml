@@ -141,6 +141,7 @@ ColumnLayout {
 
     Item {
         id: composerWrapper
+        readonly property bool editBoundary: true
 
         property real targetHeight: root.composerOpen ? 42 : 0
 
@@ -182,7 +183,7 @@ ColumnLayout {
                 anchors.rightMargin: 4
                 spacing: 4
 
-                InlineField {
+                TimeField {
                     id: newTime
                     objectName: "newTaskTimeInput"
                     Layout.preferredWidth: 48
@@ -193,13 +194,8 @@ ColumnLayout {
                     placeholderText: qsTr("时间")
                     horizontalAlignment: TextInput.AlignHCenter
                     font.pixelSize: 10
+                    onTimeSelected: function(value) { text = value; root.timeError = false }
                     onTextEdited: root.timeError = false
-                    onAccepted: {
-                        if (newTask.text.trim().length > 0)
-                            root.addTask()
-                        else
-                            newTask.forceActiveFocus()
-                    }
                 }
 
                 Rectangle {
@@ -268,6 +264,7 @@ ColumnLayout {
 
             ScrollBar.vertical: ScrollBar {
                 id: verticalScroll
+                readonly property bool editBoundary: true
                 policy: ScrollBar.AsNeeded
                 width: 4
 
@@ -342,6 +339,7 @@ ColumnLayout {
     Shortcut {
         sequence: "Esc"
         enabled: root.composerOpen && root.visible && root.enabled
+                 && !(root.Window.window && root.Window.window.editorPopupCount > 0)
         onActivated: root.closeComposer()
     }
 
@@ -352,6 +350,12 @@ ColumnLayout {
         }
         root.composerOpen = true
         Qt.callLater(function() { newTask.forceActiveFocus() })
+    }
+
+    function dismissEditors() {
+        // Dismiss the UI, not the draft. Reopening + restores what was typed.
+        root.composerOpen = false
+        root.timeError = false
     }
 
     function closeComposer() {

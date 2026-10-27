@@ -2,7 +2,7 @@ from datetime import date
 import unittest
 
 from headless_test_support import HeadlessQtTestCase
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QObject, QPointF, Qt
 from PySide6.QtTest import QTest
 
 from polaris.tasks import CalendarTaskStore, clean_time
@@ -215,11 +215,11 @@ Window {
         QTest.qWait(100)
         self.assertEqual(task.title, '更新计划')
 
+        self.click(f'taskTime{task.entryId}')
         time_field = self.item(self.window, f'taskTime{task.entryId}')
-        time_field.forceActiveFocus()
-        time_field.setProperty('text', '11:45')
-        QTest.keyClick(self.window, Qt.Key_Return)
-        QTest.qWait(100)
+        time_field.findChild(QObject, 'timePickerHour').setProperty('currentIndex', 11)
+        time_field.findChild(QObject, 'timePickerMinute').setProperty('currentIndex', 45)
+        self.click_popup_button(time_field, 'timeConfirmButton')
         self.assertEqual(task.time, '11:45')
 
         self.click(f'toggleTask{task.entryId}')
@@ -254,22 +254,98 @@ Window {
         second_card = self.item(self.window, f'taskCard{second.entryId}')
         self.assertFalse(second_card.property('animateEntrance'))
 
-    def test_task_time_can_be_edited_and_invalid_time_is_reverted(self):
+    def test_task_time_picker_opens_from_keyboard_and_edits_valid_time(self):
         task = self.store.addTask('调整时间', '09:00')
         QTest.qWait(250)
         field = self.item(self.window, f'taskTime{task.entryId}')
+        self.assertTrue(field.property('readOnly'))
         field.forceActiveFocus()
-        field.setProperty('text', '23:70')
         QTest.keyClick(self.window, Qt.Key_Return)
         QTest.qWait(120)
+        picker = field.findChild(QObject, 'timePicker')
+        self.assertTrue(picker.property('visible'))
+        self.assertEqual(field.findChild(QObject, 'timePickerHour').property('currentIndex'), 9)
+        self.assertEqual(field.findChild(QObject, 'timePickerMinute').property('currentIndex'), 0)
         self.assertEqual(task.time, '09:00')
-        self.assertTrue(field.property('error'))
-
-        field.setProperty('text', '15:20')
-        QTest.keyClick(self.window, Qt.Key_Return)
-        QTest.qWait(150)
+        field.findChild(QObject, 'timePickerHour').setProperty('currentIndex', 15)
+        field.findChild(QObject, 'timePickerMinute').setProperty('currentIndex', 20)
+        self.click_popup_button(field, 'timeConfirmButton')
         self.assertEqual(task.time, '15:20')
-        self.assertFalse(field.property('error'))
+
+    def click_popup_button(self, field, name):
+        from PySide6.QtQuick import QQuickItem
+        button = field.findChild(QQuickItem, name)
+        self.assertIsNotNone(button)
+        position = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+        QTest.mouseClick(button.window(), Qt.LeftButton, pos=position)
+        QTest.qWait(120)
+
+    def test_time_is_selected_without_keyboard_and_can_be_cleared(self):
+        self.open_composer()
+        field = self.item(self.window, 'newTaskTimeInput')
+        self.assertTrue(field.property('readOnly'))
+        self.click('newTaskTimeInput')
+        popup = field.findChild(QObject, 'timePicker')
+        self.assertTrue(popup.property('visible'))
+        field.findChild(QObject, 'timePickerHour').setProperty('currentIndex', 14)
+        field.findChild(QObject, 'timePickerMinute').setProperty('currentIndex', 35)
+        self.click_popup_button(field, 'timeConfirmButton')
+        self.assertEqual(field.property('text'), '14:35')
+        self.assertFalse(popup.property('visible'))
+        self.assertTrue(self.item(self.window, 'newTaskInput').isVisible())
+        self.item(self.window, 'newTaskInput').setProperty('text', 'No time typing')
+        self.click('addTaskButton')
+        task = self.store.tasks[0]
+        self.assertEqual(task.time, '14:35')
+        self.click(f'taskTime{task.entryId}')
+        existing = self.item(self.window, f'taskTime{task.entryId}')
+        self.click_popup_button(existing, 'timeAllDayButton')
+        self.assertEqual(task.time, '')
+
+    def test_background_dismisses_composer_but_keeps_draft(self):
+        from PySide6.QtCore import QPoint
+        self.open_composer()
+        draft = self.item(self.window, 'newTaskInput')
+        draft.setProperty('text', 'Unfinished draft')
+        self.click('newTaskInput')
+        self.assertTrue(draft.isVisible())
+        QTest.mouseClick(self.window, Qt.LeftButton, pos=QPoint(520, 250))
+        QTest.qWait(250)
+        self.assertFalse(draft.isVisible())
+        self.assertEqual(self.store.taskCount, 0)
+        self.open_composer()
+        self.assertEqual(draft.property('text'), 'Unfinished draft')
+
+    def test_background_collapses_subtasks_and_commits_inline_edit(self):
+        from PySide6.QtCore import QPoint
+        task = self.store.addTask('Parent')
+        child = task.addSubtask('Child')
+        QTest.qWait(250)
+        self.click(f'toggleSubtasks{task.entryId}')
+        self.click(f'subtaskTitle{child.entryId}')
+        editor = self.item(self.window, f'subtaskTitle{child.entryId}')
+        editor.setProperty('text', 'Changed child')
+        card = self.item(self.window, f'taskCard{task.entryId}')
+        self.assertTrue(card.property('expanded'))
+        QTest.mouseClick(self.window, Qt.LeftButton, pos=QPoint(520, 250))
+        QTest.qWait(250)
+        self.assertFalse(card.property('expanded'))
+        self.assertEqual(child.title, 'Changed child')
+        self.assertFalse(self.item(self.window, f'newSubtaskInput{task.entryId}').isVisible())
+
+    def test_time_popup_cancels_on_background_without_changing_task(self):
+        from PySide6.QtCore import QPoint
+        task = self.store.addTask('Keep time', '09:15')
+        QTest.qWait(250)
+        self.click(f'taskTime{task.entryId}')
+        field = self.item(self.window, f'taskTime{task.entryId}')
+        popup = field.findChild(QObject, 'timePicker')
+        self.assertTrue(popup.property('visible'))
+        field.findChild(QObject, 'timePickerMinute').setProperty('currentIndex', 45)
+        QTest.mouseClick(self.window, Qt.LeftButton, pos=QPoint(520, 250))
+        QTest.qWait(150)
+        self.assertFalse(popup.property('visible'))
+        self.assertEqual(task.time, '09:15')
 
     def test_subtasks_can_be_collapsed(self):
         task = self.store.addTask('带子任务')

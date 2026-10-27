@@ -17,6 +17,8 @@ Rectangle {
     border.width: 1
     clip: true
 
+    EditDismissArea { anchors.fill: parent }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 18
@@ -103,7 +105,6 @@ Rectangle {
         StoreStatus {
             Layout.fillWidth: true
             taskStore: root.taskStore
-            showSavedHint: true
         }
     }
 }

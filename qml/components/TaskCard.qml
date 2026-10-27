@@ -12,7 +12,6 @@ Rectangle {
     property var entry
     property var taskStore
     property bool expanded: false
-    property bool timeError: false
     property bool removing: false
     property bool animateEntrance: false
     property real removalHeight: 0
@@ -90,28 +89,9 @@ Rectangle {
         }
     }
 
-    Timer {
-        id: errorTimer
-        interval: 1600
-        repeat: false
-        onTriggered: card.timeError = false
-    }
-
     Component.onCompleted: {
         if (card.entry && card.animateEntrance)
             entrance.start()
-    }
-
-    function commitTime(field: TextField) {
-        if (!card.entry)
-            return
-        if (card.entry.setTime(field.text)) {
-            card.timeError = false
-        } else {
-            card.timeError = true
-            errorTimer.restart()
-        }
-        field.text = Qt.binding(function() { return card.entry.time })
     }
 
     function commitTitle(field: TextField) {
@@ -134,6 +114,10 @@ Rectangle {
         if (card.entry.addSubtask(subtaskInput.text))
             subtaskInput.clear()
         subtaskInput.forceActiveFocus()
+    }
+
+    function dismissEditors() {
+        card.expanded = false
     }
 
     function beginSubtask() {
@@ -172,7 +156,7 @@ Rectangle {
                 }
             }
 
-            InlineField {
+            TimeField {
                 id: timeField
                 objectName: "taskTime" + (card.entry ? card.entry.entryId : "")
                 Layout.preferredWidth: 48
@@ -184,9 +168,9 @@ Rectangle {
                 horizontalAlignment: TextInput.AlignHCenter
                 font.pixelSize: 10
                 color: card.completed ? Theme.subtle : Theme.muted
-                error: card.timeError
-                onEditingFinished: card.commitTime(this)
-                onTextEdited: card.timeError = false
+                onTimeSelected: function(value) {
+                    if (card.entry) card.entry.setTime(value)
+                }
             }
 
             InlineField {
@@ -226,15 +210,6 @@ Rectangle {
             }
         }
 
-        Text {
-            visible: card.timeError
-            Layout.leftMargin: 24
-            Layout.preferredHeight: visible ? 12 : 0
-            text: qsTr("时间格式应为 HH:mm")
-            color: Theme.danger
-            font.pixelSize: 9
-        }
-
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: 27
@@ -270,6 +245,7 @@ Rectangle {
 
         Item {
             id: subtaskWrapper
+            readonly property bool editBoundary: true
             objectName: "subtaskWrapper" + (card.entry ? card.entry.entryId : "")
 
             property real targetHeight: card.expanded ? subtaskColumn.implicitHeight : 0

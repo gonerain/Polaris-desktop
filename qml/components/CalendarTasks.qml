@@ -15,6 +15,8 @@ Rectangle {
     border.color: Theme.border
     clip: true
 
+    EditDismissArea { anchors.fill: parent }
+
     property bool calendarVisible: false
     readonly property var taskStore: store
     signal dragActiveChanged(bool active)

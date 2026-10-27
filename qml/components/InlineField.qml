@@ -5,6 +5,7 @@ import "Theme.js" as Theme
 TextField {
     id: field
 
+    readonly property bool editBoundary: true
     property bool chip: false
     property bool bare: false
     property bool error: false

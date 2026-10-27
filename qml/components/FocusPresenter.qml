@@ -159,6 +159,7 @@ Item {
     Shortcut {
         sequence: "Escape"
         enabled: presenter.active && !presenter.transitioning
+                 && !(presenter.targetWindow.editorPopupCount > 0)
                  && !(presenter.view && presenter.view.escapeBlocked === true)
         onActivated: presenter.close()
     }

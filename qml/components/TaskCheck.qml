@@ -5,6 +5,7 @@ import "Theme.js" as Theme
 AbstractButton {
     id: control
 
+    readonly property bool editBoundary: true
     property bool checkedState: false
     property string accessibleName: ""
     signal toggleRequested(bool next)

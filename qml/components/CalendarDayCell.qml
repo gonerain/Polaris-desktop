@@ -8,6 +8,7 @@ AbstractButton {
     id: cell
 
     required property var modelData
+    readonly property bool editBoundary: true
     property real cellHeight: 28
     signal activated(string date)
 

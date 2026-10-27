@@ -5,6 +5,7 @@ import "Theme.js" as Theme
 AbstractButton {
     id: control
 
+    readonly property bool editBoundary: true
     property bool destructive: false
     property bool filled: false
     property int buttonSize: 26
