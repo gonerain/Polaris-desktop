@@ -31,8 +31,8 @@ ColumnLayout {
             acceptedButtons: Qt.LeftButton
             onActiveChanged: {
                 root.dragActiveChanged(active)
-                if (active && Window.window)
-                    Window.window.startSystemMove()
+                if (active && root.Window.window)
+                    root.Window.window.startSystemMove()
             }
         }
 
