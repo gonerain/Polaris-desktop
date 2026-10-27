@@ -12,32 +12,36 @@ class StorageError(Exception):
     pass
 
 
+class SnapshotFormatError(StorageError):
+    """The file was read, but its contents are invalid or unsupported."""
+
+
 def validate_snapshot(document):
     if (not isinstance(document, dict) or type(document.get("version")) is not int
             or document["version"] != 1):
-        raise StorageError("不支持的数据版本")
+        raise SnapshotFormatError("不支持的数据版本")
     days = document.get("days")
     if not isinstance(days, dict):
-        raise StorageError("日程数据格式损坏")
+        raise SnapshotFormatError("日程数据格式损坏")
     ids = set()
 
     def validate_entry(entry, subtask=False):
         if not isinstance(entry, dict):
-            raise StorageError("任务格式损坏")
+            raise SnapshotFormatError("任务格式损坏")
         identity = entry.get("id")
         if type(identity) is not int or not 0 < identity <= 2_147_483_647 or identity in ids:
-            raise StorageError("任务编号无效或重复")
+            raise SnapshotFormatError("任务编号无效或重复")
         ids.add(identity)
         if not isinstance(entry.get("title"), str) or not entry["title"].strip():
-            raise StorageError("任务名称无效")
+            raise SnapshotFormatError("任务名称无效")
         if type(entry.get("done")) is not bool:
-            raise StorageError("任务完成状态无效")
+            raise SnapshotFormatError("任务完成状态无效")
         time = entry.get("time", "")
         if not isinstance(time, str) or (time and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", time)):
-            raise StorageError("任务时间无效")
+            raise SnapshotFormatError("任务时间无效")
         children = entry.get("subtasks", [])
         if not isinstance(children, list) or (subtask and (children or time)):
-            raise StorageError("子任务结构无效")
+            raise SnapshotFormatError("子任务结构无效")
         for child in children:
             validate_entry(child, True)
 
@@ -46,9 +50,9 @@ def validate_snapshot(document):
             if date.fromisoformat(day).isoformat() != day:
                 raise ValueError()
         except (ValueError, TypeError):
-            raise StorageError("任务日期无效") from None
+            raise SnapshotFormatError("任务日期无效") from None
         if not isinstance(entries, list):
-            raise StorageError("日期列表损坏")
+            raise SnapshotFormatError("日期列表损坏")
         for entry in entries:
             validate_entry(entry)
     return document
@@ -66,8 +70,10 @@ class SnapshotRepository:
     def read(path):
         try:
             return validate_snapshot(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, ValueError, TypeError, RecursionError, StorageError) as error:
+        except OSError as error:
             raise StorageError(str(error)) from error
+        except (ValueError, TypeError, RecursionError) as error:
+            raise SnapshotFormatError(str(error)) from error
 
     def load(self):
         if not self.path.exists() and not self.backup.exists():
@@ -108,7 +114,7 @@ class SnapshotRepository:
             if self.path.exists():
                 try:
                     previous = self.read(self.path)
-                except StorageError as error:
+                except SnapshotFormatError as error:
                     if not self._recovered:
                         self.blocked = True
                         raise StorageError("文件在运行中损坏，已停止写入以保护原文件") from error

@@ -12,16 +12,13 @@ Rectangle {
     property var entry
     property var taskStore
     property bool expanded: false
-    property bool removing: false
     property bool animateEntrance: false
-    property real removalHeight: 0
     readonly property bool completed: entry ? entry.done : false
 
-    implicitHeight: removing ? removalHeight : content.implicitHeight + 16
+    implicitHeight: content.implicitHeight + 16
     radius: 9
     clip: true
     color: cardHover.hovered ? "#F8FAFF" : Theme.clearSurface
-    enabled: !removing
     opacity: animateEntrance ? 0 : 1
     scale: 1
 
@@ -52,40 +49,6 @@ Rectangle {
             to: 1
             duration: Theme.normal
             easing.type: Easing.OutCubic
-        }
-    }
-
-    ParallelAnimation {
-        id: removeAnimation
-
-        NumberAnimation {
-            target: card
-            property: "opacity"
-            to: 0
-            duration: 120
-            easing.type: Easing.InCubic
-        }
-
-        NumberAnimation {
-            target: card
-            property: "scale"
-            to: 0.97
-            duration: 120
-            easing.type: Easing.InCubic
-        }
-
-        NumberAnimation {
-            target: card
-            property: "removalHeight"
-            from: card.height
-            to: 0
-            duration: 160
-            easing.type: Easing.InCubic
-        }
-
-        onFinished: {
-            if (card.entry && card.taskStore)
-                card.taskStore.removeTask(card.entry.entryId)
         }
     }
 
@@ -123,14 +86,6 @@ Rectangle {
     function beginSubtask() {
         card.expanded = true
         Qt.callLater(function() { subtaskInput.forceActiveFocus() })
-    }
-
-    function removeCard() {
-        if (card.removing)
-            return
-        card.removalHeight = card.height
-        card.removing = true
-        removeAnimation.start()
     }
 
     ColumnLayout {
@@ -206,7 +161,10 @@ Rectangle {
                 destructive: true
                 accessibleName: qsTr("删除任务")
                 tooltip: qsTr("删除任务")
-                onClicked: card.removeCard()
+                onClicked: {
+                    if (card.entry && card.taskStore)
+                        card.taskStore.removeTask(card.entry.entryId)
+                }
             }
         }
 

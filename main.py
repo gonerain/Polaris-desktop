@@ -31,7 +31,6 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
         raise RuntimeError("找不到日程组件或联动协调器")
     if storage_path is not None:
         store.initialize_storage(storage_path)
-    coordinator.attach(store)
     if QGuiApplication.instance() is not None:
         # 首次在窗口映射前设置；再延迟一次，确保窗口管理器已创建原生窗口。
         apply_skip_taskbar(window)
@@ -62,7 +61,10 @@ def main() -> int:
         return 1
     engine = create_engine(storage_path=data_directory / "tasks.json")
     window = engine.rootObjects()[0]
-    tray = create_tray(app, window, window.findChild(QObject, "interactionCoordinator"), data_directory)
+    coordinator = window.findChild(QObject, "interactionCoordinator")
+    tray = create_tray(app, window, coordinator, data_directory)
+    # All reminder subscribers must exist before attach() emits its first check.
+    coordinator.attach(window.findChild(QObject, "calendarTaskStore"))
     exit_code = app.exec()
     if tray is not None:
         tray.hide()
