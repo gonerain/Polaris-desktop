@@ -1,15 +1,12 @@
 import QtQuick
 import QtQuick.Controls.Basic
-import QtQuick.Window
 import "Theme.js" as Theme
 
 TextField {
     id: field
 
     readonly property bool editBoundary: true
-    readonly property bool editFocusBoundary: true
     readonly property bool editing: activeFocus && !readOnly
-        && (!Window.window || Window.window.active)
     property bool chip: false
     property bool bare: false
     property bool error: false
@@ -19,24 +16,9 @@ TextField {
     color: Theme.ink
     placeholderTextColor: Theme.subtle
     selectByMouse: true
-    persistentSelection: false
-    onActiveFocusChanged: if (!activeFocus) deselect()
     hoverEnabled: true
     leftPadding: 6
     rightPadding: 6
-
-    Connections {
-        id: windowFocus
-        target: field.Window.window
-        function onActiveChanged() {
-            // Clicking the desktop/another app should not leave this field
-            // selected, nor restore an abandoned edit just by returning.
-            if (windowFocus.target && !windowFocus.target.active && field.focus) {
-                field.focus = false
-                field.deselect()
-            }
-        }
-    }
 
     background: Rectangle {
         radius: 7

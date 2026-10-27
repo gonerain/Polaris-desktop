@@ -13,7 +13,6 @@
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
 .\.venv\Scripts\python.exe main.py
-.\.venv\Scripts\python.exe -m unittest -q
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm Polaris.spec
 ```
 

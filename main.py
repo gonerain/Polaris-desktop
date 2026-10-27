@@ -8,6 +8,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from polaris.qml import register_types
+from polaris.input_focus import InputFocusFilter
 from polaris.x11_hints import apply_skip_taskbar
 
 
@@ -17,6 +18,8 @@ QML_FILE = Path(__file__).resolve().parent / "qml" / "Main.qml"
 def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
     register_types()
     engine = QQmlApplicationEngine()
+    engine._input_focus = InputFocusFilter(engine)
+    QGuiApplication.instance().installEventFilter(engine._input_focus)
     engine.addImportPath(str(QML_FILE.parent))
     engine.load(QUrl.fromLocalFile(str(QML_FILE)))
     if not engine.rootObjects():

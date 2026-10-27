@@ -1,22 +1,13 @@
 # 组件画板
 
-## 运行与验证
+## 运行
 
-项目使用 Python + PySide6 / Qt Quick。依赖固定为已通过退出回归测试的 `PySide6-Essentials==6.8.3`，不需要 WebEngine。
+项目使用 Python + PySide6 / Qt Quick，依赖 `PySide6-Essentials==6.8.3`，不需要 WebEngine。
 
 ```bash
 .venv/bin/python -m pip install -r requirements.txt
-QT_QUICK_BACKEND=software .venv/bin/python main.py
+.venv/bin/python main.py
 ```
-
-当前桌面驱动曾发生过故障，暂用软件渲染运行；自动测试不得连接真实桌面或注入全局鼠标事件。
-
-```bash
-.venv/bin/python -m unittest -v
-.venv/bin/pyside6-qmllint -I qml qml/Main.qml qml/components/*.qml
-```
-
-GUI 测试入口强制 `offscreen`、软件渲染并清除显示服务环境变量。离屏事件测试不等于真实窗口管理器的拖动、缩放验证。
 
 ## 初始化与自适应
 
@@ -163,7 +154,7 @@ board.presentItem(componentItem, fullViewFactory, options, properties)
 
 过渡使用来源组件快照、背景扩张、内容交叉淡入淡出及窗口几何插值（320ms），不是拉伸活的控件。返回沿原路径恢复原始窗口位置和尺寸；快照是打开瞬间的视觉占位，真实画布一直保留，返回后显示最新数据。完整视图在返回时销毁，业务数据不销毁。
 
-主窗口在完整态冻结画布尺寸、暂停自动缩回并禁止边缘缩放。点击返回或按 Esc 退出；过渡期间阻止重复切换。完整视图内部仍可自由布局、编辑和导航。第一版完整态为矩形区域；画布态的不规则区域能力不变。桌面实际动画效果仍需人工验证，离屏测试只验证状态及几何往返。
+主窗口在完整态冻结画布尺寸、暂停自动缩回并禁止边缘缩放。点击返回或按 Esc 退出；过渡期间阻止重复切换。完整视图内部仍可自由布局、编辑和导航。第一版完整态为矩形区域；画布态的不规则区域能力不变。桌面实际动画效果以运行界面为准。
 
 日程右上角的 `↗` 打开独立的 `4×3` 总览（月历 + 当日日程），窄窗口改为上下排列；两个视图共用同一个 `CalendarTaskStore`，日期和任务实时一致。原 `2×1` 日程的添加、编辑、子任务和月历切换保留。
 
