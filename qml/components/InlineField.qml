@@ -24,8 +24,8 @@ TextField {
         color: field.chip
             ? (field.activeFocus ? Theme.surface : "#F4F6FB")
             : field.bare
-                ? (field.activeFocus ? Theme.surface : (field.hovered ? "#F7F8FC" : "transparent"))
-                : (field.activeFocus || field.hovered ? Theme.surface : "transparent")
+                ? (field.activeFocus ? Theme.surface : (field.hovered ? "#F7F8FC" : Theme.clearSurface))
+                : (field.activeFocus || field.hovered ? Theme.surface : Theme.clearSurface)
         border.width: field.error || field.activeFocus ? 1 : 0
         border.color: field.error ? Theme.danger : Theme.primary
 

@@ -1,7 +1,6 @@
 """Desktop entry point: persistent calendar, single-instance lock and optional tray."""
 
 from pathlib import Path
-import os
 import sys
 
 from PySide6.QtCore import QObject, QTimer, QUrl, QStandardPaths, QLockFile
@@ -41,20 +40,10 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
     return engine
 
 
-def configure_rendering():
-    # The translucent Windows tool window must use the same stable rendering
-    # path as our software-rendered UI tests. GPU hover repaints have exhibited
-    # black flashes on this desktop; keep explicit backend overrides available.
-    if sys.platform == "win32" and not os.environ.get("QT_QUICK_BACKEND"):
-        from PySide6.QtQuick import QQuickWindow
-        QQuickWindow.setSceneGraphBackend("software")
-
-
 def main() -> int:
     from PySide6.QtWidgets import QApplication
     from polaris.desktop import create_tray
 
-    configure_rendering()
     app = QApplication(sys.argv)
     app.setApplicationName("Polaris")
     app.setOrganizationName("Polaris")

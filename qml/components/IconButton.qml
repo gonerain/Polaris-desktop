@@ -35,7 +35,7 @@ AbstractButton {
                 ? (control.destructive ? "#FDE8E8" : "#E8ECF7")
                 : control.hovered
                     ? (control.destructive ? "#FEF2F2" : Theme.primarySoft)
-                    : "transparent"
+                    : Theme.clearSurface
 
         Behavior on color {
             ColorAnimation { duration: Theme.fast }

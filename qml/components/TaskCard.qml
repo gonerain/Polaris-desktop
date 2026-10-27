@@ -20,7 +20,7 @@ Rectangle {
     implicitHeight: removing ? removalHeight : content.implicitHeight + 16
     radius: 9
     clip: true
-    color: cardHover.hovered ? "#F8FAFF" : "transparent"
+    color: cardHover.hovered ? "#F8FAFF" : Theme.clearSurface
     enabled: !removing
     opacity: animateEntrance ? 0 : 1
     scale: 1

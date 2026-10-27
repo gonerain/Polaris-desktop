@@ -10,6 +10,9 @@ var muted = "#8A94A6"
 var subtle = "#B4BCCB"
 var border = "#E8ECF4"
 var surface = "#FFFFFF"
+// Keep RGB white at zero alpha. Qt's literal "transparent" is transparent
+// black; interpolating it to a pale hover color creates dark intermediate frames.
+var clearSurface = "#00FFFFFF"
 var background = "#F7F8FC"
 var calendarSurface = "#FBFCFE"
 var success = "#22C55E"

@@ -45,7 +45,7 @@ AbstractButton {
                     ? Theme.primarySoft
                     : cell.modelData.today
                         ? Theme.accentSoft
-                        : "transparent"
+                        : Theme.clearSurface
             border.width: cell.modelData.today && !cell.modelData.selected ? 1 : 0
             border.color: Theme.accent
 
