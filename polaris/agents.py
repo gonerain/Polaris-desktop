@@ -13,6 +13,8 @@ OUTCOMES = {"ended": "本轮已结束", "failed": "本轮失败", "cancelled": "
 class AgentHub(QObject):
     name = "Agent"
     operations = [
+        {"name": "session.status", "access": "read", "description": "即时统计全部已接入会话，返回执行中/空闲/断连数量及前20个执行中会话。以state为当前状态，outcome仅表示上一轮结果。",
+         "parameters": {}, "returns": "{asOf,total,running,idle,disconnected,runningSessions,runningTruncated}", "example": {}},
         {"name": "session.list", "access": "read", "description": "查询已接入会话元数据，不含提示词或回复。",
          "parameters": {"offset?": "integer>=0", "limit?": "1..100，默认20"},
          "returns": "{total,sessions,nextOffset}", "example": {"limit": 20}},
@@ -40,6 +42,16 @@ class AgentHub(QObject):
     connectionError = Property(str, lambda self: self._error, notify=changed)
 
     def call(self, operation, args):
+        if operation == "session.status":
+            arguments(args, ())
+            rows = self.sessions
+            running = [row for row in rows if row["state"] == "running"]
+            fields = ("instanceId", "sessionId", "source", "name", "state")
+            return {"asOf": datetime.now().astimezone().isoformat(), "total": len(rows),
+                    "running": len(running), "idle": sum(row["state"] == "idle" for row in rows),
+                    "disconnected": sum(row["state"] == "disconnected" for row in rows),
+                    "runningSessions": [{key: row[key] for key in fields} for row in running[:20]],
+                    "runningTruncated": len(running) > 20}
         if operation == "result.list":
             arguments(args, ())
             return {"results": self.results, "unreadCount": self.unreadCount}
