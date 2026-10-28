@@ -8,6 +8,7 @@ AbstractButton {
     readonly property bool editBoundary: true
     property bool destructive: false
     property bool filled: false
+    property bool selected: false
     property int buttonSize: 26
     property int textSize: 14
     property string accessibleName: ""
@@ -28,14 +29,16 @@ AbstractButton {
     }
 
     background: Rectangle {
-        radius: 7
+        radius: 8
+        border.width: control.visualFocus ? 1 : 0
+        border.color: Theme.primary
         color: control.filled
             ? (control.down ? Theme.primaryDark : (control.hovered ? Theme.primaryDark : Theme.primary))
             : control.down
                 ? (control.destructive ? "#FDE8E8" : "#E8ECF7")
                 : control.hovered
                     ? (control.destructive ? "#FEF2F2" : Theme.primarySoft)
-                    : Theme.clearSurface
+                    : control.selected ? Theme.primarySoft : Theme.clearSurface
 
         Behavior on color {
             ColorAnimation { duration: Theme.fast }
@@ -51,7 +54,7 @@ AbstractButton {
             ? "white"
             : control.destructive
                 ? (control.hovered ? Theme.danger : Theme.muted)
-                : (control.hovered ? Theme.primary : Theme.muted)
+                : (control.hovered || control.selected ? Theme.primary : Theme.muted)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
 

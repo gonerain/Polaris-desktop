@@ -168,6 +168,9 @@ class CalendarTaskStore(QObject):
                                    if self._repository else "", notify=storageChanged)
     canUndoDelete = Property(bool, lambda self: self._undo is not None, notify=undoChanged)
     allEntries = Property("QVariantList", lambda self: self._all_entries(), notify=agendaChanged)
+    overdueCount = Property(int, lambda self: sum(not entry.done
+        for day, entries in self._tasks_by_day.items() if day < self._today for entry in entries),
+        notify=agendaChanged)
 
     def initialize_storage(self, path):
         if self._repository is not None or self._tasks_by_day:
@@ -285,6 +288,30 @@ class CalendarTaskStore(QObject):
                     return True
         return False
 
+    @Slot(result=int)
+    def moveOverdueToToday(self):
+        moved = []
+        for day, entries in list(self._tasks_by_day.items()):
+            if day < self._today:
+                moved.extend(entry for entry in entries if not entry.done)
+                self._tasks_by_day[day] = [entry for entry in entries if entry.done]
+        if moved:
+            self._tasks_by_day.setdefault(self._today, []).extend(moved)
+            self._notify_tasks()
+        return len(moved)
+
+    @Slot(str, result=str)
+    def dateLabel(self, value):
+        try:
+            day = date.fromisoformat(value)
+        except (ValueError, TypeError):
+            return value
+        delta = (day - self._today).days
+        if delta in (-1, 0, 1):
+            return {-1: "昨天", 0: "今天", 1: "明天"}[delta]
+        prefix = f"{day.year}年" if day.year != self._today.year else ""
+        return f"{prefix}{day.month}月{day.day}日 周{_WEEKDAYS[day.weekday()]}"
+
     @Slot(result=bool)
     def undoDelete(self):
         if self._undo is None:
@@ -335,6 +362,18 @@ class CalendarTaskStore(QObject):
                 "openCount": sum(1 for entry in entries if not entry.done),
             })
         return cells
+
+    @Property("QVariantList", notify=calendarChanged)
+    def weekCells(self):
+        index = (self._selected.day - 1 + self._selected.replace(day=1).weekday()) // 7 * 7
+        return self.calendarCells[index:index + 7]
+
+    @Property(str, notify=calendarChanged)
+    def weekLabel(self):
+        start = date.fromordinal(self._selected.toordinal() - self._selected.weekday())
+        end = date.fromordinal(min(date.max.toordinal(), start.toordinal() + 6))
+        end_year = f"{end.year}年" if end.year != start.year else ""
+        return f"{start.year}年{start.month}月{start.day}日 — {end_year}{end.month}月{end.day}日"
 
     def _entries_for(self, day):
         return self._tasks_by_day.get(day, ())

@@ -148,6 +148,8 @@ Rectangle {
                 textSize: 14
                 buttonSize: 22
                 visible: !!card.entry && card.entry.subtaskCount === 0 && !card.expanded
+                opacity: cardHover.hovered || titleField.activeFocus || card.expanded || activeFocus ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: Theme.fast } }
                 accessibleName: qsTr("添加子任务")
                 tooltip: qsTr("添加子任务")
                 onClicked: card.beginSubtask()
@@ -159,6 +161,8 @@ Rectangle {
                 textSize: 14
                 buttonSize: 22
                 destructive: true
+                opacity: cardHover.hovered || titleField.activeFocus || card.expanded || activeFocus ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: Theme.fast } }
                 accessibleName: qsTr("删除任务")
                 tooltip: qsTr("删除任务")
                 onClicked: {

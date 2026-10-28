@@ -16,7 +16,11 @@ TextField {
     color: Theme.ink
     placeholderTextColor: Theme.subtle
     selectByMouse: true
+    autoScroll: activeFocus
     hoverEnabled: true
+    ToolTip.visible: hovered && !activeFocus && contentWidth > width - leftPadding - rightPadding
+    ToolTip.text: text
+    ToolTip.delay: 650
     leftPadding: 6
     rightPadding: 6
 

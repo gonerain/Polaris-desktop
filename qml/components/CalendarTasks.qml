@@ -18,6 +18,13 @@ Rectangle {
     EditDismissArea { anchors.fill: parent }
 
     property bool calendarVisible: false
+    onVisibleChanged: {
+        if (visible && store) {
+            calendarVisible = false
+            if (agendaPanel) agendaPanel.showCompleted = false
+            store.goToday()
+        }
+    }
     readonly property var taskStore: store
     signal dragActiveChanged(bool active)
     signal focusRequested(var factory, var options, var properties)
