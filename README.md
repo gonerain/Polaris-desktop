@@ -22,6 +22,12 @@
 
 提供 `polaris_components / polaris_help / polaris_call` 三个通用工具，不内置日程工具或 Codex 分支。安装、WSL 中继与其他 Agent 接入见 [接入说明](integrations/README.md) 和 [协议 v1](docs/agent-bridge.md)。
 
+## Codex 插件
+
+仓库带 `Polaris Local` 本地插件目录，安装 `polaris` 并审阅、信任 hooks 后，可通过生命周期事件自动接入；
+也提供相同的三个组件工具。`Stop` 可能被其他 hook 继续执行，因此这里只上报“结果未知”，不能保证最终结束。
+安装、Node 环境与验证范围见 [Codex 接入说明](integrations/README.md#codex-桌面本地插件)。
+
 ## Windows 运行与打包
 
 ```powershell

@@ -2,7 +2,43 @@
 
 这个目录是可安装的 Pi 本地包，也包含不依赖 Pi 的 Node 客户端 `client.mjs`。
 其他 Agent 可以使用客户端或直接遵守 [本机协议](../docs/agent-bridge.md)，无需修改 Polaris 核心。
-目前已实现 Pi 适配器，未实现 Codex 适配器。Pi 接入按本机 1.4.0 Extension API 验证，需支持 `agent_settled` 生命周期事件。
+已实现 Pi 适配器及 Codex 桌面本地插件。Pi 接入按本机 1.4.0 Extension API 验证，需支持 `agent_settled` 生命周期事件。
+
+## Codex 桌面本地插件
+
+本目录同时是 Codex 插件根目录；`.codex-plugin/plugin.json`、`.mcp.json` 与 `codex/` 必须一起安装，
+不可只复制 `codex/`。需要宿主环境 PATH 中可用的 Node.js 20+（Windows 已用 Node 24 验证），不需要 npm install 或 API key。
+
+仓库自带 `.claude-plugin/marketplace.json`，来源为 `Polaris Local`，插件名为 `polaris`。
+用 Codex 桌面打开这个 worktree，重启应用后到插件目录选择此来源并安装、启用 Polaris；
+审阅并信任插件的 hooks，再打开新会话。安装本身不等于信任 hooks，不应绕过信任检查。
+本机 PATH 中的旧 `codex-cli 0.31.0` 没有插件管理命令，不能用它验证桌面插件加载。
+官方配置及信任规则见 [插件打包](https://developers.openai.com/plugins/build/plugins) 与 [Hooks](https://learn.chatgpt.com/docs/hooks)。
+
+先启动 Polaris。`SessionStart / UserPromptSubmit / Stop / Interrupt / SessionEnd` 通过命令 hook
+把少量元数据交给每会话的本机助手，由助手保持到 Polaris 的连接。无需模型调用工具，也不轮询会话、扫描进程或解析聊天文件。
+仅连接心跳和故障重连使用定时器。可沿用下文 `POLARIS_ENDPOINT / POLARIS_RELAY`；环境变量必须由 Codex 宿主继承。
+
+**结束语义有限制：Codex 没有这里可用的 Pi `agent_settled` 等价事件。**
+`Stop` 是一次停止尝试，其他 hook 仍可要求继续；此插件在 Stop 上报 `unknown`，会触发 Polaris 的现有结束气泡，
+不保证是最终静止状态或任务成功。同一 turn 的重复 Stop 只提醒一次。要求严格最终结束时，不应把这个提示当作最终确认。
+`Interrupt` 上报 `cancelled`，未匹配当前 turn 的结束事件忽略；没有可靠失败字段时不猜测 failed。
+hooks 不提供原生会话标题，列表及气泡使用 `Codex · 项目名 · 会话短ID`，不读取提示词来推断标题。
+不监听子代理事件，避免把子代理结束误当主会话结束；压缩 SessionStart 保留正在运行的状态。
+
+每个会话助手占一个桥连接；三个组件工具另占一个独立连接，名称为 `Codex tools`，
+在 Polaris 的 Agent 完整视图里为这个工具连接按组件授权。工具与 Pi 一样为
+`polaris_components / polaris_help / polaris_call`；默认拒绝数据访问，不自动重试写入。
+因此还受核心最多32连接的总量限制。MCP 不可用不影响已经启动的 hooks 助手。
+
+SessionEnd 正常注销；异常退出不冒充完成。35分钟没有新的 hook 时助手释放连接，
+防止 Codex 崩溃后无限残留；超长无事件运行可能暂时显示断连，下次 UserPromptSubmit 会重建。
+Polaris 重启时助手只发送当前快照，不补发离线 Stop。插件禁用不会终止已经存在的助手，
+应先关闭相应会话，或等待空闲释放。Windows 命名管道链路已验证；Linux/WSL 的实际 Codex 宿主加载尚未验收。
+
+验证使用临时端点与内存数据：覆盖真实 Qt LocalBridge/AgentHub 认证、会话开始、Stop 去重、取消、注销，
+以及 Node 管道重连、MCP 初始化、工具发现/调用、权限拒绝与参数校验。未调用收费模型、未接触真实日程。
+真实 Codex 桌面的安装、hook 信任及宿主事件触发仍需在安装后验收。
 
 ## Pi：Windows / Linux 同环境
 
