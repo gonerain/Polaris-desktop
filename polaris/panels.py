@@ -173,7 +173,7 @@ class PanelAllocator:
         return None
 
     def move(self, allocation_id: int, column: int, row: int, *, swap=True):
-        """Atomically relocate, optionally exchanging with exactly one other shape."""
+        """Atomically step one cell on one axis, optionally exchanging one shape."""
         if type(swap) is not bool:
             raise ValueError("swap 必须是布尔值")
         if any(type(value) is not int or value < 0 for value in (allocation_id, column, row)):
@@ -190,6 +190,9 @@ class PanelAllocator:
             return cells
 
         target = column, row
+        dx, dy = column - source.origin[0], row - source.origin[1]
+        if abs(dx) + abs(dy) > 1:
+            return None  # Only adjacent cardinal moves; never diagonal/free placement.
         destination = cells_at(source, target)
         if destination is None:
             return None
@@ -200,7 +203,12 @@ class PanelAllocator:
             if not swap or len(collisions) != 1:
                 return None
             other_id = next(iter(collisions))
-            origins[other_id] = source.origin
+            other = self._allocations[other_id]
+            # Exchange along the chosen axis, preserving each shape's other axis.
+            # A one-cell pet can swap vertically with a two-cell-wide calendar
+            # from either column without shifting the calendar sideways.
+            origins[other_id] = ((source.origin[0], other.origin[1]) if dx
+                                 else (other.origin[0], source.origin[1]))
         occupied = {cell: owner for cell, owner in self._occupied.items() if owner not in origins}
         changed = []
         for identity, origin in origins.items():

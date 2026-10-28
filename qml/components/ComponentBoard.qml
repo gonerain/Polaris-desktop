@@ -20,11 +20,30 @@ Item {
     property var presenter: null
     property bool interactionsEnabled: true
     property bool dragging: false
+    property Item activeDragHost: null
+    property Item movingHost: null
+    readonly property bool settling: settleTimer.running
     readonly property bool layoutLocked: !interactionsEnabled || (presenter && presenter.busy)
     readonly property int chromeHeight: 32
+    readonly property int moveDuration: 110
+
+    Timer {
+        id: settleTimer
+        interval: board.moveDuration + 25
+        onTriggered: {
+            board.movingHost = null
+            const host = board.activeDragHost
+            // Run after the one-shot timer has fully stopped, not inside its
+            // triggered signal while `running` can still be true.
+            Qt.callLater(function() {
+                if (host && board.activeDragHost === host && host.dragging)
+                    host.updateMove(host.pointerPoint, false)
+            })
+        }
+    }
 
     function present(handle, factory, options, properties): bool {
-        if (!presenter || !handle || _handles[String(handle.id)] !== handle)
+        if (dragging || settling || !presenter || !handle || _handles[String(handle.id)] !== handle)
             return false
         const resolved = Object.assign({}, options || {})
         if (resolved.span !== undefined) {
@@ -84,12 +103,16 @@ Item {
         }
     }
 
-    function move(handle, column, row): bool {
-        if (layoutLocked || !handle || _handles[String(handle.id)] !== handle
+    function move(handle, column, row, finalStep): bool {
+        if (!handle || layoutLocked || (settling && !(finalStep && activeDragHost === handle.host))
+                || _handles[String(handle.id)] !== handle || (dragging && activeDragHost !== handle.host)
                 || !Number.isInteger(column) || !Number.isInteger(row) || column < 0 || row < 0)
             return false
+        if (column === handle.allocation.origin[0] && row === handle.allocation.origin[1]) return true
         const result = allocator.relocate(handle.id, column, row, true)
         if (!result.ok) return false
+        movingHost = handle.host
+        settleTimer.restart()
         for (const allocation of result.allocations) {
             const moved = _handles[String(allocation.id)]
             moved.allocation = allocation
@@ -99,7 +122,7 @@ Item {
     }
 
     function setMinimized(handle, minimized): bool {
-        if (layoutLocked || dragging || typeof minimized !== "boolean"
+        if (layoutLocked || dragging || settling || typeof minimized !== "boolean"
                 || !handle || _handles[String(handle.id)] !== handle)
             return false
         handle.host.forceActiveFocus()
@@ -111,16 +134,22 @@ Item {
         return _handles[String(host.allocation.id)]
     }
 
-    function finishDrag(host): bool {
-        const centerX = host.x + host.width / 2
-        const centerY = host.y + host.height / 2
-        if (centerX < 0 || centerY < 0 || centerX >= width || centerY >= height)
+    function hoverStep(host, point, finalStep): bool {
+        if (point.x < 0 || point.y < 0 || point.x >= width || point.y >= height)
             return false
-        const column = Math.max(0, Math.min(columns - host.spanX,
-                                           Math.round(host.x / (cellWidth + gap))))
-        const row = Math.max(0, Math.min(rows - host.spanY,
-                                        Math.round(host.y / (cellHeight + gap))))
-        return move(handleFor(host), column, row)
+        const pointerColumn = Math.floor(point.x / (cellWidth + gap))
+        const pointerRow = Math.floor(point.y / (cellHeight + gap))
+        // The gap between cells is a neutral zone, preventing boundary jitter.
+        if (point.x - pointerColumn * (cellWidth + gap) >= cellWidth
+                || point.y - pointerRow * (cellHeight + gap) >= cellHeight)
+            return false
+        const origin = host.allocation.origin
+        const desiredColumn = pointerColumn - host.grabColumn
+        const desiredRow = pointerRow - host.grabRow
+        const column = host.moveAxis === "x" ? origin[0] + Math.sign(desiredColumn - origin[0]) : origin[0]
+        const row = host.moveAxis === "y" ? origin[1] + Math.sign(desiredRow - origin[1]) : origin[1]
+        if (column === origin[0] && row === origin[1]) return false
+        return move(handleFor(host), column, row, finalStep)
     }
 
     function regionsFor(cells, cellWidth, cellHeight, gap): var {
@@ -130,7 +159,7 @@ Item {
     function release(handle: var): bool {
         if (!handle || _handles[String(handle.id)] !== handle)
             return false
-        if (handle.host.dragging || (presenter && presenter.busy && presenter.sourceHandle === handle))
+        if (settling || handle.host.dragging || (presenter && presenter.busy && presenter.sourceHandle === handle))
             return false
         delete _handles[String(handle.id)]
         handle.host.visible = false

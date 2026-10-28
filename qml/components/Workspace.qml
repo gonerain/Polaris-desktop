@@ -68,13 +68,14 @@ Item {
         gap: 8
         interactionsEnabled: !workspace.shell.editorPopupCount && !workspace.shell.quitConfirmationVisible
                              && !workspace.shell.collapsing
-        onDraggingChanged: workspace.shell.setWorkspaceMoving(dragging, false)
+        onDraggingChanged: workspace.shell.setWorkspaceMoving(dragging || settling, false)
+        onSettlingChanged: workspace.shell.setWorkspaceMoving(dragging || settling, false)
     }
     WindowResizeHandles {
         objectName: "resizeHandles"
         z: 10
         anchors.fill: parent
         targetWindow: workspace.shell
-        enabled: !workspace.shell.collapsing && !workspace.presenter.busy && !board.dragging
+        enabled: !workspace.shell.collapsing && !workspace.presenter.busy && !board.dragging && !board.settling
     }
 }

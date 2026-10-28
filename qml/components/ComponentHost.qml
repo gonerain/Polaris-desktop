@@ -12,9 +12,13 @@ RegionSurface {
     property string caption: qsTr("组件")
     property bool minimized: false
     property bool dragging: false
-    property bool rejected: false
     property point pressPoint: Qt.point(0, 0)
-    property point dragOffset: Qt.point(0, 0)
+    property point pointerPoint: Qt.point(0, 0)
+    property string moveAxis: ""
+    property int grabColumn: 0
+    property int grabRow: 0
+    property real displayColumn: allocation.origin[0]
+    property real displayRow: allocation.origin[1]
     readonly property int spanX: Math.max(...allocation.cells.map(cell => cell[0])) + 1
     readonly property int spanY: Math.max(...allocation.cells.map(cell => cell[1])) + 1
     readonly property real expandedHeight: spanY * board.cellHeight + (spanY - 1) * board.gap
@@ -35,13 +39,12 @@ RegionSurface {
         }).filter(rect => rect.height > 0)
     readonly property bool rectangular: regions.length === 1
     readonly property bool softwareRendering: GraphicsInfo.api === GraphicsInfo.Software
-    x: allocation.origin[0] * (board.cellWidth + board.gap) + dragOffset.x
-    y: allocation.origin[1] * (board.cellHeight + board.gap) + dragOffset.y
+    x: displayColumn * (board.cellWidth + board.gap)
+    y: displayRow * (board.cellHeight + board.gap)
     width: spanX * board.cellWidth + (spanX - 1) * board.gap
     height: minimized ? headerHeight : expandedHeight
     clip: rectangular
-    z: dragging ? 100 : 0
-    opacity: dragging ? 0.85 : 1
+    z: board.movingHost === host ? 1 : 0
     regions: minimized ? [{x: barX, y: 0, width: barWidth, height: headerHeight}]
                        : board.regionsFor(allocation.cells, board.cellWidth, board.cellHeight, board.gap)
     visible: false
@@ -61,26 +64,47 @@ RegionSurface {
         return true
     }
 
-    function updateMove(point) {
-        const dx = point.x - pressPoint.x
-        const dy = point.y - pressPoint.y
+    Behavior on displayColumn {
+        enabled: host.visible && host.board.settling
+        NumberAnimation { duration: host.board.moveDuration; easing.type: Easing.OutCubic }
+    }
+    Behavior on displayRow {
+        enabled: host.visible && host.board.settling
+        NumberAnimation { duration: host.board.moveDuration; easing.type: Easing.OutCubic }
+    }
+
+    function beginMove(point) {
+        pressPoint = point
+        pointerPoint = point
+        moveAxis = ""
+        grabColumn = Math.floor(point.x / (board.cellWidth + board.gap)) - allocation.origin[0]
+        grabRow = Math.floor(point.y / (board.cellHeight + board.gap)) - allocation.origin[1]
+    }
+    function updateMove(point, finalStep) {
+        pointerPoint = point
+        const dx = Math.abs(point.x - pressPoint.x)
+        const dy = Math.abs(point.y - pressPoint.y)
         if (!dragging) {
-            if (dx * dx + dy * dy < 36) return
+            const canX = board.columns > spanX
+            const canY = board.rows > spanY
+            if (canX && dx >= 8 && (!canY || dx > dy * 1.2)) moveAxis = "x"
+            else if (canY && dy >= 8 && (!canX || dy > dx * 1.2)) moveAxis = "y"
+            else return
             forceActiveFocus()
             dragging = true
+            board.activeDragHost = host
             board.dragging = true
         }
-        dragOffset = Qt.point(dx, dy)
+        board.hoverStep(host, point, finalStep)
     }
-    function finishMove(cancelled) {
-        const moving = dragging
-        const accepted = !moving || (!cancelled && board.finishDrag(host))
-        dragOffset = Qt.point(0, 0)
+    function finishMove() {
         dragging = false
-        board.dragging = false
-        if (moving && !accepted) { rejected = true; rejectionTimer.restart() }
+        moveAxis = ""
+        if (board.activeDragHost === host) {
+            board.activeDragHost = null
+            board.dragging = false
+        }
     }
-    Timer { id: rejectionTimer; interval: 500; onTriggered: host.rejected = false }
 
     Item {
         id: scene
@@ -106,7 +130,7 @@ RegionSurface {
             height: host.headerHeight
             radius: 8
             color: host.dragging ? Theme.primarySoft : Theme.surface
-            border.color: host.rejected ? Theme.danger : Theme.border
+            border.color: host.dragging ? Theme.primary : Theme.border
             clip: true
             Text {
                 x: 10
@@ -124,18 +148,21 @@ RegionSurface {
                 anchors.right: minimizeButton.left
                 height: parent.height
                 enabled: !host.board.layoutLocked && (!host.board.dragging || host.dragging)
+                         && (!host.board.settling || host.dragging)
                 acceptedButtons: Qt.LeftButton
                 preventStealing: true
-                cursorShape: host.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
-                onPressed: function(mouse) { host.pressPoint = mapToItem(host.board, mouse.x, mouse.y) }
+                cursorShape: host.moveAxis === "x" ? Qt.SizeHorCursor : host.moveAxis === "y" ? Qt.SizeVerCursor
+                             : host.board.columns === host.spanX ? Qt.SizeVerCursor
+                             : host.board.rows === host.spanY ? Qt.SizeHorCursor : Qt.OpenHandCursor
+                onPressed: function(mouse) { host.beginMove(mapToItem(host.board, mouse.x, mouse.y)) }
                 onPositionChanged: function(mouse) {
-                    if (pressed) host.updateMove(mapToItem(host.board, mouse.x, mouse.y))
+                    if (pressed) host.updateMove(mapToItem(host.board, mouse.x, mouse.y), false)
                 }
                 onReleased: function(mouse) {
-                    host.updateMove(mapToItem(host.board, mouse.x, mouse.y))
-                    host.finishMove(false)
+                    host.updateMove(mapToItem(host.board, mouse.x, mouse.y), true)
+                    host.finishMove()
                 }
-                onCanceled: host.finishMove(true)
+                onCanceled: host.finishMove()
             }
             Rectangle {
                 id: minimizeButton
@@ -147,7 +174,7 @@ RegionSurface {
                 height: 24
                 radius: 5
                 color: buttonHover.hovered || activeFocus ? Theme.primarySoft : Theme.clearSurface
-                enabled: !host.board.layoutLocked && !host.board.dragging
+                enabled: !host.board.layoutLocked && !host.board.dragging && !host.board.settling
                 activeFocusOnTab: true
                 Accessible.role: Accessible.Button
                 Accessible.name: host.minimized ? qsTr("恢复组件") : qsTr("最小化组件")
