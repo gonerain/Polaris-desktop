@@ -7,7 +7,7 @@ a = Analysis(
     binaries=[],
     datas=[('qml', 'qml'), ('assets/dsh-pet', 'assets/dsh-pet'),
            ('integrations', 'integrations'), ('docs/agent-bridge.md', 'docs'),
-           ('docs/canvas-controls.md', 'docs')],
+           ('docs/canvas-controls.md', 'docs'), ('docs/weixin-component.md', 'docs')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

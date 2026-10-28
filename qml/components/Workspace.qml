@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import "Theme.js" as Theme
 
 // One allocator and one canvas. Components reserve shapes, never separate pages.
 Rectangle {
@@ -14,8 +15,10 @@ Rectangle {
     required property var taskStore
     required property var agentHub
     required property var componentApi
+    required property var weixinClient
     property var calendarHandle: null
     property var agentHandle: null
+    property var weixinHandle: null
     readonly property var componentBoard: board
 
     function requestComponent(url, cells, properties, title) {
@@ -39,6 +42,12 @@ Rectangle {
                                    objectName: "agentFullView"})
     }
 
+    function openWeixinDetails() {
+        return weixinHandle && board.present(weixinHandle, weixinHandle.factory,
+            {span: Qt.size(2, 2)}, {client: weixinClient, detailed: true,
+                                   objectName: "weixinFullView"})
+    }
+
     Component.onCompleted: {
         calendarHandle = requestComponent("CalendarTasks.qml", [[0, 0], [1, 0]],
             {taskStore: taskStore, objectName: "calendarTasks"}, qsTr("日程"))
@@ -59,6 +68,9 @@ Rectangle {
                 workspace.shell.setWorkspaceMoving(active, false)
             })
         }
+        weixinHandle = requestComponent("WeixinPanel.qml", [[0, 0]],
+            {client: weixinClient, objectName: "weixinPanel"}, qsTr("微信"))
+        if (weixinHandle) weixinHandle.item.expandRequested.connect(openWeixinDetails)
     }
 
     MouseArea {
@@ -67,8 +79,6 @@ Rectangle {
         z: 2
         containmentMask: QtObject {
             function contains(point: point): bool {
-                if (point.x < 0 || point.y < 0 || point.x >= canvasMoveArea.width || point.y >= canvasMoveArea.height)
-                    return false
                 const local = board.mapFromItem(canvasMoveArea, point.x, point.y)
                 return !board.containsComponentAt(local)
             }

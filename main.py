@@ -16,6 +16,7 @@ from polaris.component_api import ComponentRegistry
 from polaris.calendar_api import CalendarAPI
 from polaris.pet_api import PetAPI
 from polaris.local_bridge import LocalBridge
+from polaris.weixin import WeixinClient
 
 
 QML_FILE = Path(__file__).resolve().parent / "qml" / "Main.qml"
@@ -27,6 +28,8 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
     engine._agents = AgentHub(engine)
     engine._agents.setObjectName("agentHub")
     engine._components = ComponentRegistry(engine)
+    engine._weixin = WeixinClient(engine, component_registry=engine._components, credential_path=(
+        Path(storage_path).parent / "weixin-account.dat" if storage_path is not None else None))
     engine._input_focus = InputFocusFilter(engine)
     QGuiApplication.instance().installEventFilter(engine._input_focus)
     engine.addImportPath(str(QML_FILE.parent))
@@ -35,6 +38,7 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
     engine.setInitialProperties({
         "agentHub": engine._agents,
         "componentApi": engine._components,
+        "weixinClient": engine._weixin,
         "windowPositioningSupported": not QGuiApplication.platformName().startswith("wayland"),
     })
     engine.load(QUrl.fromLocalFile(str(QML_FILE)))
@@ -94,6 +98,9 @@ def main() -> int:
     coordinator.attach(window.findChild(QObject, "calendarTaskStore"))
     engine._bridge.start(data_directory)
     app.aboutToQuit.connect(engine._bridge.stop)
+    app.aboutToQuit.connect(engine._weixin.disconnectAccount)
+    if engine._weixin.hasAccount:
+        QTimer.singleShot(0, engine._weixin.connectAccount)
     exit_code = app.exec()
     if tray is not None:
         tray.hide()

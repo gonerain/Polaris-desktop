@@ -24,6 +24,7 @@ Window {
 
     required property var agentHub
     required property var componentApi
+    required property var weixinClient
     property string pendingComponent: ""
     readonly property int compactSize: 180
     readonly property int canvasPadding: 12
@@ -119,7 +120,7 @@ Window {
     }
 
     function showComponent(identity) {
-        if (identity !== "calendar" && identity !== "agents") return false
+        if (identity !== "calendar" && identity !== "agents" && identity !== "weixin") return false
         if (focusPresenter.busy) {
             if (focusPresenter.transitioning) return false
             pendingComponent = identity
@@ -128,10 +129,12 @@ Window {
         }
         root.forceActiveFocus()
         expand()
-        if (identity === "agents") {
+        if (identity === "agents" || identity === "weixin") {
             Qt.callLater(function() {
-                if (!window.compact && expandedContent.item && !focusPresenter.busy)
-                    expandedContent.item.openAgentDetails()
+                if (!window.compact && expandedContent.item && !focusPresenter.busy) {
+                    if (identity === "weixin") expandedContent.item.openWeixinDetails()
+                    else expandedContent.item.openAgentDetails()
+                }
             })
         }
         return true
@@ -196,7 +199,7 @@ Window {
         if (!expandedContent.source.toString()) {
             expandedContent.setSource("components/Workspace.qml", {
                 shell: window, presenter: focusPresenter, taskStore: calendarStore,
-                agentHub: agentHub, componentApi: componentApi
+                agentHub: agentHub, componentApi: componentApi, weixinClient: weixinClient
             })
         }
         if (!compact) {

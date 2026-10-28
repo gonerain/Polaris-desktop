@@ -67,6 +67,12 @@ Item {
         }
         MenuSeparator {}
         MenuItem {
+            text: qsTr("微信")
+            font.pixelSize: 12
+            enabled: !popups.presenter.transitioning
+            onTriggered: popups.shell.showComponent("weixin")
+        }
+        MenuItem {
             objectName: "petGreetMenuItem"
             text: qsTr("打个招呼")
             font.pixelSize: 12

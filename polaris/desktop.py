@@ -15,6 +15,7 @@ def create_tray(app, window, coordinator, data_directory):
     menu = QMenu()
     menu.addAction("打开日程", lambda: window.showComponent("calendar"))
     menu.addAction("Agent 会话", lambda: window.showComponent("agents"))
+    menu.addAction("微信", lambda: window.showComponent("weixin"))
     menu.addAction("打开数据文件夹", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_directory))))
     menu.addSeparator()
     menu.addAction("退出", window.requestQuit)
