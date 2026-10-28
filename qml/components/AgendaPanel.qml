@@ -74,7 +74,7 @@ ColumnLayout {
             spacing: 3
             Text {
                 text: root.taskStore && root.taskStore.selectedDate === root.taskStore.todayDate
-                    ? qsTr("今天待办") : qsTr("当天待办")
+                    ? qsTr("我的一天") : qsTr("当天待办")
                 color: Theme.ink
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -136,14 +136,14 @@ ColumnLayout {
             anchors.rightMargin: 4
             Text {
                 Layout.fillWidth: true
-                text: root.taskStore ? root.taskStore.overdueCount + qsTr(" 项过期待办，重新安排一下") : ""
+                text: root.taskStore ? root.taskStore.overdueCount + qsTr(" 项待重新安排") : ""
                 color: "#B76742"
                 font.pixelSize: 11
                 elide: Text.ElideRight
             }
             IconButton {
                 objectName: "compactMoveOverdue"
-                text: qsTr("全部移到今天")
+                text: qsTr("全部加入今天")
                 textSize: 10
                 buttonSize: 28
                 onClicked: { root.taskStore.moveOverdueToToday(); root.taskStore.goToday() }

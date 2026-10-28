@@ -79,6 +79,8 @@ Rectangle {
         subtaskInput.forceActiveFocus()
     }
 
+    function clearSubtaskDraft() { subtaskInput.clear() }
+
     function dismissEditors() {
         card.expanded = false
     }
