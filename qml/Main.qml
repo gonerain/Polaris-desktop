@@ -29,7 +29,8 @@ Window {
     property string pendingPage: ""
     readonly property int navigationHeight: 32
     readonly property int compactSize: 180
-    readonly property int bubbleHeight: 58
+    readonly property int bubbleHeight: 84
+    property bool bubbleBelow: false
     property bool bubbleVisible: false
     property string bubbleText: ""
     // Updated from QScreen.availableGeometry(), including taskbar offsets.
@@ -152,17 +153,32 @@ Window {
         collapsing = false
     }
 
-    function showBubble(message) {
+    function showSpeech(message, durationMs) {
+        if (compact) {
+            showBubble(message, durationMs)
+            return "bubble"
+        }
+        inlineReminderText = message
+        inlineReminderTimer.interval = durationMs
+        inlineReminderTimer.restart()
+        return "inline"
+    }
+
+    function showBubble(message, durationMs) {
         if (!compact)
             return
         bubbleText = message
         if (!bubbleVisible) {
             applyingState = true
+            // At the top edge, put the bubble below instead of moving the pet.
+            // Wayland cannot reposition the window, so keep its local pet anchor.
+            bubbleBelow = !windowPositioningSupported || y - availableGeometry.y < bubbleHeight
             bubbleVisible = true
-            if (windowPositioningSupported) y -= bubbleHeight
+            if (windowPositioningSupported && !bubbleBelow) y -= bubbleHeight
             height = compactSize + bubbleHeight
             applyingState = false
         }
+        bubbleTimer.interval = durationMs === undefined ? 6500 : durationMs
         bubbleTimer.restart()
     }
 
@@ -172,7 +188,7 @@ Window {
             return
         applyingState = true
         bubbleVisible = false
-        if (windowPositioningSupported) y += bubbleHeight
+        if (windowPositioningSupported && !bubbleBelow) y += bubbleHeight
         height = compactSize
         applyingState = false
     }
@@ -188,8 +204,7 @@ Window {
             if (kind === "task.upcoming") {
                 if (window.compact) window.showBubble(text)
                 else if (!window.nativeNotificationsAvailable) {
-                    window.inlineReminderText = text
-                    inlineReminderTimer.restart()
+                    window.showSpeech(text, 6500)
                 }
             } else if (kind === "task.completed")
                 petMascot.celebrate()
@@ -201,8 +216,7 @@ Window {
         function onCompleted(message) {
             // No pet response, forced page switch or focus change.
             if (!window.nativeNotificationsAvailable && !window.compact) {
-                window.inlineReminderText = message
-                inlineReminderTimer.restart()
+                window.showSpeech(message, 6500)
             }
         }
     }
@@ -340,8 +354,11 @@ Window {
                 objectName: "petGreetMenuItem"
                 text: qsTr("打个招呼")
                 font.pixelSize: 12
-                enabled: window.compact && !window.reducedPetMotion
-                onTriggered: petMascot.playWave(true)
+                enabled: window.compact
+                onTriggered: {
+                    window.showSpeech(qsTr("Hi！👋"), 6500)
+                    if (!window.reducedPetMotion) petMascot.playWave(true)
+                }
             }
             MenuItem {
                 objectName: "petActivityMenuItem"
@@ -525,7 +542,7 @@ Window {
             width: window.compactSize
             height: window.compactSize
             anchors.top: parent.top
-            anchors.topMargin: window.bubbleVisible ? window.bubbleHeight : 0
+            anchors.topMargin: window.bubbleVisible && !window.bubbleBelow ? window.bubbleHeight : 0
             anchors.left: parent.left
             color: "transparent"
             visible: opacity > 0
@@ -556,14 +573,25 @@ Window {
                 objectName: "petSpeechBubble"
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.bottom: parent.top
-                anchors.bottomMargin: 6
-                height: 46
+                y: window.bubbleBelow ? parent.height + 6 : -height - 6
+                height: window.bubbleHeight - 6
                 radius: 12
                 color: Theme.surface
                 border.width: 1
                 border.color: Theme.border
                 visible: window.bubbleVisible && window.compact
+                enabled: false
+
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: window.bubbleBelow ? -4 : parent.height - 6
+                    width: 10
+                    height: 10
+                    rotation: 45
+                    z: -1
+                    color: Theme.surface
+                    border.color: Theme.border
+                }
 
                 Text {
                     anchors.fill: parent
@@ -573,6 +601,8 @@ Window {
                     color: Theme.ink
                     text: window.bubbleText
                     textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 3
                     elide: Text.ElideRight
                 }
             }

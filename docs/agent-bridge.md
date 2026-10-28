@@ -69,6 +69,10 @@ Windows 使用用户配置目录的 ACL，命名管道通过 `UserAccessOption` 
 每个组件自己声明操作、read/write、参数、返回值和示例，并自行校验参数。
 内部受信任组件也可直接使用同一个登记表，不必绕进程通信；调用方仍需显式给定权限。
 
+桌宠登记为 `pet`，提供 `say`（write）：纯文字短消息，最多120字符；`durationMs` 为1000..15000的整数，默认6500。
+紧凑时显示桌宠气泡，屏幕上沿优先放在下方；展开时显示界面内短提示，不强制收起、切页或抢焦点。
+返回 `{shown,presentation,durationMs}`；新消息替换旧消息，不播放语音、不自动转发聊天，也不把 Agent 结束通知绑定到气泡。
+
 Agent 自身也登记为 `agents` 组件，提供只读 `session.list / result.list`；读取其元数据同样需要授权。
 日程登记为 `calendar`，提供 `task.list / task.create / task.reschedule / task.complete`，准确说明以 help 为准。
 查询分页；默认不读取笔记。创建默认进收集箱，有时间必须有日期。

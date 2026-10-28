@@ -14,6 +14,7 @@ from polaris.x11_hints import apply_skip_taskbar
 from polaris.agents import AgentHub
 from polaris.component_api import ComponentRegistry
 from polaris.calendar_api import CalendarAPI
+from polaris.pet_api import PetAPI
 from polaris.local_bridge import LocalBridge
 
 
@@ -49,6 +50,7 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
         store.initialize_storage(storage_path)
     engine._components.register("calendar", CalendarAPI(store))
     engine._components.register("agents", engine._agents)
+    engine._components.register("pet", PetAPI(window))
     # Constructing a diagnostic engine does not open an IPC listener.
     engine._bridge = LocalBridge(engine._agents, engine._components, engine)
     if QGuiApplication.instance() is not None:
