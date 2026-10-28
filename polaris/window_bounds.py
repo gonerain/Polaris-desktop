@@ -56,5 +56,10 @@ class WindowBounds(QObject):
         x = max(area.x(), min(window.x(), area.x() + area.width() - width))
         y = max(area.y(), min(window.y(), area.y() + area.height() - height))
         geometry = QRect(x, y, width, height)
-        if window.geometry() != geometry:
+        if not window.property("windowPositioningSupported"):
+            # A Wayland compositor owns placement, even when Qt reports x/y.
+            # Repeated setGeometry() calls would fight it and log warnings.
+            if window.width() != width or window.height() != height:
+                window.resize(width, height)
+        elif window.geometry() != geometry:
             window.setGeometry(geometry)

@@ -22,6 +22,11 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
     engine._input_focus = InputFocusFilter(engine)
     QGuiApplication.instance().installEventFilter(engine._input_focus)
     engine.addImportPath(str(QML_FILE.parent))
+    # Wayland leaves top-level placement to the compositor. Keep size changes,
+    # but never animate/re-clamp global coordinates there (including WSLg).
+    engine.setInitialProperties({
+        "windowPositioningSupported": not QGuiApplication.platformName().startswith("wayland"),
+    })
     engine.load(QUrl.fromLocalFile(str(QML_FILE)))
     if not engine.rootObjects():
         raise RuntimeError(f"无法加载日程界面：{QML_FILE}")
@@ -45,7 +50,7 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
 
 
 def main() -> int:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
     from polaris.desktop import create_tray
 
     app = QApplication(sys.argv)
@@ -65,6 +70,8 @@ def main() -> int:
     window = engine.rootObjects()[0]
     coordinator = window.findChild(QObject, "interactionCoordinator")
     tray = create_tray(app, window, coordinator, data_directory)
+    window.setProperty("nativeNotificationsAvailable",
+                       tray is not None and QSystemTrayIcon.supportsMessages())
     # All reminder subscribers must exist before attach() emits its first check.
     coordinator.attach(window.findChild(QObject, "calendarTaskStore"))
     exit_code = app.exec()

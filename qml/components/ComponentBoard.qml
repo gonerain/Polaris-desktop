@@ -7,10 +7,11 @@ Item {
     property alias panelSize: allocator.panelSize
     property alias panelCount: allocator.panelCount
     property alias gap: allocator.gap
-    readonly property int columns: allocator.columns
-    readonly property int rows: allocator.rows
-    readonly property int freePanelCount: allocator.freeCount
-    readonly property string lastError: allocator.lastError
+    // Bindings may run while Python-owned objects are being torn down.
+    readonly property int columns: allocator ? allocator.columns : 1
+    readonly property int rows: allocator ? allocator.rows : 1
+    readonly property int freePanelCount: allocator ? allocator.freeCount : 0
+    readonly property string lastError: allocator ? allocator.lastError : ""
     // 画板获得实际尺寸时，格子随之伸展；独立使用自然尺寸时等于 panelSize。
     readonly property real cellWidth: Math.max(1, (width - (columns - 1) * gap) / columns)
     readonly property real cellHeight: Math.max(1, (height - (rows - 1) * gap) / rows)
@@ -42,8 +43,8 @@ Item {
         return false
     }
 
-    implicitWidth: allocator.boardWidth
-    implicitHeight: allocator.boardHeight
+    implicitWidth: allocator ? allocator.boardWidth : 0
+    implicitHeight: allocator ? allocator.boardHeight : 0
     clip: true
 
     PanelLayout { id: allocator }
@@ -79,7 +80,7 @@ Item {
     }
 
     function regionsFor(cells, cellWidth, cellHeight, gap): var {
-        return allocator.regionsFor(cells, cellWidth, cellHeight, gap)
+        return allocator ? allocator.regionsFor(cells, cellWidth, cellHeight, gap) : []
     }
 
     function release(handle: var): bool {

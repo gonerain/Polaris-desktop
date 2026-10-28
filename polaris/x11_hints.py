@@ -74,7 +74,11 @@ def apply_skip_taskbar(window) -> bool:
     app = QGuiApplication.instance()
     if app is None or app.platformName() != "xcb":
         return False
-    x11 = _load_x11()
+    try:
+        x11 = _load_x11()
+    except (OSError, AttributeError):
+        # Optional desktop hints must never prevent startup on a minimal Linux.
+        return False
     if x11 is None:
         return False
     try:

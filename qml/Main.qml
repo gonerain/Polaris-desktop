@@ -31,6 +31,10 @@ Window {
     property rect availableGeometry: Qt.rect(0, 0, 0, 0)
     readonly property int expandedMinimumWidth: Math.min(528, availableGeometry.width || 528)
     readonly property int expandedMinimumHeight: Math.min(300, availableGeometry.height || 300)
+    // Supplied before creation by the host, based on the actual Qt platform.
+    property bool windowPositioningSupported: true
+    property bool nativeNotificationsAvailable: false
+    property string inlineReminderText: ""
     property bool compact: true
     property bool moving: false
     property bool applyingState: false
@@ -136,7 +140,7 @@ Window {
         if (!bubbleVisible) {
             applyingState = true
             bubbleVisible = true
-            y -= bubbleHeight
+            if (windowPositioningSupported) y -= bubbleHeight
             height = compactSize + bubbleHeight
             applyingState = false
         }
@@ -149,7 +153,7 @@ Window {
             return
         applyingState = true
         bubbleVisible = false
-        y += bubbleHeight
+        if (windowPositioningSupported) y += bubbleHeight
         height = compactSize
         applyingState = false
     }
@@ -162,9 +166,13 @@ Window {
     Connections {
         target: interactionCoordinator
         function onNotification(kind, entryId, text) {
-            if (kind === "task.upcoming")
-                window.showBubble(text)
-            else if (kind === "task.completed")
+            if (kind === "task.upcoming") {
+                if (window.compact) window.showBubble(text)
+                else if (!window.nativeNotificationsAvailable) {
+                    window.inlineReminderText = text
+                    inlineReminderTimer.restart()
+                }
+            } else if (kind === "task.completed")
                 petMascot.celebrate()
         }
     }
@@ -173,6 +181,38 @@ Window {
         id: bubbleTimer
         interval: 6500
         onTriggered: window.hideBubble()
+    }
+
+    // No tray/message service is common on Linux/WSLg. This fallback never
+    // takes focus or mouse input, and also works above the independent full view.
+    Rectangle {
+        objectName: "inlineReminder"
+        z: 200
+        anchors.top: parent.top
+        anchors.topMargin: 10
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: Math.max(0, Math.min(360, parent.width - 24))
+        height: 68
+        radius: 10
+        color: Theme.primarySoft
+        border.color: Theme.border
+        visible: inlineReminderTimer.running && !window.compact
+        Text {
+            id: inlineReminderLabel
+            anchors.fill: parent
+            anchors.margins: 12
+            text: window.inlineReminderText
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            maximumLineCount: 3
+            elide: Text.ElideRight
+            font.pixelSize: 12
+            color: Theme.ink
+        }
+    }
+    Timer {
+        id: inlineReminderTimer
+        interval: 6500
     }
 
     FocusPresenter {

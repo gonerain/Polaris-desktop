@@ -99,8 +99,10 @@ Item {
 
     function applyGeometry() {
         if (!active || !savedGeometry || !targetGeometry) return
-        targetWindow.x = Math.round(savedGeometry.x + (targetGeometry.x - savedGeometry.x) * progress)
-        targetWindow.y = Math.round(savedGeometry.y + (targetGeometry.y - savedGeometry.y) * progress)
+        if (targetWindow.windowPositioningSupported) {
+            targetWindow.x = Math.round(savedGeometry.x + (targetGeometry.x - savedGeometry.x) * progress)
+            targetWindow.y = Math.round(savedGeometry.y + (targetGeometry.y - savedGeometry.y) * progress)
+        }
         targetWindow.width = Math.round(savedGeometry.width + (targetGeometry.width - savedGeometry.width) * progress)
         targetWindow.height = Math.round(savedGeometry.height + (targetGeometry.height - savedGeometry.height) * progress)
     }

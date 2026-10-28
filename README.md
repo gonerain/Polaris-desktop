@@ -23,6 +23,12 @@ py -3.13 -m venv .venv
 
 成品为 `dist/Polaris/Polaris.exe`，分发需保留整个 `Polaris` 目录。数据与备份写入用户目录，不写入程序安装目录。
 
+## Linux / WSL
+
+同一份源码支持 Linux 环境，使用独立的 Linux 虚拟环境；不要复用 Windows `.venv`。Ubuntu / WSLg 的中文字体、Qt 系统库、运行及独立打包命令见 [平台兼容说明](docs/platform-compatibility.md)。Wayland 下由合成器控制窗口位置；无托盘时仍保留界面内提醒。
+
+WSL 既是 Linux 诊断环境，也必须纳入后续 Agent 跨环境接入：Windows 与 WSL 通过显式本机中继连接，不假定两侧共享套接字。Agent 接口及中继目前尚未实现。
+
 参见 [组件协议](docs/component-board.md) 和 [日程设计、存储恢复及已知边界](docs/schedule-design.md)。当前没有云同步、重复任务或程序关闭后的后台提醒。
 
 ## 素材与非商业使用限制
