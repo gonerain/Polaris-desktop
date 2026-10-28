@@ -15,7 +15,12 @@ from .agent_status import is_status_query, format_status
 SYSTEM = ("你是 Polaris 桌宠的聊天助手。使用用户的语言自然、简洁地回答，每次尽量不超过800字。"
           "你可以通过已登记的 Polaris 组件工具处理用户明确提出的请求；不能使用终端、任意文件或联系人。"
           "先用 polaris_components 发现组件，再用 polaris_help 查参数，再调用 polaris_call。"
-          "业务读取需用户在微信组件单独授权；每个写操作都需要用户通过本机或微信一次性审批码批准，不能替用户批准。"
+          "业务读取需用户在微信组件单独授权。所有写操作用polaris_plan一次提交当前请求的完整计划，"
+          "不能用polaris_call逐项写入。纯新增任务/子任务计划默认自动执行；删除、覆盖等计划整体批准一次。"
+          "审批风险由程序判断，模型不能替用户批准，不能把高风险动作拆开或混入已批准计划。"
+          "新建主任务和子任务必须放在同一计划：先id=parent的task.create，"
+          "后续subtask.create的taskId用{\"$ref\":\"parent.task.id\"}引用真实新ID，不猜测ID。"
+          "计划执行后统一总结；失败按步骤报告已执行、失败和未执行部分，不重放整个计划。"
           "任务标题与内部ID不同。用户说删除11、22等数字时默认是标题，不能把标题直接填入id。"
           "修改已有主任务前必须当轮用task.list按标题查询，使用结果中的真实id；重名先询问日期，"
           "明确指定ID也先列出核对。子任务须先subtask.list查真实ID。禁止从聊天记忆猜ID。"
@@ -69,6 +74,7 @@ class DeepSeekChat(QObject):
             saved = self._store.load()
             if saved:
                 self._persona, self._auto_reply = saved["persona"], saved["autoReply"]
+                self._tools.setAutoLowRisk(saved.get("autoLowRisk", True))
                 self._scope, self._history = saved["scope"], saved["history"]
                 current_scope = [client.accountId, client.userId]
                 if all(current_scope) and self._scope == current_scope:
@@ -102,8 +108,16 @@ class DeepSeekChat(QObject):
     endpoint = Property(str, lambda self: ENDPOINT, constant=True)
     persona = Property(str, lambda self: self._persona, notify=personaChanged)
     autoReply = Property(bool, lambda self: self._auto_reply, notify=changed)
+    autoLowRisk = Property(bool, lambda self: self._tools.autoLowRisk, notify=changed)
     storageError = Property(str, lambda self: self._storage_error, notify=changed)
     tools = Property(QObject, lambda self: self._tools, constant=True)
+
+    @Slot(bool)
+    def setAutoLowRisk(self, enabled):
+        if self._storage_blocked:
+            return
+        self._tools.setAutoLowRisk(enabled)
+        self._save()
 
     def _approval_changed(self):
         pending = self._tools.pending
@@ -120,7 +134,7 @@ class DeepSeekChat(QObject):
             self._approval_codes.add(code)
             receipt = ("待审批：" + pending["component"] + " / " + pending["operation"]
                        + "\n" + pending["description"] + "\n参数：" + pending["arguments"]
-                       + "\n\n仅批准本次操作，2分钟有效。回复「批准 " + code + "」或「拒绝 " + code
+                       + "\n\n仅批准本次计划，2分钟有效。回复「批准 " + code + "」或「拒绝 " + code
                        + "」。也可在桌宠顶部查看并审批。")
             challenge = {"id": pending["id"], "code": code, "scope": list(self._scope),
                          "issued": int(time.time()) * 1000, "delivered": False, "attempts": 0}
@@ -193,6 +207,7 @@ class DeepSeekChat(QObject):
                 saved_scope = self._pending_state["scope"]
                 history, messages = self._pending_state["history"], self._pending_state["messages"]
             self._store.save({"version": 1, "persona": self._persona, "autoReply": self._auto_reply,
+                              "autoLowRisk": self._tools.autoLowRisk,
                               "scope": saved_scope, "history": history, "messages": messages})
             self._storage_error = ""
         except (OSError, ValueError, TypeError):
@@ -397,7 +412,7 @@ class DeepSeekChat(QObject):
 
     def _run_agent(self, messages, callback):
         """Model -> explicitly registered tool -> result -> model; bounded per turn."""
-        self._tools.cancel()
+        self._tools.begin_request(messages[-1]["content"])
         self._turn_deadline.start(300000)
         epoch = self._epoch
         rounds, count = 0, 0

@@ -18,6 +18,8 @@ def validate_state(value):
     valid_text(value.get("persona"), 6000, empty=False)
     if type(value.get("autoReply")) is not bool:
         raise ValueError("自动回复配置无效")
+    if type(value.get("autoLowRisk", True)) is not bool:
+        raise ValueError("低风险计划配置无效")
     scope = value.get("scope")
     if not isinstance(scope, list) or len(scope) != 2:
         raise ValueError("会话归属无效")

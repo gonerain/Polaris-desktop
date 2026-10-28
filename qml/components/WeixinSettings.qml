@@ -82,7 +82,7 @@ Rectangle {
             spacing: 6
             Text {
                 width: parent.width
-                text: qsTr("工具读取权限：仅本次微信连接有效，与其他 Agent 独立。授权后，读取结果可进入 DeepSeek 上下文并回复到绑定者微信。写操作仍逐次审批。")
+                text: qsTr("读取授权仅本次微信连接有效。写操作按当前请求的完整计划判断风险；删除、覆盖等计划整份审批一次，批准不覆盖后续新增动作。")
                 font.pixelSize: 11
                 color: Theme.muted
                 wrapMode: Text.Wrap
@@ -97,6 +97,14 @@ Rectangle {
                     font.pixelSize: 11
                     onToggled: settings.chat.tools.setReadAllowed(modelData.id, checked)
                 }
+            }
+            CheckBox {
+                objectName: "weixinAutoLowRisk"
+                width: modelControls.width
+                text: qsTr("自动执行低风险计划（仅新增任务和子任务）")
+                checked: settings.chat && settings.chat.autoLowRisk
+                font.pixelSize: 11
+                onToggled: settings.chat.setAutoLowRisk(checked)
             }
             Text {
                 width: parent.width

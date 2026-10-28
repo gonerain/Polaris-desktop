@@ -55,6 +55,15 @@ class ComponentRegistry(QObject):
             raise ApiError("unknown_component", "组件未登记")
         return self._components[identity]
 
+    def prepare_write(self, identity, operation, args):
+        """Normalize static write parameters without reading data or granting execution."""
+        api = self._get(identity)
+        definition = next((row for row in api.operations if row["name"] == operation), None)
+        if definition is None or definition["access"] != "write" or not isinstance(args, dict):
+            raise ApiError("invalid_params", "预校验只接受已登记写操作及对象参数")
+        prepare = getattr(api, "prepare_write", None)
+        return prepare(operation, dict(args)) if prepare is not None else dict(args)
+
     def call(self, identity, operation, args, grants):
         api = self._get(identity)
         definition = next((entry for entry in api.operations if entry["name"] == operation), None)

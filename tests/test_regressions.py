@@ -10,13 +10,10 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-os.environ["QT_QUICK_BACKEND"] = "software"
-os.environ["DEEPSEEK_API_KEY"] = "test-only-fake-key"
+from support import FakeNetwork, initialize_qt_tests, pump
 
-from PySide6.QtCore import QObject, QEventLoop, QTimer, QUrl, Signal
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtNetwork import QNetworkReply, QNetworkRequest
+from PySide6.QtCore import QObject, QUrl
+from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtQml import QQmlComponent, QQmlEngine
 
 from main import create_engine
@@ -30,13 +27,7 @@ from polaris.deepseek_chat import DeepSeekChat, DEFAULT_PERSONA
 from polaris.tasks import CalendarTaskStore
 from polaris.weixin import WeixinClient
 
-APP = QGuiApplication.instance() or QGuiApplication([])
-
-
-def pump(milliseconds=20):
-    loop = QEventLoop()
-    QTimer.singleShot(milliseconds, loop.quit)
-    loop.exec()
+APP = initialize_qt_tests()
 
 
 class CalendarTests(unittest.TestCase):
@@ -98,6 +89,8 @@ class ApprovalTests(unittest.TestCase):
         self.registry = ComponentRegistry()
         self.registry.register("calendar", CalendarAPI(self.store))
         self.tools = AgentTools(self.registry)
+        self.tools.begin_request("测试计划")
+        self.tools.setAutoLowRisk(False)
         self.tools.call("polaris_help", {"component": "calendar"}, lambda _: None)
 
     def request(self, operation, args=None):
@@ -105,19 +98,27 @@ class ApprovalTests(unittest.TestCase):
         params = {"component": "calendar", "operation": operation}
         if args is not None:
             params["args"] = args
-        self.tools.call("polaris_call", params, output.append)
+        if operation.startswith("task.") and operation not in ("task.list", "task.get"):
+            if not self.tools._request:
+                self.tools.begin_request("测试计划")
+            self.tools.call("polaris_plan", {"steps": [{"id": "write", **params, "args": args or {}}]},
+                            lambda result: output.append(result["result"]["steps"][0] if result.get("ok") else result))
+        else:
+            self.tools.call("polaris_call", params, output.append)
         return output
 
-    def test_independent_identical_writes_require_fresh_approval(self):
+    def test_multiple_writes_in_one_plan_require_one_approval(self):
         entry = self.store.addTask("toggle")
         self.tools.setReadAllowed("calendar", True)
         self.request("task.list", {"query": "toggle"})
-        for done in (True, False, True):
-            output = self.request("task.complete", {"id": entry.entryId, "done": done})
-            self.assertEqual(output, [])
-            self.tools.approve(self.tools.pending["id"])
-            self.assertEqual(entry.done, done)
-            self.assertEqual(output[0]["result"]["task"]["done"], done)
+        output = []
+        self.tools.call("polaris_plan", {"steps": [
+            {"id": "s" + str(i), "component": "calendar", "operation": "task.complete",
+             "args": {"id": entry.entryId, "done": done}} for i, done in enumerate((True, False, True))]}, output.append)
+        self.assertEqual(output, [])
+        self.tools.approve(self.tools.pending["id"])
+        self.assertTrue(entry.done)
+        self.assertEqual([row["result"]["task"]["done"] for row in output[0]["result"]["steps"]], [True, False, True])
 
     def test_approval_is_consumed_and_cancelled_approval_cannot_write(self):
         output = self.request("task.create", {"title": "once"})
@@ -148,47 +149,6 @@ class ApprovalTests(unittest.TestCase):
         self.assertTrue(self.request("calendar.status")[0]["ok"])
         self.tools.cancel(revoke=True)
         self.assertFalse(self.tools.components[0]["readAllowed"])
-
-
-class FakeReply(QObject):
-    readyRead = Signal()
-    finished = Signal()
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.buffer = b""
-        self.status = 200
-        self.failure = QNetworkReply.NoError
-
-    def readAll(self):
-        value, self.buffer = self.buffer, b""
-        return value
-
-    def error(self):
-        return self.failure
-
-    def attribute(self, _):
-        return self.status
-
-    def abort(self):
-        self.failure = QNetworkReply.OperationCanceledError
-        self.finished.emit()
-
-    def complete(self, message):
-        self.buffer = json.dumps({"choices": [{"message": message}]}).encode()
-        self.readyRead.emit()
-        self.finished.emit()
-
-
-class FakeNetwork(QObject):
-    def __init__(self):
-        super().__init__()
-        self.posts = []
-
-    def post(self, request, data):
-        reply = FakeReply(self)
-        self.posts.append((request, json.loads(bytes(data)), reply))
-        return reply
 
 
 class ModelTests(unittest.TestCase):
@@ -265,16 +225,17 @@ class ChatTests(unittest.TestCase):
                      call("list", "polaris_call", {"component": "calendar", "operation": "task.list", "args": {"query": "toggle"}})]
             network.posts[-1][2].complete({"tool_calls": calls})
             pump()
-            calls = []
-            calls += [call(str(i), "polaris_call", {"component": "calendar", "operation": "task.complete",
-                       "args": {"id": entry.entryId, "done": done}}) for i, done in enumerate((True, False, True))]
+            calls = [call("plan", "polaris_plan", {"steps": [
+                {"id": "step" + str(i), "component": "calendar", "operation": "task.complete",
+                 "args": {"id": entry.entryId, "done": done}} for i, done in enumerate((True, False, True))]})]
             network.posts[-1][2].complete({"tool_calls": calls})
             pump()
-            for done in (True, False, True):
-                self.assertTrue(chat.tools.pending)
-                chat.tools.approve(chat.tools.pending["id"])
-                self.assertEqual(entry.done, done)
-                pump()
+            self.assertTrue(chat.tools.pending)
+            self.assertEqual(len(sent), 1)
+            chat.tools.approve(chat.tools.pending["id"])
+            self.assertTrue(entry.done)
+            self.assertFalse(chat.tools.pending)
+            pump()
             self.assertEqual(len(network.posts), 3)
             network.posts[-1][2].complete({"content": "已完成"})
             self.assertEqual(sent[-1], "已完成")

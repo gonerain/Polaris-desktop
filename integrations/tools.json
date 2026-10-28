@@ -31,7 +31,7 @@
   {
     "name": "polaris_call",
     "method": "components.call",
-    "description": "按 help 调用组件。读取和修改须单独授权；微信写操作须用户逐次审批。任务标题不是ID，修改前先用task.list查询真实ID。超时、断连或 applied=true 时先查询结果，不得盲目重放写入。",
+    "description": "按组件 help 调用操作，读取和修改须由用户单独授权。任务标题不是ID，修改前先查询真实ID。超时、断连或 applied=true 时先查询实际状态，不得盲目重放写入。",
     "inputSchema": {
       "type": "object",
       "properties": {

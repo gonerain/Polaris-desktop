@@ -6,8 +6,15 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from test_regressions import (APP, FakeNetwork, CalendarTaskStore, CalendarAPI,
-                              ComponentRegistry, DeepSeekChat, DeepSeekModel, WeixinClient, pump)
+from support import FakeNetwork, initialize_qt_tests, pump
+from polaris.tasks import CalendarTaskStore
+from polaris.calendar_api import CalendarAPI
+from polaris.component_api import ComponentRegistry
+from polaris.deepseek_chat import DeepSeekChat
+from polaris.deepseek_api import DeepSeekModel
+from polaris.weixin import WeixinClient
+
+APP = initialize_qt_tests()
 
 
 class WeixinApprovalTests(unittest.TestCase):
@@ -18,6 +25,7 @@ class WeixinApprovalTests(unittest.TestCase):
         self.registry.register("calendar", CalendarAPI(self.store))
         self.network = FakeNetwork()
         self.chat = DeepSeekChat(self.client, model=DeepSeekModel(manager=self.network), registry=self.registry)
+        self.chat.setAutoLowRisk(False)
         self.client._account = {"botId": "bot", "userId": "owner"}
         self.client._context = "fake-context"
         self.client._status("connected", "test")
@@ -41,7 +49,14 @@ class WeixinApprovalTests(unittest.TestCase):
 
     def call(self, operation, args):
         output = []
-        self.chat.tools.call("polaris_call", {"component": "calendar", "operation": operation, "args": args}, output.append)
+        if operation in ("task.create", "task.delete"):
+            if not self.chat.tools._request:
+                self.chat.tools.begin_request("测试微信审批")
+            self.chat.tools.call("polaris_plan", {"steps": [
+                {"id": "write", "component": "calendar", "operation": operation, "args": args}]},
+                lambda result: output.append(result["result"]["steps"][0] if result.get("ok") else result))
+        else:
+            self.chat.tools.call("polaris_call", {"component": "calendar", "operation": operation, "args": args}, output.append)
         return output
 
     def pending(self):
@@ -70,6 +85,7 @@ class WeixinApprovalTests(unittest.TestCase):
         self.assertFalse(self.chat._history)
 
     def test_remote_reply_resumes_model_and_sends_final_without_another_user_turn(self):
+        self.chat.setAutoLowRisk(False)
         self.chat._incoming("request", "新增一个测试任务", time.time() * 1000 + 1)
         self.chat._drain()
 
@@ -79,8 +95,8 @@ class WeixinApprovalTests(unittest.TestCase):
 
         self.network.posts[-1][2].complete({"tool_calls": [
             tool("help", "polaris_help", {"component": "calendar"}),
-            tool("create", "polaris_call", {"component": "calendar", "operation": "task.create",
-                                             "args": {"title": "approved via WeChat"}})]})
+            tool("create", "polaris_plan", {"steps": [{"id": "create", "component": "calendar", "operation": "task.create",
+                                             "args": {"title": "approved via WeChat"}}]})]})
         pump()
         code = re.search(r"批准 ([0-9]{6})", self.sent[-1])[1]
         self.incoming("批准 " + code)
@@ -92,6 +108,24 @@ class WeixinApprovalTests(unittest.TestCase):
         self.assertEqual(self.chat.queuedCount, 0)
         self.assertEqual(len(self.chat._history), 2)
         self.assertNotIn(code, str(self.network.posts[-1][1]))
+
+    def test_family_plan_finishes_without_approval_receipts(self):
+        self.chat.setAutoLowRisk(True)
+        self.chat._incoming("family", "新增任务和两个子任务", time.time() * 1000 + 1)
+        self.chat._drain()
+        family = [{"id": "parent", "component": "calendar", "operation": "task.create", "args": {"title": "parent"}}]
+        family += [{"id": "child" + str(i), "component": "calendar", "operation": "subtask.create",
+                    "args": {"taskId": {"$ref": "parent.task.id"}, "title": "child" + str(i)}} for i in (1, 2)]
+        self.network.posts[-1][2].complete({"tool_calls": [
+            {"id": "help", "type": "function", "function": {"name": "polaris_help", "arguments": json.dumps({"component": "calendar"})}},
+            {"id": "plan", "type": "function", "function": {"name": "polaris_plan", "arguments": json.dumps({"steps": family})}}]})
+        pump()
+        self.assertFalse(self.sent)
+        self.assertFalse(self.chat.tools.pending)
+        self.assertEqual(len(self.network.posts), 2)
+        self.network.posts[-1][2].complete({"content": "已新建任务及两个子任务"})
+        self.assertEqual(self.sent, ["已新建任务及两个子任务"])
+        self.assertFalse(self.chat.busy)
 
     def test_busy_sender_defers_receipt_and_scope_change_revokes_approval(self):
         self.client._sending = True
@@ -161,7 +195,7 @@ class WeixinApprovalTests(unittest.TestCase):
         found = self.call("task.list", {"query": "22"})[0]["result"]["tasks"][0]
         output = self.call("task.delete", {"id": found["id"]})
         self.assertIn("目标标题：22", self.sent[-1])
-        self.assertIn(json.dumps({"id": entry.entryId}), self.sent[-1])
+        self.assertIn('"id": ' + str(entry.entryId), self.sent[-1])
         code = re.search(r"批准 ([0-9]{6})", self.sent[-1])[1]
         self.command("批准 " + code)
         self.assertTrue(output[0]["ok"])

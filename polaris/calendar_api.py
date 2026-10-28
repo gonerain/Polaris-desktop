@@ -180,8 +180,7 @@ class CalendarAPI:
         if name == "day.review":
             return self.review(args)
         if name == "task.create":
-            arguments(args, ("title", "date", "time", "important", "done"), ("title",))
-            changes = self.validate_changes(args, None)
+            changes = self.prepare_write(name, args)
             with self.store.batch_changes():
                 entry = self.store.addTaskOnDate(changes["title"], changes["date"] or "", changes["time"])
                 entry.setImportant(changes.get("important", False))
@@ -224,6 +223,22 @@ class CalendarAPI:
             self.store.reorderTask(args["id"], args["beforeId"])
             return self.written(task=self.summary(self.find(args["id"])))
         raise ApiError("unknown_operation", "操作未登记")
+
+    @staticmethod
+    def prepare_write(name, args):
+        """Side-effect-free creation validation, shared by direct calls and plans."""
+        if name == "task.create":
+            arguments(args, ("title", "date", "time", "important", "done"), ("title",))
+            return CalendarAPI.validate_changes(args, None)
+        if name == "subtask.create":
+            arguments(args, ("taskId", "title", "done"), ("taskId", "title"))
+            prepared = dict(args)
+            prepared["taskId"] = integer(args["taskId"], "taskId")
+            prepared["title"] = text(args["title"], "title", 2000).strip()
+            if "done" in args:
+                prepared["done"] = boolean(args["done"], "done")
+            return prepared
+        return dict(args)
 
     @staticmethod
     def validate_changes(args, record):
@@ -298,7 +313,10 @@ class CalendarAPI:
         required = ("taskId", "title") if name == "subtask.create" else ("taskId",) if name == "subtask.list" else ("taskId", "id")
         if name == "subtask.reorder":
             required += ("beforeId",)
-        arguments(args, allowed, required)
+        if name == "subtask.create":
+            args = self.prepare_write(name, args)
+        else:
+            arguments(args, allowed, required)
         parent = self.find(args["taskId"])["task"]
         if name == "subtask.list":
             offset, limit = page(args)
@@ -316,9 +334,9 @@ class CalendarAPI:
                 updates.setdefault("done", True)
             if not updates:
                 raise ApiError("invalid_params", "至少提供title或done")
-            if "title" in updates:
+            if "title" in updates and name != "subtask.create":
                 updates["title"] = text(updates["title"], "title", 2000).strip()
-            if "done" in updates:
+            if "done" in updates and name != "subtask.create":
                 boolean(updates["done"], "done")
             with self.store.batch_changes():
                 if name == "subtask.create":

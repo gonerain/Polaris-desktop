@@ -59,7 +59,7 @@ Rectangle {
             IconButton {
                 objectName: "weixinApproveWrite"
                 visible: approvalCard.detailed
-                text: qsTr("批准本次")
+                text: qsTr("批准整份计划")
                 textSize: 11
                 onClicked: approvalCard.tools.approve(approvalCard.modelData.id)
             }
