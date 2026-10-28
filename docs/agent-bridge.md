@@ -82,8 +82,10 @@ Windows 使用用户配置目录的 ACL，命名管道通过 `UserAccessOption` 
 此主动调用接口是可选能力；Agent 结束气泡由生命周期事件直接触发，不经过 `pet.say` 或其访问授权。
 
 Agent 自身也登记为 `agents` 组件，提供只读 `session.list / result.list`；读取其元数据同样需要授权。
-日程登记为 `calendar`，提供 `task.list / task.create / task.reschedule / task.complete`，准确说明以 help 为准。
-查询分页；默认不读取笔记。创建默认进收集箱，有时间必须有日期。
+日程登记为 `calendar`，提供主任务、一级子任务、笔记和日终整理，准确参数与返回值以 help 为准；
+完整操作表、删除示例及并发编辑说明见 [日程组件 API](calendar-api.md)。
+查询分页；默认不读取笔记正文，搜索笔记也须显式开启。创建默认进收集箱，有时间必须有日期；
+经 API 移回收集箱时清除时间。主任务删除可按原 ID 撤销最近一次；子任务删除不支持撤销。
 所有修改走唯一 `CalendarTaskStore`，不会切换用户浏览日期，也不直接读写 `tasks.json`。
 
 写操作返回 `applied` 与 `persisted`：

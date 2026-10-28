@@ -2,6 +2,7 @@
 
 import calendar
 import re
+from contextlib import contextmanager
 from datetime import date, timedelta
 from itertools import count
 
@@ -146,6 +147,17 @@ class TaskEntry(QObject):
                 return True
         return False
 
+    def reorderSubtask(self, source_id, target_id):
+        source = next((entry for entry in self._subtasks if entry.entryId == source_id), None)
+        target = next((entry for entry in self._subtasks if entry.entryId == target_id), None)
+        if source is None or target is None:
+            return False
+        if source is not target:
+            self._subtasks.remove(source)
+            self._subtasks.insert(self._subtasks.index(target), source)
+            self.subtasksChanged.emit()
+        return True
+
     def _subtask_done_changed(self):
         self.subtaskProgressChanged.emit()
 
@@ -177,6 +189,8 @@ class CalendarTaskStore(QObject):
         self._storage_error = ""
         self._storage_notice = ""
         self._undo = None
+        self._batch_depth = 0
+        self._batch_dirty = False
         self._today_override = today is not None
         self._day_timer = QTimer(self)
         self._day_timer.setInterval(30_000)
@@ -265,6 +279,9 @@ class CalendarTaskStore(QObject):
         return self._save()
 
     def _save(self):
+        if self._batch_depth:
+            self._batch_dirty = True
+            return True
         if self._repository is None:
             return True
         try:
@@ -276,6 +293,21 @@ class CalendarTaskStore(QObject):
             return False
         self.storageChanged.emit()
         return True
+
+    @contextmanager
+    def batch_changes(self):
+        """Coalesce validated business edits into one save, retaining Qt signals."""
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if not self._batch_depth and self._batch_dirty:
+                self._batch_dirty = False
+                self._save()
+
+    def deleted_task_id(self):
+        return self._undo[2].entryId if self._undo is not None else None
 
     def _all_entries(self):
         days = [None, *sorted(day for day in self._tasks_by_day if day is not None)]
@@ -364,6 +396,19 @@ class CalendarTaskStore(QObject):
             entries.insert(destination, source)
             self._notify_tasks()
         return True
+
+    def reorderTask(self, source_id, target_id):
+        """Move a task immediately before another task in the same day/inbox."""
+        for entries in self._tasks_by_day.values():
+            by_id = {entry.entryId: entry for entry in entries}
+            if source_id in by_id and target_id in by_id:
+                source, target = by_id[source_id], by_id[target_id]
+                if source is not target:
+                    entries.remove(source)
+                    entries.insert(entries.index(target), source)
+                    self._notify_tasks()
+                return True
+        return False
 
     @Slot(str, "QVariantList", result=bool)
     def finishDay(self, value, decisions):
