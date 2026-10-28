@@ -1,0 +1,58 @@
+[
+  {
+    "name": "polaris_components",
+    "method": "components.list",
+    "description": "发现 Polaris 组件名称，不读取业务数据。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "polaris_help",
+    "method": "components.help",
+    "description": "读取组件操作、参数与示例；调用前先查 help。help 不授予数据访问权限。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "component"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "polaris_call",
+    "method": "components.call",
+    "description": "按 help 调用组件。读取和修改须单独授权；微信写操作须用户逐次审批。任务标题不是ID，修改前先用task.list查询真实ID。超时、断连或 applied=true 时先查询结果，不得盲目重放写入。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "component",
+        "operation"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

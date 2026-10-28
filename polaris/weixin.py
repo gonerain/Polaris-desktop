@@ -54,8 +54,10 @@ class WeixinClient(QObject):
     changed = Signal()
     messagesChanged = Signal()
     textReceived = Signal(str, str, float)
+    stopping = Signal()
+    messagesCleared = Signal()
 
-    def __init__(self, parent=None, *, credential_path=None, manager=None, component_registry=None):
+    def __init__(self, parent=None, *, credential_path=None, manager=None):
         super().__init__(parent)
         self._network = manager or QNetworkAccessManager(self)
         self._store = CredentialStore(credential_path)
@@ -68,6 +70,7 @@ class WeixinClient(QObject):
         self._messages, self._seen = [], OrderedDict()
         self._context, self._sending, self._persisted = "", False, False
         self._retry = 0
+        self._verify_code = ""
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._tick)
@@ -83,12 +86,6 @@ class WeixinClient(QObject):
                         self._seen[key] = True
         except (OSError, ValueError, TypeError, UnicodeError):
             self._warning = "已保存的微信凭证无法读取，请重新绑定或退出登录清除"
-        from .deepseek_chat import DeepSeekChat
-        self._model_chat = DeepSeekChat(self, registry=component_registry, state_path=(
-            self._store.path.with_name("weixin-chat.json") if self._store.path is not None else None))
-
-    modelChat = Property(QObject, lambda self: self._model_chat, constant=True)
-
     state = Property(str, lambda self: self._state, notify=changed)
     detail = Property(str, lambda self: self._detail, notify=changed)
     warning = Property(str, lambda self: self._warning, notify=changed)
@@ -118,8 +115,7 @@ class WeixinClient(QObject):
         self.changed.emit()
 
     def _cancel(self):
-        if hasattr(self, "_model_chat"):
-            self._model_chat.suspend()
+        self.stopping.emit()
         self._generation += 1
         self._timer.stop()
         if self._sending:
@@ -183,7 +179,7 @@ class WeixinClient(QObject):
                 self._status("error", "登录已超时，请重新获取二维码")
                 return
             query = {"qrcode": self._qr_token}
-            code = getattr(self, "_verify_code", "")
+            code = self._verify_code
             if code:
                 query["verify_code"] = code
                 self._verify_code = ""
@@ -361,11 +357,23 @@ class WeixinClient(QObject):
         del self._messages[:-100]
         self.messagesChanged.emit()
 
+    def restoreMessages(self, messages):
+        """Restore the visible transcript and seed transport deduplication."""
+        self._messages = [dict(row) for row in messages]
+        for row in self._messages:
+            if row["status"] == "发送中":
+                row["status"] = "重启前发送结果未知，请在微信核实"
+            if row["direction"] == "in":
+                self._seen[row["id"]] = True
+        while len(self._seen) > 512:
+            self._seen.popitem(last=False)
+        self.messagesChanged.emit()
+
     @Slot(str, result=bool)
     def sendText(self, body):
-        return self._send_text(body)
+        return self.send_text(body)
 
-    def _send_text(self, body, callback=None):
+    def send_text(self, body, callback=None):
         if (not self.canSend or not isinstance(body, str) or not body.strip() or len(body) > 2000):
             return False
         try:
@@ -402,8 +410,8 @@ class WeixinClient(QObject):
 
     @Slot()
     def clearMessages(self):
-        self._model_chat.resetConversation()
         self._messages.clear()
+        self.messagesCleared.emit()
         self.messagesChanged.emit()
 
     def _request(self, origin, endpoint, body, callback, *, authenticated=False, timeout=15000):

@@ -33,6 +33,12 @@
 
 ## 存储和恢复
 
+日程业务规则统一由 `CalendarTaskStore` / `TaskEntry` 负责，QML 与组件 API 调用同一实现。
+移回收集箱（包括日终整理）会清空原时间；收集箱任务不能单独设置时间，重新安排日期也不会带回旧时间。
+旧文件中残留的收集箱时间在内存恢复时清空，仍只在下一次有效修改时保存。
+拖动与 API 排序统一为移到目标任务之前。日终整理在修改前校验整批选择，重复、已删除、已完成或已改期的任务
+会拒绝整批操作，不会部分应用。API 只负责协议参数校验、权限和结果转换。
+
 正常启动使用跨平台 `QStandardPaths.AppLocalDataLocation`，应用/组织名均为 Polaris。Windows 通常是 `%LOCALAPPDATA%\Polaris\Polaris`，Linux 通常是 `${XDG_DATA_HOME:-$HOME/.local/share}/Polaris/Polaris`；两侧数据默认独立，不要同时编辑同一文件。
 
 - `tasks.json`：v2 UTF-8 JSON，`days` 保存有日期任务及手动顺序，`inbox` 保存未安排日期的任务；任务包含稳定 ID、标题、时间、完成状态、重点标记、多行笔记和一级子任务。统一校验跨日期及收集箱的 ID，禁止重复。

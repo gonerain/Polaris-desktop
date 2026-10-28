@@ -242,8 +242,6 @@ class CalendarAPI:
             if when is None or (when and target is None):
                 raise ApiError("invalid_params", "时间无效，或有时间但没有日期")
             changes["time"] = when
-        elif "date" in changes and target is None:
-            changes["time"] = ""
         return changes
 
     @staticmethod
@@ -368,22 +366,14 @@ class CalendarAPI:
         target = day(args["date"])
         if target is None or not isinstance(args["decisions"], list) or len(args["decisions"]) > 100:
             raise ApiError("invalid_params", "date须为日期；decisions须为最多100项的数组")
-        seen, entries = set(), []
+        decisions = []
         for item in args["decisions"]:
             arguments(item, ("id", "action"), ("id", "action"))
-            record = self.find(item["id"])
-            if item["id"] in seen or record["date"] != target or record["task"].done:
-                raise ApiError("conflict", "整理任务重复、已完成或已改期；请重新查询")
+            identity = integer(item["id"], "id")
             action = item["action"]
             if not isinstance(action, str) or action not in ("keep", "tomorrow", "inbox"):
                 raise ApiError("invalid_params", "action须为keep、tomorrow或inbox")
-            if action == "tomorrow" and target == "9999-12-31":
-                raise ApiError("invalid_params", "该日期没有可用的次日")
-            seen.add(item["id"])
-            entries.append((record["task"], action))
-        with self.store.batch_changes():
-            for entry, action in entries:
-                if action == "inbox":
-                    entry.setTime("")
-            self.store.finishDay(target, args["decisions"])
-        return self.written(moved=sum(action != "keep" for _, action in entries))
+            decisions.append({"id": identity, "action": action})
+        if not self.store.finishDay(target, decisions):
+            raise ApiError("conflict", "任务已变化或整理目标无效，请重新查询")
+        return self.written(moved=sum(item["action"] != "keep" for item in decisions))

@@ -54,15 +54,29 @@ Item {
                 return
             presenter.snapshotUrl = result.url
             try {
-                const object = factory.createObject(content, properties || {})
+                if (handle.fullView && handle.fullViewFactory !== factory) {
+                    handle.fullView.destroy()
+                    handle.fullView = null
+                }
+                const cached = handle.fullView
+                const object = cached || factory.createObject(content, properties || {})
                 const item = object as Item
                 if (!item) {
                     if (object) object.destroy()
                     throw new Error("完整视图根对象必须是 Item")
                 }
                 presenter.view = item
+                if (cached) {
+                    for (const key in properties) {
+                        if (item[key] !== properties[key]) item[key] = properties[key]
+                    }
+                }
+                handle.fullView = item
+                handle.fullViewFactory = factory
                 item.width = Qt.binding(function() { return content.width })
                 item.height = Qt.binding(function() { return content.height })
+                item.visible = true
+                item.enabled = true
                 presenter.progress = 0
                 presenter.returning = false
                 presenter.active = true
@@ -87,7 +101,7 @@ Item {
     }
 
     function close() {
-        if (!active || motion.running)
+        if (!active || motion.running || targetWindow.editorPopupCount > 0)
             return false
         // Move focus out of inline editors so their existing commit handlers run.
         forceActiveFocus()
@@ -116,7 +130,8 @@ Item {
         easing.type: Easing.InOutCubic
         onFinished: {
             if (presenter.returning) {
-                if (presenter.view) presenter.view.destroy()
+                presenter.view.visible = false
+                presenter.view.enabled = false
                 presenter.view = null
                 presenter.active = false
                 presenter.returning = false

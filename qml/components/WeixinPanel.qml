@@ -9,7 +9,8 @@ Rectangle {
     required property var client
     property bool detailed: false
     property bool settingsVisible: false
-    readonly property var chat: client ? client.modelChat : null
+    required property var chat
+    readonly property bool hasApproval: !!(chat && chat.tools.pending.id)
     readonly property var presentation: detailed && parent ? parent.presentationContext : null
     signal expandRequested()
     color: Theme.surface
@@ -20,6 +21,7 @@ Rectangle {
 
     Column {
         id: header
+        objectName: "weixinFixedHeader"
         x: 10
         y: 8
         width: parent.width - 20
@@ -55,7 +57,7 @@ Rectangle {
         }
         Text {
             width: parent.width
-            visible: !panel.detailed && panel.chat !== null
+            visible: !panel.detailed && panel.chat !== null && !panel.hasApproval
             text: panel.chat ? (panel.chat.enabled ? qsTr("自动回复：开 · ") : panel.chat.autoReply
                 ? qsTr("自动回复：等待或暂停 · ") : qsTr("自动回复：关 · "))
                 + panel.chat.notice : ""
@@ -67,6 +69,7 @@ Rectangle {
             wrapMode: Text.Wrap
         }
         Flow {
+            visible: !panel.hasApproval
             width: parent.width
             spacing: 4
             IconButton {
@@ -131,10 +134,20 @@ Rectangle {
             }
             IconButton { text: qsTr("取消"); textSize: 11; onClicked: logoutConfirm.visible = false }
         }
+        Repeater {
+            model: panel.chat && panel.chat.tools.pending.id ? [panel.chat.tools.pending] : []
+            WeixinApproval {
+                width: header.width
+                tools: panel.chat.tools
+                detailed: panel.detailed
+                onDetailsRequested: panel.expandRequested()
+            }
+        }
     }
 
     Flickable {
         id: content
+        objectName: "weixinTranscript"
         x: 10
         y: header.y + header.height + 8
         width: parent.width - 20
@@ -148,210 +161,12 @@ Rectangle {
             id: body
             width: content.width
             spacing: 10
-            Repeater {
-                model: panel.chat && panel.chat.tools.pending.id ? [panel.chat.tools.pending] : []
-                Rectangle {
-                    id: approvalCard
-                    required property var modelData
-                    width: body.width
-                    height: approvalContent.height + 16
-                    radius: 8
-                    color: "#FFF3DC"
-                    Column {
-                        id: approvalContent
-                        x: 8
-                        y: 8
-                        width: parent.width - 16
-                        spacing: 6
-                        Text {
-                            width: parent.width
-                            text: qsTr("微信 Agent 请求执行（2分钟内有效）")
-                            font.pixelSize: 12
-                            font.bold: true
-                            color: Theme.ink
-                            wrapMode: Text.Wrap
-                        }
-                        Text {
-                            width: parent.width
-                            text: approvalCard.modelData.component + " / " + approvalCard.modelData.operation
-                                + "\n" + approvalCard.modelData.description + "\n" + approvalCard.modelData.arguments
-                            textFormat: Text.PlainText
-                            font.pixelSize: 11
-                            color: Theme.ink
-                            wrapMode: Text.WrapAnywhere
-                        }
-                        Row {
-                            spacing: 6
-                            IconButton {
-                                text: qsTr("批准本次")
-                                textSize: 11
-                                onClicked: panel.chat.tools.approve(approvalCard.modelData.id)
-                            }
-                            IconButton {
-                                text: qsTr("拒绝")
-                                textSize: 11
-                                onClicked: panel.chat.tools.reject(approvalCard.modelData.id)
-                            }
-                        }
-                    }
-                }
-            }
-            Rectangle {
+            WeixinSettings {
                 visible: panel.detailed
-                width: parent.width
-                height: modelControls.height + 16
-                radius: 8
-                color: "#F3F5F8"
-                Column {
-                    id: modelControls
-                    x: 8
-                    y: 8
-                    width: parent.width - 16
-                    spacing: 6
-                    Text {
-                        width: parent.width
-                        text: qsTr("DeepSeek V4.1 Flash · Polaris Agent")
-                        textFormat: Text.PlainText
-                        font.pixelSize: 12
-                        font.bold: true
-                        color: Theme.ink
-                    }
-                    Text {
-                        width: parent.width
-                        text: panel.chat ? panel.chat.notice : ""
-                        textFormat: Text.PlainText
-                        font.pixelSize: 11
-                        color: Theme.muted
-                        wrapMode: Text.Wrap
-                    }
-                    Flow {
-                        width: parent.width
-                        spacing: 4
-                        IconButton {
-                            objectName: "weixinAutoReplyButton"
-                            text: panel.chat && panel.chat.autoReply ? qsTr("关闭自动回复") : qsTr("开启自动回复")
-                            textSize: 11
-                            selected: panel.chat && panel.chat.autoReply
-                            enabled: !!panel.chat
-                            onClicked: panel.chat.setEnabled(!panel.chat.autoReply)
-                        }
-                        IconButton {
-                            text: qsTr("恢复自动回复")
-                            visible: panel.chat && panel.chat.autoReply && !panel.chat.enabled
-                                     && panel.client.state === "connected"
-                            enabled: panel.chat && panel.chat.hasKey && !panel.chat.busy
-                            textSize: 11
-                            onClicked: panel.chat.setEnabled(true)
-                        }
-                        IconButton {
-                            text: qsTr("新对话")
-                            textSize: 11
-                            onClicked: panel.chat.resetConversation()
-                        }
-                    }
-                    Text {
-                        width: parent.width
-                        text: qsTr("默认自动回复，开关会保存。新文字和最近最多6轮上下文会发给 DeepSeek并产生 API 费用；最近100条聊天保存在本机。关闭不会撤回已发出的请求或消息。")
-                        textFormat: Text.PlainText
-                        font.pixelSize: 11
-                        color: Theme.muted
-                        wrapMode: Text.Wrap
-                    }
-                    Text {
-                        width: parent.width
-                        visible: panel.chat && panel.chat.storageError.length > 0
-                        text: panel.chat ? panel.chat.storageError : ""
-                        textFormat: Text.PlainText
-                        font.pixelSize: 11
-                        color: Theme.danger
-                        wrapMode: Text.Wrap
-                    }
-                    Column {
-                        visible: panel.settingsVisible || (panel.chat && !panel.chat.hasKey)
-                        width: parent.width
-                        spacing: 6
-                        Text {
-                            width: parent.width
-                            text: qsTr("工具读取权限：仅本次微信连接有效，与其他 Agent 独立。授权后，读取结果可进入 DeepSeek 上下文并回复到绑定者微信。写操作仍逐次审批。")
-                            font.pixelSize: 11
-                            color: Theme.muted
-                            wrapMode: Text.Wrap
-                        }
-                        Repeater {
-                            model: panel.chat ? panel.chat.tools.components : []
-                            CheckBox {
-                                required property var modelData
-                                width: modelControls.width
-                                text: qsTr("允许读取：") + modelData.name
-                                checked: modelData.readAllowed
-                                font.pixelSize: 11
-                                onToggled: panel.chat.tools.setReadAllowed(modelData.id, checked)
-                            }
-                        }
-                        Text {
-                            width: parent.width
-                            text: qsTr("官方地址：https://api.deepseek.com\n模型：deepseek-flash\n密钥来源：DEEPSEEK_API_KEY 环境变量（Windows / Linux）\n修改环境变量后，需从新环境重新启动 Polaris。")
-                            textFormat: Text.PlainText
-                            font.pixelSize: 11
-                            color: Theme.muted
-                            wrapMode: Text.Wrap
-                        }
-                        Text {
-                            text: qsTr("对话人设（最多6000字符）")
-                            font.pixelSize: 11
-                            color: Theme.ink
-                        }
-                        TextArea {
-                            id: personaEditor
-                            objectName: "weixinPersonaEditor"
-                            width: parent.width
-                            height: Math.max(130, Math.min(280, contentHeight + 16))
-                            text: panel.chat ? panel.chat.persona : ""
-                            textFormat: TextEdit.PlainText
-                            wrapMode: TextEdit.Wrap
-                            selectByMouse: true
-                            font.pixelSize: 12
-                            color: Theme.ink
-                            padding: 8
-                            background: Rectangle {
-                                color: "white"
-                                radius: 6
-                                border.color: personaEditor.activeFocus ? Theme.primary : Theme.border
-                            }
-                        }
-                        Flow {
-                            width: parent.width
-                            spacing: 4
-                            IconButton {
-                                text: qsTr("保存人设")
-                                textSize: 11
-                                onClicked: {
-                                    if (panel.chat.savePersona(personaEditor.text))
-                                        personaEditor.text = panel.chat.persona
-                                }
-                            }
-                            IconButton {
-                                text: qsTr("恢复默认鲸鱼娘")
-                                textSize: 11
-                                onClicked: {
-                                    panel.chat.restoreDefaultPersona()
-                                    personaEditor.text = panel.chat.persona
-                                }
-                            }
-                        }
-                        Flow {
-                            width: parent.width
-                            spacing: 4
-                            IconButton {
-                                text: qsTr("测试连接")
-                                tooltip: qsTr("会调用一次 DeepSeek API 并产生少量费用")
-                                textSize: 11
-                                enabled: panel.chat && panel.chat.hasKey && !panel.chat.busy
-                                onClicked: panel.chat.testConnection()
-                            }
-                        }
-                    }
-                }
+                width: body.width
+                chat: panel.chat
+                expanded: panel.settingsVisible
+                connected: panel.client && panel.client.state === "connected"
             }
             Rectangle {
                 visible: panel.client && panel.client.qrImage.length > 0

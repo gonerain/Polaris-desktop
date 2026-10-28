@@ -1,5 +1,8 @@
 """In-process Polaris tools. Independent read grants and one-shot desktop write approval."""
 import json
+import logging
+import time
+from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
@@ -7,20 +10,11 @@ from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 from .component_api import ApiError, arguments, text
 
 
-def tool(name, description, properties, required):
-    return {"type": "function", "function": {"name": name, "description": description,
-            "parameters": {"type": "object", "properties": properties,
-                           "required": required, "additionalProperties": False}}}
-
-
-TOOLS = [
-    tool("polaris_components", "发现 Polaris 组件名称，不读取业务数据。", {}, []),
-    tool("polaris_help", "读取一个组件的操作、参数和例子；调用前先查 help。",
-         {"component": {"type": "string"}}, ["component"]),
-    tool("polaris_call", "调用组件操作。读取需本机单独授权；每次写入需桌宠本机审批。失败、超时或 applied=true 时不可盲目重试写入。",
-         {"component": {"type": "string"}, "operation": {"type": "string"},
-          "args": {"type": "object"}}, ["component", "operation", "args"]),
-]
+# The three hosts share one wire contract; each keeps its own permission policy.
+_DEFINITIONS = json.loads((Path(__file__).resolve().parent.parent / "integrations" / "tools.json").read_text(encoding="utf8"))
+TOOLS = [{"type": "function", "function": {
+    "name": row["name"], "description": row["description"], "parameters": row["inputSchema"]}}
+    for row in _DEFINITIONS]
 
 
 class AgentTools(QObject):
@@ -33,8 +27,10 @@ class AgentTools(QObject):
         self._helped = set()
         self._pending = None
         self._callback = None
-        self._writes = {}
+        self._denied = set()
         self._generation = 0
+        self._tasks = {}
+        self._expires_at = 0
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(lambda: self.reject(self._pending["id"]) if self._pending else None)
@@ -64,7 +60,8 @@ class AgentTools(QObject):
         self._generation += 1
         self._timer.stop()
         self._pending = self._callback = None
-        self._writes.clear()
+        self._denied.clear()
+        self._tasks.clear()
         if revoke:
             self._reads.clear()
             self._helped.clear()
@@ -75,11 +72,6 @@ class AgentTools(QObject):
         return {"ok": False, "error": {"code": code, "message": message}}
 
     def _execute(self, component, operation, params, *, write):
-        signature = json.dumps([component, operation, params], ensure_ascii=False, sort_keys=True)
-        if write and signature in self._writes:
-            return self._writes[signature]
-        if write:
-            self._writes[signature] = self._error("outcome_unknown", "写操作已尝试，不得重放；先查询实际状态")
         try:
             result = self._registry.call(component, operation, params, {component: "write" if write else "read"})
             output = {"ok": True, "result": result}
@@ -88,10 +80,10 @@ class AgentTools(QObject):
                           "message": "结果过大，缩小读取范围；写操作已执行，不得重放"}
         except ApiError as error:
             output = self._error(error.code, str(error))
-        except Exception:
+        except Exception as error:
+            # Keep diagnostics free of component data and credentials.
+            logging.getLogger(__name__).error("Component %s/%s raised %s", component, operation, type(error).__name__)
             output = self._error("outcome_unknown", "执行异常，写操作可能已应用；先查询实际状态，不得重放")
-        if write:
-            self._writes[signature] = output
         return output
 
     def call(self, name, params, callback):
@@ -111,11 +103,13 @@ class AgentTools(QObject):
                 return
             if name != "polaris_call":
                 raise ApiError("unknown_tool", "工具未登记")
-            arguments(params, ("component", "operation", "args"), ("component", "operation", "args"))
+            arguments(params, ("component", "operation", "args"), ("component", "operation"))
             component, operation = text(params["component"], "component"), text(params["operation"], "operation")
+            args = params.get("args", {})
             if component not in self._helped:
                 raise ApiError("help_required", "本次连接须先读取该组件 help，再调用操作")
-            arguments(params["args"], params["args"].keys() if isinstance(params["args"], dict) else ())
+            if not isinstance(args, dict):
+                raise ApiError("invalid_params", "args 必须是对象")
             definition = next((row for row in self._registry.help(component)["operations"]
                                if row["name"] == operation), None)
             if definition is None:
@@ -123,20 +117,33 @@ class AgentTools(QObject):
             if definition["access"] == "read":
                 if component not in self._reads:
                     raise ApiError("permission_denied", "用户须在微信组件的工具权限中授权读取；不能借用其他 Agent 的权限")
-                callback(self._execute(component, operation, params["args"], write=False))
+                output = self._execute(component, operation, args, write=False)
+                if component == "calendar" and operation == "task.list" and output.get("ok"):
+                    for task in output.get("result", {}).get("tasks", []):
+                        self._tasks[task["id"]] = dict(task)
+                callback(output)
                 return
             if self._pending is not None:
                 raise ApiError("approval_pending", "已有写操作等待审批")
-            encoded = json.dumps(params["args"], ensure_ascii=False, sort_keys=True, allow_nan=False)
+            encoded = json.dumps(args, ensure_ascii=False, sort_keys=True, allow_nan=False)
             if len(encoded) > 8000:
                 raise ApiError("invalid_params", "写操作参数过大")
-            signature = json.dumps([component, operation, params["args"]], ensure_ascii=False, sort_keys=True)
-            if signature in self._writes:
-                callback(self._writes[signature])
+            if (component, operation, encoded) in self._denied:
+                callback(self._error("approval_denied", "本轮已拒绝此请求，不重复申请"))
                 return
+            target = None
+            if component == "calendar" and operation.startswith("task.") and operation not in (
+                    "task.create", "task.restore", "task.move_overdue"):
+                target = self._tasks.get(args.get("id"))
+                if target is None or (operation == "task.reorder" and args.get("beforeId") not in self._tasks):
+                    raise ApiError("target_lookup_required", "先用 task.list 按用户给出的标题查询，使用返回的真实 id；数字标题不是ID。重名须让用户确认日期。")
+            description = definition["description"]
+            if target is not None:
+                description += "\n目标标题：" + target["title"] + "；日期：" + str(target.get("date") or "收集箱")
             self._pending = {"id": uuid4().hex, "component": component, "operation": operation,
-                             "description": definition["description"], "arguments": encoded}
+                             "description": description, "arguments": encoded}
             self._callback = callback
+            self._expires_at = time.monotonic() + 120
             self._timer.start(120000)
             self.changed.emit()
         except (ApiError, ValueError, TypeError) as error:
@@ -145,6 +152,9 @@ class AgentTools(QObject):
     @Slot(str)
     def approve(self, identity):
         if not self._pending or identity != self._pending["id"]:
+            return
+        if time.monotonic() >= self._expires_at:
+            self.reject(identity)
             return
         pending, callback = self._pending, self._callback
         generation = self._generation
@@ -166,7 +176,5 @@ class AgentTools(QObject):
         self._timer.stop()
         self.changed.emit()
         output = self._error("approval_denied", "用户拒绝或审批超时，未执行此写操作；本轮不要再次申请")
-        signature = json.dumps([pending["component"], pending["operation"],
-                                json.loads(pending["arguments"])], ensure_ascii=False, sort_keys=True)
-        self._writes[signature] = output
+        self._denied.add((pending["component"], pending["operation"], pending["arguments"]))
         callback(output)

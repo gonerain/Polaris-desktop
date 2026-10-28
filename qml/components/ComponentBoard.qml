@@ -177,6 +177,7 @@ Item {
         if (settling || handle.host.dragging || (presenter && presenter.busy && presenter.sourceHandle === handle))
             return false
         delete _handles[String(handle.id)]
+        if (handle.fullView) handle.fullView.destroy()
         handle.host.visible = false
         handle.host.destroy()
         allocator.release(handle.id)

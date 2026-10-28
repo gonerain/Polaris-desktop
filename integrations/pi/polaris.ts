@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { BridgeClient } from "../client.mjs";
+
+const tools = JSON.parse(readFileSync(new URL("../tools.json", import.meta.url), "utf8")) as {
+    name: string; method: string; description: string; inputSchema: Record<string, unknown>;
+}[];
 
 /** Thin Pi adapter: lifecycle -> protocol. No calendar types or task-file access. */
 export default function (pi: ExtensionAPI) {
@@ -87,23 +92,12 @@ export default function (pi: ExtensionAPI) {
         const result = await client.request(method, params);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
     };
-    pi.registerTool({
-        name: "polaris_components", label: "Polaris components",
-        description: "发现 Polaris 明确开放的组件，仅返回名称和ID，不读取业务数据。",
-        parameters: Type.Object({}),
-        execute: async () => invoke("components.list", {}),
-    });
-    pi.registerTool({
-        name: "polaris_help", label: "Polaris component help",
-        description: "读取组件的操作、参数、权限和示例。调用组件前先查询 help；help 不授予数据访问权限。",
-        parameters: Type.Object({ component: Type.String() }),
-        execute: async (_id, params) => invoke("components.help", params),
-    });
-    pi.registerTool({
-        name: "polaris_call", label: "Polaris component call",
-        description: "按组件 help 调用操作。须由用户在 Polaris 授权；不自动读取所有组件。写入超时或 applied=true 时禁止盲目重试，先查询实际结果。",
-        parameters: Type.Object({ component: Type.String(), operation: Type.String(),
-            args: Type.Optional(Type.Record(Type.String(), Type.Unknown())) }),
-        execute: async (_id, params) => invoke("components.call", params),
-    });
+    for (const tool of tools) {
+        pi.registerTool({
+            name: tool.name, label: tool.name,
+            description: tool.description,
+            parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),
+            execute: async (_id, params) => invoke(tool.method, params),
+        });
+    }
 }

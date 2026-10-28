@@ -25,6 +25,7 @@ Window {
     required property var agentHub
     required property var componentApi
     required property var weixinClient
+    required property var weixinChat
     property string pendingComponent: ""
     readonly property int compactSize: 180
     readonly property int canvasPadding: 12
@@ -199,7 +200,7 @@ Window {
         if (!expandedContent.source.toString()) {
             expandedContent.setSource("components/Workspace.qml", {
                 shell: window, presenter: focusPresenter, taskStore: calendarStore,
-                agentHub: agentHub, componentApi: componentApi, weixinClient: weixinClient
+                agentHub: agentHub, componentApi: componentApi, weixinClient: weixinClient, weixinChat: weixinChat
             })
         }
         if (!compact) {

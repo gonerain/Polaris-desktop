@@ -2,6 +2,7 @@
 
 这个目录是可安装的 Pi 本地包，也包含不依赖 Pi 的 Node 客户端 `client.mjs`。
 其他 Agent 可以使用客户端或直接遵守 [本机协议](../docs/agent-bridge.md)，无需修改 Polaris 核心。
+`tools.json` 是 Pi、Codex MCP 与内置微信 Agent 共用的工具参数契约，安装或复制插件时须保留此文件。
 已实现 Pi 适配器及 Codex 桌面本地插件。Pi 接入按本机 1.4.0 Extension API 验证，需支持 `agent_settled` 生命周期事件。
 
 ## Codex 桌面本地插件
@@ -121,3 +122,16 @@ client.start();
 跨 WSL 客户端传入 `{ name, relay: [可执行文件, ...参数] }`。
 不要上传提示词或回复全文，不要用运行结束替代任务成功；离线事件不补发。
 组件写请求超时、断连或 `applied=true` 时都不能盲目重试，先查询实际结果。
+
+## 回归检查
+
+在仓库根目录运行（Windows 将 Python 换成 `.venv\Scripts\python.exe`）：
+
+```text
+python -m unittest discover -s tests -v
+node --test tests/integrations.test.mjs
+```
+
+Python 检查使用假网络、临时文件和离屏 QML；Node 检查使用临时本机端点与内存日程，
+验证真实 Qt 桥认证、权限拒绝、MCP 参数契约及 Codex 会话事件。Node 的 Qt 桥检查需要允许创建本机套接字/命名管道，
+默认使用仓库 `.venv`，可用 `POLARIS_TEST_PYTHON` 指定已安装项目依赖的解释器。均不调用收费模型或真实微信。

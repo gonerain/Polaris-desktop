@@ -16,6 +16,7 @@ Rectangle {
     required property var agentHub
     required property var componentApi
     required property var weixinClient
+    required property var weixinChat
     property var calendarHandle: null
     property var agentHandle: null
     property var weixinHandle: null
@@ -44,7 +45,7 @@ Rectangle {
 
     function openWeixinDetails() {
         return weixinHandle && board.present(weixinHandle, weixinHandle.factory,
-            {span: Qt.size(2, 2)}, {client: weixinClient, detailed: true,
+            {span: Qt.size(2, 2)}, {client: weixinClient, chat: weixinChat, detailed: true,
                                    objectName: "weixinFullView"})
     }
 
@@ -69,7 +70,7 @@ Rectangle {
             })
         }
         weixinHandle = requestComponent("WeixinPanel.qml", [[0, 0]],
-            {client: weixinClient, objectName: "weixinPanel"}, qsTr("微信"))
+            {client: weixinClient, chat: weixinChat, objectName: "weixinPanel"}, qsTr("微信"))
         if (weixinHandle) weixinHandle.item.expandRequested.connect(openWeixinDetails)
     }
 

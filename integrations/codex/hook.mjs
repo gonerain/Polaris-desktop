@@ -114,8 +114,9 @@ try {
             });
         }
     }
-} catch {
-    // Hooks are advisory; failures must not block Codex or inject private diagnostics.
+} catch (error) {
+    // Never include hook bodies, paths or credentials in host diagnostics.
+    process.stderr.write(`Polaris hook unavailable (${error?.code || error?.name || 'Error'})\n`);
 } finally {
     if (!daemon) { process.stdout.write('{}\n'); process.exitCode = 0; }
 }

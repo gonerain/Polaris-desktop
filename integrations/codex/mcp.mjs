@@ -1,15 +1,9 @@
 // Dependency-free MCP stdio adapter. Lifecycle reporting is independent of model tools.
 import { BridgeClient } from '../client.mjs';
 
-const tools = [
-    { name: 'polaris_components', description: 'Discover local Polaris components without reading business data.',
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
-    { name: 'polaris_help', description: 'Read component operations, arguments and permissions before calling it. Does not grant access.',
-        inputSchema: { type: 'object', properties: { component: { type: 'string' } }, required: ['component'], additionalProperties: false } },
-    { name: 'polaris_call', description: 'Call an operation after reading help. User must authorize the component in Polaris. After timeout/disconnect or applied=true, query actual state before retrying a write.',
-        inputSchema: { type: 'object', properties: { component: { type: 'string' }, operation: { type: 'string' },
-            args: { type: 'object', additionalProperties: true } }, required: ['component', 'operation'], additionalProperties: false } },
-];
+import { readFileSync } from 'node:fs';
+const definitions = JSON.parse(readFileSync(new URL('../tools.json', import.meta.url), 'utf8'));
+const tools = definitions.map(({ method, ...tool }) => tool);
 let relay;
 try { if (process.env.POLARIS_RELAY) relay = JSON.parse(process.env.POLARIS_RELAY); }
 catch { process.stderr.write('Invalid POLARIS_RELAY: expected JSON argv array\n'); process.exit(1); }
@@ -55,7 +49,7 @@ async function dispatch(message) {
                 send({ id, error: { code: -32602, message: 'Invalid tool arguments' } }); return;
             }
             try {
-                const value = await client.request(['components.list', 'components.help', 'components.call'][index], args);
+                const value = await client.request(definitions[index].method, args);
                 result = { content: [{ type: 'text', text: JSON.stringify(value) }] };
             } catch (error) {
                 result = { isError: true, content: [{ type: 'text', text: error.message }] };

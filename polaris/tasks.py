@@ -57,6 +57,7 @@ class TaskEntry(QObject):
         self._important = False
         self._subtasks = []
         self._is_subtask = is_subtask
+        self._inbox = False
         for signal in (self.titleChanged, self.timeChanged, self.doneChanged, self.subtasksChanged,
                        self.notesChanged, self.importantChanged):
             signal.connect(self.dataChanged.emit)
@@ -90,7 +91,7 @@ class TaskEntry(QObject):
         if self._is_subtask:
             return False
         cleaned = clean_time(value)
-        if cleaned is None:
+        if cleaned is None or (self._inbox and cleaned):
             return False
         if cleaned != self._time:
             self._time = cleaned
@@ -228,7 +229,7 @@ class CalendarTaskStore(QObject):
                 if document["version"] == 1:
                     entries = sorted(entries, key=lambda entry: (bool(entry.get("time")), entry.get("time", "")))
                 self._tasks_by_day[date.fromisoformat(value)] = [self._restore(entry) for entry in entries]
-            self._tasks_by_day[None] = [self._restore(entry) for entry in document.get("inbox", [])]
+            self._tasks_by_day[None] = [self._restore(entry, inbox=True) for entry in document.get("inbox", [])]
             self._storage_notice = self._repository.warning
         except StorageError as error:
             self._storage_error = str(error)
@@ -240,9 +241,10 @@ class CalendarTaskStore(QObject):
         # View refresh is separate from content changes: never save on load.
         self.agendaChanged.emit()
 
-    def _restore(self, record, parent=None, subtask=False):
+    def _restore(self, record, parent=None, subtask=False, *, inbox=False):
         entry = TaskEntry(record["title"], count(record["id"]), parent or self,
-                          is_subtask=subtask, time=record.get("time", ""))
+                          is_subtask=subtask, time="" if inbox else record.get("time", ""))
+        entry._inbox = inbox
         entry._ids = self._ids
         entry._done = record["done"]
         entry._notes = record.get("notes", "")
@@ -339,6 +341,13 @@ class CalendarTaskStore(QObject):
         self.agendaChanged.emit()
         self.contentChanged.emit()
 
+    def _place_task(self, entry, target):
+        """A task in the inbox has no scheduled time, regardless of its caller."""
+        entry._inbox = target is None
+        if entry._inbox:
+            entry.setTime("")
+        self._tasks_by_day.setdefault(target, []).append(entry)
+
     @Slot(int, str, result=bool)
     def moveTask(self, entry_id, value):
         try:
@@ -347,13 +356,14 @@ class CalendarTaskStore(QObject):
                 return False
         except (ValueError, TypeError):
             return False
-        for day, entries in list(self._tasks_by_day.items()):
-            for entry in list(entries):
+        for day, entries in self._tasks_by_day.items():
+            for entry in entries:
                 if entry.entryId == entry_id:
                     if day != target:
-                        entries.remove(entry)
-                        self._tasks_by_day.setdefault(target, []).append(entry)
-                        self._notify_tasks()
+                        with self.batch_changes():
+                            entries.remove(entry)
+                            self._place_task(entry, target)
+                            self._notify_tasks()
                     return True
         return False
 
@@ -389,13 +399,7 @@ class CalendarTaskStore(QObject):
         pending = {entry.entryId: entry for entry in entries if not entry.done}
         if source_id not in pending or target_id not in pending:
             return False
-        if source_id != target_id:
-            source, target = pending[source_id], pending[target_id]
-            destination = entries.index(target)
-            entries.remove(source)
-            entries.insert(destination, source)
-            self._notify_tasks()
-        return True
+        return self.reorderTask(source_id, target_id)
 
     def reorderTask(self, source_id, target_id):
         """Move a task immediately before another task in the same day/inbox."""
@@ -412,7 +416,7 @@ class CalendarTaskStore(QObject):
 
     @Slot(str, "QVariantList", result=bool)
     def finishDay(self, value, decisions):
-        """Apply an explicit review in one save; omitted/completed/stale tasks stay put."""
+        """Validate the full review before changing any task; save once."""
         try:
             day = date.fromisoformat(value)
             if day.isoformat() != value:
@@ -432,17 +436,20 @@ class CalendarTaskStore(QObject):
                 return False
             seen.add(identity)
             entry = current.get(identity)
-            if entry is None or action == "keep":
+            if entry is None:
+                return False
+            if action == "keep":
                 continue
             if action == "tomorrow" and day == date.max:
                 return False
             target = day + timedelta(days=1) if action == "tomorrow" else None
             changes.append((entry, target))
-        for entry, target in changes:
-            entries.remove(entry)
-            self._tasks_by_day.setdefault(target, []).append(entry)
-        if changes:
-            self._notify_tasks()
+        with self.batch_changes():
+            for entry, target in changes:
+                entries.remove(entry)
+                self._place_task(entry, target)
+            if changes:
+                self._notify_tasks()
         return True
 
     @Slot(result=bool)
@@ -598,11 +605,11 @@ class CalendarTaskStore(QObject):
     def _add_task(self, title, time_value, day):
         title = clean_title(title)
         cleaned_time = clean_time(time_value)
-        if not title or cleaned_time is None:
+        if not title or cleaned_time is None or (day is None and cleaned_time):
             return None
         entry = TaskEntry(title, self._ids, self, time=cleaned_time)
         self._connect_entry(entry)
-        self._tasks_by_day.setdefault(day, []).append(entry)
+        self._place_task(entry, day)
         self._last_added_id = entry.entryId
         if QCoreApplication.instance() is not None:
             self._last_added_timer.start()

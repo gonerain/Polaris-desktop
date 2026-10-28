@@ -17,6 +17,7 @@ from polaris.calendar_api import CalendarAPI
 from polaris.pet_api import PetAPI
 from polaris.local_bridge import LocalBridge
 from polaris.weixin import WeixinClient
+from polaris.deepseek_chat import DeepSeekChat
 
 
 QML_FILE = Path(__file__).resolve().parent / "qml" / "Main.qml"
@@ -28,8 +29,10 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
     engine._agents = AgentHub(engine)
     engine._agents.setObjectName("agentHub")
     engine._components = ComponentRegistry(engine)
-    engine._weixin = WeixinClient(engine, component_registry=engine._components, credential_path=(
+    engine._weixin = WeixinClient(engine, credential_path=(
         Path(storage_path).parent / "weixin-account.dat" if storage_path is not None else None))
+    engine._chat = DeepSeekChat(engine._weixin, engine, registry=engine._components, state_path=(
+        Path(storage_path).parent / "weixin-chat.json" if storage_path is not None else None))
     engine._input_focus = InputFocusFilter(engine)
     QGuiApplication.instance().installEventFilter(engine._input_focus)
     engine.addImportPath(str(QML_FILE.parent))
@@ -39,6 +42,7 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
         "agentHub": engine._agents,
         "componentApi": engine._components,
         "weixinClient": engine._weixin,
+        "weixinChat": engine._chat,
         "windowPositioningSupported": not QGuiApplication.platformName().startswith("wayland"),
     })
     engine.load(QUrl.fromLocalFile(str(QML_FILE)))

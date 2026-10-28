@@ -63,7 +63,6 @@ Rectangle {
         detailOpen = false;
         selectedTaskId = 0;
         mode = value;
-        overview.scope = value === "inbox" ? "inbox" : value === "library" ? "all" : value === "done" ? "done" : value === "overdue" ? "overdue" : "today";
     }
     function beginTask() {
         if (planning && detailOpen)
@@ -369,6 +368,8 @@ Rectangle {
                     Layout.minimumWidth: 0
                     visible: !root.planning
                     showFilters: false
+                    scope: root.mode === "inbox" ? "inbox" : root.mode === "library" ? "all"
+                        : root.mode === "done" ? "done" : root.mode === "overdue" ? "overdue" : "today"
                     taskStore: root.taskStore
                     selectedTaskId: root.selectedTaskId
                     onTaskSelected: function (task, date) {
