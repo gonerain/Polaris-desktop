@@ -11,8 +11,13 @@ Window {
 
     width: compactSize
     height: compactSize
-    minimumWidth: compactSize
-    minimumHeight: compactSize
+    minimumWidth: compact ? Math.min(compactSize, availableGeometry.width || compactSize)
+                          : expandedMinimumWidth
+    minimumHeight: compact ? Math.min(compactSize + (bubbleVisible ? bubbleHeight : 0),
+                                      availableGeometry.height || compactSize + bubbleHeight)
+                           : expandedMinimumHeight
+    maximumWidth: availableGeometry.width > 0 ? availableGeometry.width : 16777215
+    maximumHeight: availableGeometry.height > 0 ? availableGeometry.height : 16777215
     visible: true
     title: "Polaris"
     color: "transparent"
@@ -22,8 +27,10 @@ Window {
     readonly property int bubbleHeight: 58
     property bool bubbleVisible: false
     property string bubbleText: ""
-    readonly property int expandedMinimumWidth: 528
-    readonly property int expandedMinimumHeight: 300
+    // Updated from QScreen.availableGeometry(), including taskbar offsets.
+    property rect availableGeometry: Qt.rect(0, 0, 0, 0)
+    readonly property int expandedMinimumWidth: Math.min(528, availableGeometry.width || 528)
+    readonly property int expandedMinimumHeight: Math.min(300, availableGeometry.height || 300)
     property bool compact: true
     property bool moving: false
     property bool applyingState: false
@@ -80,8 +87,6 @@ Window {
         collapsing = false
         applyingState = true
         compact = false
-        minimumWidth = expandedMinimumWidth
-        minimumHeight = expandedMinimumHeight
         width = Math.max(expandedWidth, expandedMinimumWidth)
         height = Math.max(expandedHeight, expandedMinimumHeight)
         applyingState = false
@@ -104,8 +109,6 @@ Window {
         expandedHeight = height
         compact = true
         collapsing = false
-        minimumWidth = compactSize
-        minimumHeight = compactSize
         width = compactSize
         height = compactSize
         applyingState = false
@@ -123,10 +126,11 @@ Window {
             return
         bubbleText = message
         if (!bubbleVisible) {
+            applyingState = true
             bubbleVisible = true
             y -= bubbleHeight
             height = compactSize + bubbleHeight
-            minimumHeight = height
+            applyingState = false
         }
         bubbleTimer.restart()
     }
@@ -135,10 +139,11 @@ Window {
         bubbleTimer.stop()
         if (!bubbleVisible)
             return
+        applyingState = true
         bubbleVisible = false
         y += bubbleHeight
-        minimumHeight = compactSize
         height = compactSize
+        applyingState = false
     }
 
     InteractionCoordinator {
@@ -165,6 +170,7 @@ Window {
         objectName: "focusPresenter"
         anchors.fill: parent
         targetWindow: window
+        availableGeometry: window.availableGeometry
         onOpened: {
             autoCollapse.stop()
             window.cancelCollapse()

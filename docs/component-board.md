@@ -49,6 +49,7 @@ ComponentBoard {
 - 鼠标离开展开界面约 `400ms` 后开始缩回；内容淡出约 `180ms` 后再缩到 `180×180`。计时或淡出期间移回界面会取消缩回。
 - 拖动悬浮框、日期头或月份头期间不会自动缩回。
 - 展开态可以拖动边缘调整大小；缩回后再次点击，会恢复本次运行中上次的展开尺寸。
+- 展开、拖动结束和缩放后，窗口会收回当前显示器的可用区域，避开任务栏。跨屏和工作区变化会更新边界；小屏幕不足 `528×300` 时降低最小尺寸，不强行撑出屏幕。移动和展开/返回动画进行中不强制纠正坐标，结束后再校正。
 - 缩回只隐藏界面，不销毁任务数据；正常启动的任务数据自动保存到用户数据目录，详见 [日程设计与可靠性](schedule-design.md)。
 - 展开态没有全局“悬浮日程”标题栏；日期头、月份头等由各自组件管理。没有最小化/关闭按钮，鼠标离开自动收起。悬浮框本身只响应点击展开、右键退出和拖动。
 
@@ -135,7 +136,7 @@ const handle = board.request(labeledFactory, {cells: [[0, 0]]}, {caption: "示�
 
 组件可在画布内完成所有常用操作，再通过明确入口请求独立的完整视图；完整视图不参与 panel 分配，也不改变原有占用。原有组件无需改造即可继续使用。
 
-窗口层创建 `FocusPresenter { targetWindow: window }`，并设置 `board.presenter`。打开接口：
+窗口层创建 `FocusPresenter { targetWindow: window; availableGeometry: window.availableGeometry }`，并设置 `board.presenter`。`availableGeometry` 由窗口的 `WindowBounds` 控制器从 `QScreen.availableGeometry()` 更新，使用当前显示器的可用矩形（含任务栏偏移），而非整个虚拟桌面。打开接口：
 
 ```qml
 // 省略尺寸：覆盖当前画布，窗口大小不变。

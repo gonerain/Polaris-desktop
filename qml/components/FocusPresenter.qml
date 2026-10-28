@@ -7,6 +7,7 @@ import QtQuick.Controls.Basic
 Item {
     id: presenter
     required property var targetWindow
+    required property rect availableGeometry
     property bool active: false
     property bool preparing: false
     property bool returning: false
@@ -31,15 +32,17 @@ Item {
         const size = options && options.size ? options.size : Qt.size(0, 0)
         if (!isFinite(size.width) || !isFinite(size.height) || size.width < 0 || size.height < 0)
             return false
+        const available = availableGeometry
+        const maxWidth = available.width
+        const maxHeight = available.height
+        if (maxWidth <= 0 || maxHeight <= 0)
+            return false
         savedGeometry = Qt.rect(targetWindow.x, targetWindow.y, targetWindow.width, targetWindow.height)
-        const available = targetWindow.screen
-        const maxWidth = available.desktopAvailableWidth
-        const maxHeight = available.desktopAvailableHeight
         const width = Math.min(maxWidth, Math.max(targetWindow.minimumWidth, size.width || savedGeometry.width))
         const height = Math.min(maxHeight, Math.max(targetWindow.minimumHeight, size.height || savedGeometry.height))
-        // Keep the current screen's virtual origin (multi-monitor desktops).
-        const left = available.virtualX
-        const top = available.virtualY
+        // The usable origin can differ from the monitor origin (top/left taskbars).
+        const left = available.x
+        const top = available.y
         targetGeometry = Qt.rect(Math.max(left, Math.min(savedGeometry.x, left + maxWidth - width)),
                                  Math.max(top, Math.min(savedGeometry.y, top + maxHeight - height)), width, height)
         const origin = handle.host.mapToItem(presenter, 0, 0)

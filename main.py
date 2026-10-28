@@ -9,6 +9,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 from polaris.qml import register_types
 from polaris.input_focus import InputFocusFilter
+from polaris.window_bounds import WindowBounds
 from polaris.x11_hints import apply_skip_taskbar
 
 
@@ -25,6 +26,7 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
     if not engine.rootObjects():
         raise RuntimeError(f"无法加载日程界面：{QML_FILE}")
     window = engine.rootObjects()[0]
+    engine._window_bounds = WindowBounds(window)
     store = window.findChild(QObject, "calendarTaskStore")
     coordinator = window.findChild(QObject, "interactionCoordinator")
     if store is None or coordinator is None:
