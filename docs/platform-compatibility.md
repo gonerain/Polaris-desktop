@@ -50,9 +50,9 @@ Windows 通常为 `%LOCALAPPDATA%\Polaris\Polaris`。实际位置以 Qt 返回�
 两侧默认独立存储；**不要让两个系统同时编辑同一份任务文件**，不能假设跨系统锁可靠。
 迁移数据时先退出两端，备份后复制 JSON。
 
-## 尚未实现的 Agent 接入：也必须兼容 WSL
+## Agent 接入与 WSL 中继
 
-本轮修复不等于 Agent 通信接口已经上线。以下是下一阶段必须遵守的传输边界：
+Agent 桥和 Pi 插件已实现；安装与协议见 [接入说明](../integrations/README.md) 及 [协议 v1](agent-bridge.md)。传输边界：
 
 1. 同环境使用 Qt LocalSocket：Windows 命名管道，Linux Unix domain socket。
    消息是 UTF-8 JSON Lines；业务协议与 Agent 组件不知道系统类型。
@@ -63,8 +63,8 @@ Windows 通常为 `%LOCALAPPDATA%\Polaris\Polaris`。实际位置以 Qt 返回�
 3. 中继只负责字节传输，不是第二个 Polaris GUI、不承担 Agent 状态或组件业务，
    不经 shell 拼接来自会话的项目路径或命令，不自动猜测发行版、安装位置或宿主 IP。
    Windows interoperability 被禁用时明确报错，不偷偷退回网络监听。
-4. 中继模式由后续接入实现提供；不承诺当前可执行文件已存在 `--bridge-stdio` 等命令。
-   其凭证读取、端点发现、消息限长与断连处理必须在正式桥实现时一并完成。
+4. 当前程序提供 `--bridge-stdio` 模式，读取宿主端点并为 hello 注入凭证。
+   两侧不复制 token；适配器显式选择宿主助手，消息限长、认证和连接级组件授权仍由桥检查。
 5. 不为跨 WSL 开放 TCP、共享公网令牌或依赖 NAT / mirrored networking。
    项目路径是源环境中的元数据，不被另一侧直接当作本地文件路径使用。
 
@@ -82,6 +82,6 @@ GNOME / KDE 原生通知、不同合成器的置顶策略、多显示器 / 缩�
 - WSLg 原生 Wayland 的 Qt 会话初始化；真实桌面拖动及合成器置顶策略尚未验收。
 - WSL Node ↔ Linux Qt Unix socket 的中文 JSON 往返。
 - WSL 进程 → Windows 标准输入/输出助手 → Windows Qt 当前用户命名管道的中文 JSON 往返。
-  这是临时底层连通诊断，不是已交付的 Agent 桥，不包括正式协议鉴权或可靠性验收。
+  后续已补充正式 `--bridge-stdio` 的认证、组件调用、会话事件验证，以及 Pi 官方加载器的生命周期回调验证；均使用临时存储，不调用收费模型。
 - Linux PyInstaller 成品在独立 XDG 临时目录启动、保持运行并拒绝第二实例。
   WSL 的 `/mnt/c`、`/mnt/d` 文件访问可能较慢，诊断应等待就绪标志，而非固定睡几秒就认定失败。

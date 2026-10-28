@@ -1,9 +1,11 @@
 # Polaris
 
-轻量桌宠式悬浮日程，Python + PySide6 / Qt Quick。点击鲸鱼娘打开日程，右键或托盘菜单退出。
+轻量桌宠式悬浮组件工作台，Python + PySide6 / Qt Quick。点击鲸鱼娘打开画布，切换日程或 Agent，右键或托盘菜单退出。
 
 - 当前使用 dsh-pet 女仆鲸鱼娘：呼吸待机、挥手、哈欠/睡眠、惊醒、悬空拖动、庆祝，以及伸懒腰、玩魔方、东张西望；右键可换个小动作、休息或减少动态，不加养成系统。
-- 紧凑面板默认“我的一天”，支持任务、时间、子任务、完成勾选，以及按需查看月历。
+- 通用 Agent 页展示已接入的活跃会话和本轮结束提醒；Pi 通过薄插件接入，来源不限 Pi，断连不冒充完成。
+- 组件通过发现 → help → 调用提供自身能力；外部访问默认拒绝，按连接和组件授权，不自动上传日程或会话全文。
+- 日程画布默认“我的一天”，支持任务、时间、子任务、完成勾选，以及按需查看月历。
 - `↗` 打开任务工作台：我的一天、任务库、周/月计划和完成记录；紧凑任务行、按需详情、全局搜索和点选改期。
 - 收集箱可先记录、不选日期；我的一天支持重点星标和拖动排序，详情里按需写下一步笔记。
 - 日终整理逐项选择保留、明天或放回收集箱，不自动顺延；顺序、重点、笔记都保存在本地。
@@ -11,6 +13,12 @@
 - 过期待办可以单项或全部移到今天，已完成任务默认收起。
 - 自动保存、上个版本备份、损坏保护、主任务删除撤销和单实例锁。
 - 组件支持画布态与独立完整态，以及连续展开 / 返回动画。
+
+## Pi 插件
+
+先打开 Polaris，再运行 `pi install PATH_TO_POLARIS/integrations`；发布包的插件目录为 `Polaris/_internal/integrations`。已有 Pi 会话执行 `/reload`，新会话自动接入。通过 `/polaris` 检查连接，在 Agent 页授权组件访问。
+
+提供 `polaris_components / polaris_help / polaris_call` 三个通用工具，不内置日程工具或 Codex 分支。安装、WSL 中继与其他 Agent 接入见 [接入说明](integrations/README.md) 和 [协议 v1](docs/agent-bridge.md)。
 
 ## Windows 运行与打包
 
@@ -27,7 +35,7 @@ py -3.13 -m venv .venv
 
 同一份源码支持 Linux 环境，使用独立的 Linux 虚拟环境；不要复用 Windows `.venv`。Ubuntu / WSLg 的中文字体、Qt 系统库、运行及独立打包命令见 [平台兼容说明](docs/platform-compatibility.md)。Wayland 下由合成器控制窗口位置；无托盘时仍保留界面内提醒。
 
-WSL 既是 Linux 诊断环境，也必须纳入后续 Agent 跨环境接入：Windows 与 WSL 通过显式本机中继连接，不假定两侧共享套接字。Agent 接口及中继目前尚未实现。
+Windows 与 WSL 的 Agent 接入通过显式 `--bridge-stdio` 本机中继连接，不假定两侧共享套接字，也不开放 TCP 端口。使用 `POLARIS_RELAY` 配置命令参数数组，见 [接入说明](integrations/README.md)。
 
 参见 [组件协议](docs/component-board.md) 和 [日程设计、存储恢复及已知边界](docs/schedule-design.md)。当前没有云同步、重复任务或程序关闭后的后台提醒。
 

@@ -159,6 +159,12 @@ Module {
             Parameter { name: "time_value"; type: "QString" }
         }
         Method {
+            name: "addTaskOnDate"; type: "QObject*"
+            Parameter { name: "title"; type: "QString" }
+            Parameter { name: "value"; type: "QString" }
+            Parameter { name: "time_value"; type: "QString" }
+        }
+        Method {
             name: "removeTask"; type: "bool"
             Parameter { name: "entry_id"; type: "int" }
         }

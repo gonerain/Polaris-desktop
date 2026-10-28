@@ -533,6 +533,19 @@ class CalendarTaskStore(QObject):
     def addTask(self, title, time_value=""):
         return self._add_task(title, time_value, self._selected)
 
+    @Slot(str, str, str, result=QObject)
+    def addTaskOnDate(self, title, value, time_value=""):
+        """Explicit business destination; never navigate the user's calendar."""
+        try:
+            target = date.fromisoformat(value) if value else None
+            if target is not None and target.isoformat() != value:
+                return None
+        except (ValueError, TypeError):
+            return None
+        if target is None and time_value:
+            return None
+        return self._add_task(title, time_value, target)
+
     @Slot(str, result=QObject)
     def addInboxTask(self, title):
         return self._add_task(title, "", None)

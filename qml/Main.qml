@@ -23,6 +23,11 @@ Window {
     color: "transparent"
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
 
+    required property var agentHub
+    required property var componentApi
+    property string selectedPage: "calendar"
+    property string pendingPage: ""
+    readonly property int navigationHeight: 32
     readonly property int compactSize: 180
     readonly property int bubbleHeight: 58
     property bool bubbleVisible: false
@@ -30,7 +35,7 @@ Window {
     // Updated from QScreen.availableGeometry(), including taskbar offsets.
     property rect availableGeometry: Qt.rect(0, 0, 0, 0)
     readonly property int expandedMinimumWidth: Math.min(528, availableGeometry.width || 528)
-    readonly property int expandedMinimumHeight: Math.min(300, availableGeometry.height || 300)
+    readonly property int expandedMinimumHeight: Math.min(300 + navigationHeight, availableGeometry.height || 300 + navigationHeight)
     // Supplied before creation by the host, based on the actual Qt platform.
     property bool windowPositioningSupported: true
     property bool nativeNotificationsAvailable: false
@@ -57,7 +62,7 @@ Window {
     property bool allowQuit: false
     property var calendarStore: null
     property real expandedWidth: 528
-    property real expandedHeight: 300
+    property real expandedHeight: 300 + navigationHeight
 
     onClosing: function(close) {
         // Even a blocked close request must commit the currently edited field.
@@ -86,6 +91,20 @@ Window {
 
     onWidthChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedWidth = width
     onHeightChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedHeight = height
+
+    function showPage(page) {
+        if (page !== "calendar" && page !== "agents") return false
+        if (focusPresenter.busy) {
+            if (focusPresenter.transitioning) return false
+            if (page !== selectedPage) { pendingPage = page; focusPresenter.close() }
+            return true
+        }
+        root.forceActiveFocus()
+        selectedPage = page
+        if (page === "agents") agentHub.markRead()
+        expand()
+        return true
+    }
 
     function expand() {
         if (!compact) {
@@ -177,6 +196,17 @@ Window {
         }
     }
 
+    Connections {
+        target: window.agentHub
+        function onCompleted(message) {
+            // No pet response, forced page switch or focus change.
+            if (!window.nativeNotificationsAvailable && !window.compact) {
+                window.inlineReminderText = message
+                inlineReminderTimer.restart()
+            }
+        }
+    }
+
     Timer {
         id: bubbleTimer
         interval: 6500
@@ -226,7 +256,11 @@ Window {
             window.cancelCollapse()
         }
         onClosed: {
-            if (!windowHover.hovered)
+            if (window.pendingPage) {
+                const page = window.pendingPage
+                window.pendingPage = ""
+                window.showPage(page)
+            } else if (!windowHover.hovered)
                 autoCollapse.restart()
         }
         onFailed: function(reason) { console.warn("完整视图打开失败", reason) }
@@ -288,6 +322,20 @@ Window {
                 border.color: Theme.border
             }
 
+            MenuItem {
+                objectName: "agentPageMenuItem"
+                text: qsTr("Agent 会话") + (window.agentHub && window.agentHub.unreadCount ? " · " + window.agentHub.unreadCount : "")
+                font.pixelSize: 12
+                enabled: !focusPresenter.transitioning
+                onTriggered: window.showPage("agents")
+            }
+            MenuItem {
+                text: qsTr("打开日程")
+                font.pixelSize: 12
+                enabled: !focusPresenter.transitioning
+                onTriggered: window.showPage("calendar")
+            }
+            MenuSeparator {}
             MenuItem {
                 objectName: "petGreetMenuItem"
                 text: qsTr("打个招呼")
@@ -380,11 +428,81 @@ Window {
                 NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic }
             }
 
+            Rectangle {
+                width: parent.width
+                height: window.navigationHeight
+                radius: 8
+                color: Theme.surface
+                border.color: Theme.border
+                DragHandler {
+                    objectName: "componentNavigationDrag"
+                    target: null
+                    acceptedButtons: Qt.LeftButton
+                    onActiveChanged: {
+                        window.moving = active
+                        if (active) window.startSystemMove()
+                        else if (!windowHover.hovered && !window.compact) autoCollapse.restart()
+                    }
+                }
+            }
+            Row {
+                height: window.navigationHeight
+                spacing: 4
+                enabled: !focusPresenter.busy
+                Button {
+                    id: calendarNavigation
+                    objectName: "calendarPageButton"
+                    text: qsTr("日程")
+                    height: window.navigationHeight - 2
+                    width: 72
+                    background: Rectangle { radius: 7; color: window.selectedPage === "calendar" ? Theme.primarySoft : Theme.surface }
+                    contentItem: Text {
+                        text: calendarNavigation.text
+                        font.pixelSize: 12
+                        color: window.selectedPage === "calendar" ? Theme.primary : Theme.muted
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    font.pixelSize: 12
+                    onClicked: window.showPage("calendar")
+                }
+                Button {
+                    id: agentNavigation
+                    objectName: "agentPageButton"
+                    text: qsTr("Agent") + (window.agentHub && window.agentHub.unreadCount ? " · " + window.agentHub.unreadCount : "")
+                    height: window.navigationHeight - 2
+                    width: 100
+                    background: Rectangle { radius: 7; color: window.selectedPage === "agents" ? Theme.primarySoft : Theme.surface }
+                    contentItem: Text {
+                        text: agentNavigation.text
+                        font.pixelSize: 12
+                        color: window.selectedPage === "agents" ? Theme.primary : Theme.muted
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    font.pixelSize: 12
+                    onClicked: window.showPage("agents")
+                }
+            }
+
+            AgentPanel {
+                objectName: "agentPanel"
+                x: 0
+                y: window.navigationHeight
+                width: parent.width
+                height: parent.height - window.navigationHeight
+                visible: window.selectedPage === "agents"
+                hub: window.agentHub
+                components: window.componentApi
+            }
+
             ComponentBoard {
                 id: board
                 objectName: "componentBoard"
                 width: focusPresenter.busy ? focusPresenter.savedGeometry.width : parent.width
-                height: focusPresenter.busy ? focusPresenter.savedGeometry.height : parent.height
+                y: window.navigationHeight
+                height: (focusPresenter.busy ? focusPresenter.savedGeometry.height : parent.height) - window.navigationHeight
+                visible: window.selectedPage === "calendar"
                 presenter: focusPresenter
                 panelSize: Qt.size(260, 260)
                 panelCount: 2
@@ -454,6 +572,7 @@ Window {
                     font.pixelSize: 12
                     color: Theme.ink
                     text: window.bubbleText
+                    textFormat: Text.PlainText
                     elide: Text.ElideRight
                 }
             }
