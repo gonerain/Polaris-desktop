@@ -19,7 +19,7 @@ AbstractButton {
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
     Accessible.name: control.accessibleName.length > 0 ? control.accessibleName : control.text
-    ToolTip.visible: hovered && tooltip.length > 0
+    ToolTip.visible: control.enabled && control.visible && hovered && tooltip.length > 0
     ToolTip.text: tooltip
     ToolTip.delay: 600
 

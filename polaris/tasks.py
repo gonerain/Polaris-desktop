@@ -40,6 +40,8 @@ class TaskEntry(QObject):
     titleChanged = Signal()
     timeChanged = Signal()
     doneChanged = Signal()
+    notesChanged = Signal()
+    importantChanged = Signal()
     subtasksChanged = Signal()
     subtaskProgressChanged = Signal()
 
@@ -50,15 +52,20 @@ class TaskEntry(QObject):
         self._title = title
         self._time = time
         self._done = False
+        self._notes = ""
+        self._important = False
         self._subtasks = []
         self._is_subtask = is_subtask
-        for signal in (self.titleChanged, self.timeChanged, self.doneChanged, self.subtasksChanged):
+        for signal in (self.titleChanged, self.timeChanged, self.doneChanged, self.subtasksChanged,
+                       self.notesChanged, self.importantChanged):
             signal.connect(self.dataChanged.emit)
 
     entryId = Property(int, lambda self: self._id, constant=True)
     title = Property(str, lambda self: self._title, notify=titleChanged)
     time = Property(str, lambda self: self._time, notify=timeChanged)
     done = Property(bool, lambda self: self._done, notify=doneChanged)
+    notes = Property(str, lambda self: self._notes, notify=notesChanged)
+    important = Property(bool, lambda self: self._important, notify=importantChanged)
     subtasks = Property("QVariantList", lambda self: list(self._subtasks), notify=subtasksChanged)
     subtaskCount = Property(int, lambda self: len(self._subtasks), notify=subtasksChanged)
     completedSubtaskCount = Property(
@@ -95,6 +102,24 @@ class TaskEntry(QObject):
         if done != self._done:
             self._done = done
             self.doneChanged.emit()
+        return True
+
+    @Slot(str, result=bool)
+    def setNotes(self, value):
+        if not isinstance(value, str):
+            return False
+        if value != self._notes:
+            self._notes = value
+            self.notesChanged.emit()
+        return True
+
+    @Slot(bool, result=bool)
+    def setImportant(self, value):
+        if self._is_subtask:
+            return False
+        if bool(value) != self._important:
+            self._important = bool(value)
+            self.importantChanged.emit()
         return True
 
     @Slot(str, result=QObject)
@@ -169,8 +194,11 @@ class CalendarTaskStore(QObject):
     canUndoDelete = Property(bool, lambda self: self._undo is not None, notify=undoChanged)
     allEntries = Property("QVariantList", lambda self: self._all_entries(), notify=agendaChanged)
     overdueCount = Property(int, lambda self: sum(not entry.done
-        for day, entries in self._tasks_by_day.items() if day < self._today for entry in entries),
+        for day, entries in self._tasks_by_day.items() if day is not None and day < self._today for entry in entries),
         notify=agendaChanged)
+
+    inboxCount = Property(int, lambda self: sum(not entry.done for entry in self._entries_for(None)),
+                          notify=agendaChanged)
 
     def initialize_storage(self, path):
         if self._repository is not None or self._tasks_by_day:
@@ -178,11 +206,15 @@ class CalendarTaskStore(QObject):
         self._repository = SnapshotRepository(path)
         try:
             document = self._repository.load()
-            maximum = max((entry["id"] for entries in document["days"].values()
+            groups = [*document["days"].values(), document.get("inbox", [])]
+            maximum = max((entry["id"] for entries in groups
                            for task in entries for entry in [task, *task.get("subtasks", [])]), default=0)
             self._ids = count(maximum + 1)
             for value, entries in document["days"].items():
+                if document["version"] == 1:
+                    entries = sorted(entries, key=lambda entry: (bool(entry.get("time")), entry.get("time", "")))
                 self._tasks_by_day[date.fromisoformat(value)] = [self._restore(entry) for entry in entries]
+            self._tasks_by_day[None] = [self._restore(entry) for entry in document.get("inbox", [])]
             self._storage_notice = self._repository.warning
         except StorageError as error:
             self._storage_error = str(error)
@@ -199,6 +231,8 @@ class CalendarTaskStore(QObject):
                           is_subtask=subtask, time=record.get("time", ""))
         entry._ids = self._ids
         entry._done = record["done"]
+        entry._notes = record.get("notes", "")
+        entry._important = record.get("important", False)
         for child_record in record.get("subtasks", []):
             child = self._restore(child_record, entry, True)
             child.doneChanged.connect(entry._subtask_done_changed)
@@ -218,11 +252,13 @@ class CalendarTaskStore(QObject):
     @staticmethod
     def _record(entry):
         return {"id": entry.entryId, "title": entry.title, "time": entry.time,
-                "done": entry.done, "subtasks": [CalendarTaskStore._record(child) for child in entry.subtasks]}
+                "done": entry.done, "notes": entry.notes, "important": entry.important,
+                "subtasks": [CalendarTaskStore._record(child) for child in entry.subtasks]}
 
     def _snapshot(self):
-        return {"version": 1, "days": {day.isoformat(): [self._record(entry) for entry in entries]
-                                       for day, entries in self._tasks_by_day.items() if entries}}
+        return {"version": 2, "days": {day.isoformat(): [self._record(entry) for entry in entries]
+                    for day, entries in self._tasks_by_day.items() if day is not None and entries},
+                "inbox": [self._record(entry) for entry in self._entries_for(None)]}
 
     @Slot(result=bool)
     def retrySave(self):
@@ -242,9 +278,10 @@ class CalendarTaskStore(QObject):
         return True
 
     def _all_entries(self):
-        return [{"date": day.isoformat(), "task": entry, "overdue": day < self._today and not entry.done}
-                for day in sorted(self._tasks_by_day)
-                for entry in self._sorted_tasks(self._tasks_by_day[day])]
+        days = [None, *sorted(day for day in self._tasks_by_day if day is not None)]
+        return [{"date": day.isoformat() if day else "", "task": entry,
+                 "overdue": day is not None and day < self._today and not entry.done}
+                for day in days for entry in self._entries_for(day)]
 
     @Slot()
     def refreshToday(self):
@@ -273,8 +310,8 @@ class CalendarTaskStore(QObject):
     @Slot(int, str, result=bool)
     def moveTask(self, entry_id, value):
         try:
-            target = date.fromisoformat(value)
-            if target.isoformat() != value:
+            target = date.fromisoformat(value) if value else None
+            if target is not None and target.isoformat() != value:
                 return False
         except (ValueError, TypeError):
             return False
@@ -292,7 +329,7 @@ class CalendarTaskStore(QObject):
     def moveOverdueToToday(self):
         moved = []
         for day, entries in list(self._tasks_by_day.items()):
-            if day < self._today:
+            if day is not None and day < self._today:
                 moved.extend(entry for entry in entries if not entry.done)
                 self._tasks_by_day[day] = [entry for entry in entries if entry.done]
         if moved:
@@ -302,6 +339,8 @@ class CalendarTaskStore(QObject):
 
     @Slot(str, result=str)
     def dateLabel(self, value):
+        if not value:
+            return "未安排日期"
         try:
             day = date.fromisoformat(value)
         except (ValueError, TypeError):
@@ -311,6 +350,55 @@ class CalendarTaskStore(QObject):
             return {-1: "昨天", 0: "今天", 1: "明天"}[delta]
         prefix = f"{day.year}年" if day.year != self._today.year else ""
         return f"{prefix}{day.month}月{day.day}日 周{_WEEKDAYS[day.weekday()]}"
+
+    @Slot(int, int, result=bool)
+    def reorderToday(self, source_id, target_id):
+        entries = self._tasks_by_day.get(self._today, [])
+        pending = {entry.entryId: entry for entry in entries if not entry.done}
+        if source_id not in pending or target_id not in pending:
+            return False
+        if source_id != target_id:
+            source, target = pending[source_id], pending[target_id]
+            destination = entries.index(target)
+            entries.remove(source)
+            entries.insert(destination, source)
+            self._notify_tasks()
+        return True
+
+    @Slot(str, "QVariantList", result=bool)
+    def finishDay(self, value, decisions):
+        """Apply an explicit review in one save; omitted/completed/stale tasks stay put."""
+        try:
+            day = date.fromisoformat(value)
+            if day.isoformat() != value:
+                return False
+        except (ValueError, TypeError):
+            return False
+        entries = self._tasks_by_day.get(day, [])
+        current = {entry.entryId: entry for entry in entries if not entry.done}
+        changes, seen = [], set()
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                return False
+            identity, action = decision.get("id"), decision.get("action")
+            if (type(identity) not in (int, float) or not 0 < identity <= 2_147_483_647
+                    or int(identity) != identity or identity in seen
+                    or action not in ("keep", "tomorrow", "inbox")):
+                return False
+            seen.add(identity)
+            entry = current.get(identity)
+            if entry is None or action == "keep":
+                continue
+            if action == "tomorrow" and day == date.max:
+                return False
+            target = day + timedelta(days=1) if action == "tomorrow" else None
+            changes.append((entry, target))
+        for entry, target in changes:
+            entries.remove(entry)
+            self._tasks_by_day.setdefault(target, []).append(entry)
+        if changes:
+            self._notify_tasks()
+        return True
 
     @Slot(result=bool)
     def undoDelete(self):
@@ -333,7 +421,7 @@ class CalendarTaskStore(QObject):
     )
     selectedDayNumber = Property(int, lambda self: self._selected.day, notify=selectedDateChanged)
     monthLabel = Property(str, lambda self: f"{self._selected.year}年{self._selected.month}月", notify=calendarChanged)
-    tasks = Property("QVariantList", lambda self: self._sorted_tasks(self._entries_for(self._selected)),
+    tasks = Property("QVariantList", lambda self: list(self._entries_for(self._selected)),
                      notify=tasksChanged)
     taskCount = Property(int, lambda self: len(self._entries_for(self._selected)), notify=tasksChanged)
     completedCount = Property(
@@ -381,11 +469,9 @@ class CalendarTaskStore(QObject):
     def scheduled_entries(self):
         """供应用级联动读取全部日期；与当前选中的日期无关。"""
         for day, entries in self._tasks_by_day.items():
-            for entry in entries:
-                yield day, entry
-
-    def _sorted_tasks(self, entries):
-        return sorted(entries, key=lambda entry: (entry.time != "", entry.time))
+            if day is not None:
+                for entry in entries:
+                    yield day, entry
 
     def _task_done_changed(self):
         self.summaryChanged.emit()
@@ -445,13 +531,20 @@ class CalendarTaskStore(QObject):
 
     @Slot(str, str, result=QObject)
     def addTask(self, title, time_value=""):
+        return self._add_task(title, time_value, self._selected)
+
+    @Slot(str, result=QObject)
+    def addInboxTask(self, title):
+        return self._add_task(title, "", None)
+
+    def _add_task(self, title, time_value, day):
         title = clean_title(title)
         cleaned_time = clean_time(time_value)
         if not title or cleaned_time is None:
             return None
         entry = TaskEntry(title, self._ids, self, time=cleaned_time)
         self._connect_entry(entry)
-        self._tasks_by_day.setdefault(self._selected, []).append(entry)
+        self._tasks_by_day.setdefault(day, []).append(entry)
         self._last_added_id = entry.entryId
         if QCoreApplication.instance() is not None:
             self._last_added_timer.start()

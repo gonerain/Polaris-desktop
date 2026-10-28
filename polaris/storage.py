@@ -16,9 +16,15 @@ class SnapshotFormatError(StorageError):
     """The file was read, but its contents are invalid or unsupported."""
 
 
+class UnsupportedVersionError(SnapshotFormatError):
+    """A newer format must not be rolled back to an older backup."""
+
+
 def validate_snapshot(document):
+    if isinstance(document, dict) and type(document.get("version")) is int and document["version"] not in (1, 2):
+        raise UnsupportedVersionError("数据由不支持的版本创建，请使用兼容版本打开")
     if (not isinstance(document, dict) or type(document.get("version")) is not int
-            or document["version"] != 1):
+            or document["version"] not in (1, 2)):
         raise SnapshotFormatError("不支持的数据版本")
     days = document.get("days")
     if not isinstance(days, dict):
@@ -39,6 +45,8 @@ def validate_snapshot(document):
         time = entry.get("time", "")
         if not isinstance(time, str) or (time and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", time)):
             raise SnapshotFormatError("任务时间无效")
+        if not isinstance(entry.get("notes", ""), str) or type(entry.get("important", False)) is not bool:
+            raise SnapshotFormatError("任务笔记或重点标记无效")
         children = entry.get("subtasks", [])
         if not isinstance(children, list) or (subtask and (children or time)):
             raise SnapshotFormatError("子任务结构无效")
@@ -55,6 +63,11 @@ def validate_snapshot(document):
             raise SnapshotFormatError("日期列表损坏")
         for entry in entries:
             validate_entry(entry)
+    inbox = document.get("inbox", [])
+    if not isinstance(inbox, list) or (document["version"] == 1 and inbox):
+        raise SnapshotFormatError("收集箱格式无效")
+    for entry in inbox:
+        validate_entry(entry)
     return document
 
 
@@ -77,9 +90,12 @@ class SnapshotRepository:
 
     def load(self):
         if not self.path.exists() and not self.backup.exists():
-            return {"version": 1, "days": {}}
+            return {"version": 2, "days": {}, "inbox": []}
         try:
             return self.read(self.path)
+        except UnsupportedVersionError as error:
+            self.blocked = True
+            raise StorageError("数据格式比当前版本更新，已停止写入；请升级程序，不会回退到旧备份") from error
         except StorageError:
             try:
                 recovered = self.read(self.backup)
@@ -111,6 +127,8 @@ class SnapshotRepository:
         validate_snapshot(document)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self._recovered and document["version"] == 2:
+                self._preserve_legacy(self.read(self.backup))
             if self.path.exists():
                 try:
                     previous = self.read(self.path)
@@ -121,11 +139,21 @@ class SnapshotRepository:
                     # load() already preserved the damaged file during recovery.
                     previous = None
                 if previous is not None:
+                    if previous["version"] > document["version"]:
+                        raise StorageError("不能使用旧格式覆盖新版数据")
+                    if document["version"] == 2:
+                        self._preserve_legacy(previous)
                     self.atomic_write(self.backup, self.encode(previous))
             self.atomic_write(self.path, self.encode(document))
             self._recovered = False
         except OSError as error:
             raise StorageError(str(error)) from error
+
+    def _preserve_legacy(self, document):
+        if document["version"] == 1:
+            path = self.path.with_name(self.path.stem + ".v1-backup.json")
+            if not path.exists():
+                self.atomic_write(path, self.encode(document))
 
     @staticmethod
     def encode(document):

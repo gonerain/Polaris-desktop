@@ -50,6 +50,8 @@ Window {
     property real expandedHeight: 300
 
     onClosing: function(close) {
+        // Even a blocked close request must commit the currently edited field.
+        root.forceActiveFocus()
         if (!window.allowQuit)
             close.accepted = false
     }

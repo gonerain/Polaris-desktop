@@ -9,6 +9,8 @@ Rectangle {
     id: composer
     required property var taskStore
     property bool opened: false
+    property bool inboxMode: false
+    property bool allowInbox: false
     readonly property bool editBoundary: true
     signal submitted(int entryId)
     implicitHeight: 50
@@ -28,7 +30,8 @@ Rectangle {
             titleInput.forceActiveFocus()
             return
         }
-        const entry = taskStore.addTask(titleInput.text, timeInput.text)
+        const entry = inboxMode ? taskStore.addInboxTask(titleInput.text)
+                                : taskStore.addTask(titleInput.text, timeInput.text)
         if (!entry) return
         const identity = entry.entryId
         titleInput.clear()
@@ -41,8 +44,18 @@ Rectangle {
         anchors.fill: parent
         anchors.margins: 6
         spacing: 7
+        IconButton {
+            visible: composer.allowInbox
+            text: composer.inboxMode ? qsTr("收集箱") : qsTr("当天")
+            selected: composer.inboxMode
+            buttonSize: 28
+            textSize: 10
+            tooltip: qsTr("切换到收集箱，可以先记录、不选日期")
+            onClicked: composer.inboxMode = !composer.inboxMode
+        }
         TimeField {
             id: timeInput
+            visible: !composer.inboxMode
             objectName: "newTaskTimeInput"
             Layout.preferredWidth: 54
             chip: true
@@ -57,7 +70,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.minimumWidth: 0
             bare: true
-            placeholderText: qsTr("想做什么？输入后按回车")
+            placeholderText: composer.inboxMode ? qsTr("先记下来，日期以后再安排") : qsTr("想做什么？输入后按回车")
             font.pixelSize: 13
             onAccepted: composer.submit()
         }

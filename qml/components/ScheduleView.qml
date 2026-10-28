@@ -22,10 +22,11 @@ ColumnLayout {
     readonly property var grouped: {
         const result = {}
         for (const row of taskStore.allEntries) {
-            if (!root.showCompleted && row.task.done) continue
+            if (!row.date || (!root.showCompleted && row.task.done)) continue
             if (!result[row.date]) result[row.date] = []
             result[row.date].push(row.task)
         }
+        for (const date in result) result[date].sort(function(a, b) { return a.time.localeCompare(b.time) })
         return result
     }
     spacing: 12

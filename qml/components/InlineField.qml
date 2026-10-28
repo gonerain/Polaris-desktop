@@ -18,7 +18,7 @@ TextField {
     selectByMouse: true
     autoScroll: activeFocus
     hoverEnabled: true
-    ToolTip.visible: hovered && !activeFocus && contentWidth > width - leftPadding - rightPadding
+    ToolTip.visible: enabled && visible && hovered && !activeFocus && contentWidth > width - leftPadding - rightPadding
     ToolTip.text: text
     ToolTip.delay: 650
     leftPadding: 6

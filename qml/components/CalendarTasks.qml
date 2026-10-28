@@ -63,6 +63,8 @@ Rectangle {
             showFocusButton: true
             onFocusRequested: widget.focusRequested(fullViewFactory,
                 {span: Qt.size(5, 3)}, {taskStore: store})
+            onInboxRequested: widget.focusRequested(fullViewFactory,
+                {span: Qt.size(5, 3)}, {taskStore: store, mode: "inbox"})
             onCalendarRequested: widget.calendarVisible = true
             onDragActiveChanged: function(active) { widget.dragActiveChanged(active) }
         }

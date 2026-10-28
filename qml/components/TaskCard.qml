@@ -113,6 +113,12 @@ Rectangle {
                 }
             }
 
+            Text {
+                visible: card.entry && card.entry.important
+                text: "★"
+                color: Theme.primary
+                font.pixelSize: 12
+            }
             TimeField {
                 id: timeField
                 objectName: "taskTime" + (card.entry ? card.entry.entryId : "")

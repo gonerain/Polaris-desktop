@@ -23,6 +23,7 @@ ColumnLayout {
         })
     }
     signal focusRequested()
+    signal inboxRequested()
     signal calendarRequested()
     signal dragActiveChanged(bool active)
     spacing: 10
@@ -153,6 +154,7 @@ ColumnLayout {
 
     TaskComposer {
         id: composer
+        allowInbox: true
         Layout.fillWidth: true
         taskStore: root.taskStore
         onSubmitted: function(entryId) {
@@ -201,14 +203,27 @@ ColumnLayout {
             }
         }
     }
-    IconButton {
-        Layout.alignment: Qt.AlignLeft
-        visible: root.taskStore && root.taskStore.completedCount > 0
-        text: root.showCompleted ? qsTr("收起已完成")
-            : qsTr("已完成 ") + (root.taskStore ? root.taskStore.completedCount : 0) + qsTr(" 项 ›")
-        textSize: 10
-        buttonSize: 24
-        onClicked: root.showCompleted = !root.showCompleted
+    RowLayout {
+        Layout.fillWidth: true
+        visible: root.taskStore && (root.taskStore.completedCount > 0
+            || (root.showFocusButton && root.taskStore.inboxCount > 0))
+        IconButton {
+            visible: root.taskStore && root.taskStore.completedCount > 0
+            text: root.showCompleted ? qsTr("收起已完成")
+                : qsTr("已完成 ") + (root.taskStore ? root.taskStore.completedCount : 0) + qsTr(" 项 ›")
+            textSize: 10
+            buttonSize: 24
+            onClicked: root.showCompleted = !root.showCompleted
+        }
+        Item { Layout.fillWidth: true }
+        IconButton {
+            objectName: "compactInboxButton"
+            visible: root.showFocusButton && root.taskStore && root.taskStore.inboxCount > 0
+            text: qsTr("收集箱 ") + (root.taskStore ? root.taskStore.inboxCount : 0) + " ›"
+            textSize: 10
+            buttonSize: 24
+            onClicked: { root.closeComposer(); root.inboxRequested() }
+        }
     }
     Connections {
         target: root.taskStore

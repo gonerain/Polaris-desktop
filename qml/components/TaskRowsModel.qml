@@ -18,12 +18,12 @@ ListModel {
             while (found < count && get(found).identity !== identity) ++found
             if (found === count)
                 insert(i, {identity: identity, task: row.task, date: row.date,
-                    overdue: row.overdue, group: row.overdue ? "overdue" : row.date})
+                    overdue: row.overdue, group: row.overdue ? "overdue" : (row.date || "inbox")})
             else {
                 if (found !== i) move(found, i, 1)
                 setProperty(i, "date", row.date)
                 setProperty(i, "overdue", row.overdue)
-                setProperty(i, "group", row.overdue ? "overdue" : row.date)
+                setProperty(i, "group", row.overdue ? "overdue" : (row.date || "inbox"))
             }
         }
         if (count > rows.length) remove(rows.length, count - rows.length)

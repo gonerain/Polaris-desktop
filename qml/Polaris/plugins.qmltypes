@@ -62,6 +62,29 @@ Module {
         }
     }
     Component {
+        name: "TaskEntry"
+        prototype: "QObject"
+        exports: ["Polaris/TaskEntry 1.0"]
+        exportMetaObjectRevisions: [256]
+        isCreatable: false
+        Property { name: "entryId"; type: "int"; isReadonly: true }
+        Property { name: "title"; type: "QString"; isReadonly: true }
+        Property { name: "time"; type: "QString"; isReadonly: true }
+        Property { name: "done"; type: "bool"; isReadonly: true }
+        Property { name: "subtasks"; type: "QVariantList"; isReadonly: true }
+        Property { name: "subtaskCount"; type: "int"; isReadonly: true }
+        Property { name: "completedSubtaskCount"; type: "int"; isReadonly: true }
+        Method { name: "rename"; type: "bool"; Parameter { name: "title"; type: "QString" } }
+        Method { name: "setTime"; type: "bool"; Parameter { name: "value"; type: "QString" } }
+        Method { name: "setDone"; type: "bool"; Parameter { name: "done"; type: "bool" } }
+        Method { name: "addSubtask"; type: "QObject*"; Parameter { name: "title"; type: "QString" } }
+        Method { name: "removeSubtask"; type: "bool"; Parameter { name: "entry_id"; type: "int" } }
+        Property { name: "notes"; type: "QString"; isReadonly: true }
+        Property { name: "important"; type: "bool"; isReadonly: true }
+        Method { name: "setNotes"; type: "bool"; Parameter { name: "value"; type: "QString" } }
+        Method { name: "setImportant"; type: "bool"; Parameter { name: "value"; type: "bool" } }
+    }
+    Component {
         name: "CalendarTaskStore"
         prototype: "QObject"
         exports: ["Polaris/CalendarTaskStore 1.0"]
@@ -79,6 +102,7 @@ Module {
         Property { name: "weekCells"; type: "QVariantList"; isReadonly: true }
         Property { name: "weekLabel"; type: "QString"; isReadonly: true }
         Property { name: "overdueCount"; type: "int"; isReadonly: true }
+        Property { name: "inboxCount"; type: "int"; isReadonly: true }
         Property { name: "todayDate"; type: "QString"; isReadonly: true }
         Property { name: "allEntries"; type: "QVariantList"; isReadonly: true }
         Property { name: "canUndoDelete"; type: "bool"; isReadonly: true }
@@ -90,6 +114,17 @@ Module {
         Method { name: "undoDelete"; type: "bool" }
         Method { name: "refreshToday" }
         Method { name: "moveOverdueToToday"; type: "int" }
+        Method { name: "addInboxTask"; type: "QObject*"; Parameter { name: "title"; type: "QString" } }
+        Method {
+            name: "reorderToday"; type: "bool"
+            Parameter { name: "source_id"; type: "int" }
+            Parameter { name: "target_id"; type: "int" }
+        }
+        Method {
+            name: "finishDay"; type: "bool"
+            Parameter { name: "value"; type: "QString" }
+            Parameter { name: "decisions"; type: "QVariantList" }
+        }
         Method {
             name: "dateLabel"; type: "QString"
             Parameter { name: "value"; type: "QString" }
