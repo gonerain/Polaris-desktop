@@ -1,7 +1,8 @@
 import QtQuick
+import "../../assets/dsh-pet/Clips.js" as PetClips
 
-// Artwork and idle/wave sequence adapted from Er1c0v0/dsh-whale-pet.
-// See assets/whale/ATTRIBUTION.md (CC BY 4.0 artwork, MIT reference code).
+// PC2005-cloud/dsh-pet artwork: non-commercial, CC BY-NC-SA character.
+// Source, authors and conversion details: assets/dsh-pet/ATTRIBUTION.md.
 Item {
     id: root
 
@@ -13,113 +14,16 @@ Item {
     property bool ready: false
     property bool restingByRequest: false
     property string action: "idle"
-    property int frameIndex: 0
-    property real bobOffset: 0
     property real squash: 1
     property real dragLean: 0
     property double lastGreeting: 0
-    readonly property var clips: ({
-            idle: [
-                {
-                    name: "idle_pillow_awake",
-                    duration: 3400
-                },
-                {
-                    name: "idle_pillow_blink",
-                    duration: 130
-                },
-                {
-                    name: "idle_pillow_awake",
-                    duration: 2400
-                },
-                {
-                    name: "idle_pillow_blink",
-                    duration: 110
-                }
-            ],
-            wave: [
-                {
-                    name: "idle_pillow_awake",
-                    duration: 80
-                },
-                {
-                    name: "idle_pillow_wave_1",
-                    duration: 140
-                },
-                {
-                    name: "idle_pillow_wave_2",
-                    duration: 220
-                },
-                {
-                    name: "idle_pillow_wave_1",
-                    duration: 140
-                },
-                {
-                    name: "idle_pillow_awake",
-                    duration: 120
-                }
-            ],
-            drowsy: [
-                {
-                    name: "idle_pillow_drowsy",
-                    duration: 800
-                }
-            ],
-            sleep: [
-                {
-                    name: "idle_pillow_sleep",
-                    duration: 0
-                }
-            ],
-            wake: [
-                {
-                    name: "idle_pillow_startle",
-                    duration: 420
-                }
-            ],
-            drag: [
-                {
-                    name: "idle_pillow_startle",
-                    duration: 0
-                }
-            ],
-            drop: [
-                {
-                    name: "idle_pillow_blink",
-                    duration: 180
-                },
-                {
-                    name: "idle_pillow_awake",
-                    duration: 220
-                }
-            ],
-            complete: [
-                {
-                    name: "ready_0",
-                    duration: 130
-                },
-                {
-                    name: "ready_1",
-                    duration: 130
-                },
-                {
-                    name: "ready",
-                    duration: 280
-                },
-                {
-                    name: "ready_3",
-                    duration: 140
-                },
-                {
-                    name: "ready_4",
-                    duration: 280
-                }
-            ]
-        })
-    readonly property var clip: clips[action]
-    readonly property string frameName: clip[Math.min(frameIndex, clip.length - 1)].name
-    readonly property bool waving: action === "wave"
+    property double lastInteraction: Date.now()
+    property int activityIndex: 0
     property real lift: dragging && !reducedMotion ? -4 : 0
+    readonly property var clips: PetClips.clips
+    readonly property var clip: clips[action]
+    readonly property string frameName: active && !reducedMotion ? clip.file : "poster.webp"
+    readonly property bool waving: action === "wave"
 
     implicitWidth: 180
     implicitHeight: 180
@@ -130,6 +34,7 @@ Item {
     onDraggingChanged: {
         if (!ready || !active || reducedMotion)
             return;
+        lastInteraction = Date.now();
         if (dragging) {
             restingByRequest = false;
             settle.stop();
@@ -172,18 +77,20 @@ Item {
             }
         }
     }
-    Image {
+    AnimatedImage {
         id: mascot
         objectName: "petFrameImage"
         anchors.fill: parent
-        source: Qt.resolvedUrl("../../assets/whale/" + root.frameName + ".webp")
+        source: Qt.resolvedUrl("../../assets/dsh-pet/" + root.frameName)
+        playing: root.active && !root.reducedMotion && root.action !== "drop"
+        // Decode current frames rather than retaining whole decoded clips in RAM.
+        cache: false
         fillMode: Image.PreserveAspectFit
         smooth: true
         mipmap: true
-        cache: true
         transform: [
             Translate {
-                y: root.bobOffset + root.lift
+                y: root.lift
             },
             Rotation {
                 origin.x: root.width / 2
@@ -206,46 +113,33 @@ Item {
         onHoveredChanged: {
             if (!root.ready || !root.active || root.reducedMotion || root.dragging || root.restingByRequest)
                 return;
+            root.lastInteraction = Date.now();
             if (hovered) {
+                sleepTimer.stop();
+                activityTimer.stop();
                 if (root.action === "sleep" || root.action === "drowsy")
                     root.play("wake");
-                else
+                else if (root.action === "idle")
                     root.playWave();
             } else if (root.action === "idle")
-                sleepTimer.restart();
+                root.scheduleIdleTimers();
         }
     }
     Timer {
-        id: frameTimer
-        objectName: "petFrameTimer"
+        id: actionTimer
+        objectName: "petActionTimer"
         onTriggered: root.advanceFrame()
     }
     Timer {
         id: sleepTimer
         objectName: "petSleepTimer"
-        interval: 60000
-        onTriggered: root.rest()
+        onTriggered: if (!petHover.hovered)
+            root.rest(false)
     }
-    SequentialAnimation {
-        id: breathe
-        objectName: "petBreathingAnimation"
-        loops: Animation.Infinite
-        running: root.active && !root.reducedMotion && root.action !== "drag" && root.action !== "complete"
-        NumberAnimation {
-            target: root
-            property: "bobOffset"
-            from: 0
-            to: root.action === "sleep" ? -1 : -2
-            duration: 2400
-            easing.type: Easing.InOutSine
-        }
-        NumberAnimation {
-            target: root
-            property: "bobOffset"
-            to: 0
-            duration: 2400
-            easing.type: Easing.InOutSine
-        }
+    Timer {
+        id: activityTimer
+        objectName: "petActivityTimer"
+        onTriggered: root.playActivity(false)
     }
     SequentialAnimation {
         id: settle
@@ -272,10 +166,11 @@ Item {
 
     function reset() {
         restingByRequest = false;
-        frameTimer.stop();
+        lastInteraction = Date.now();
+        actionTimer.stop();
         sleepTimer.stop();
+        activityTimer.stop();
         settle.stop();
-        bobOffset = 0;
         squash = 1;
         dragLean = 0;
         if (reducedMotion)
@@ -286,17 +181,25 @@ Item {
             startIdle();
     }
     function play(name) {
-        frameTimer.stop();
+        actionTimer.stop();
         sleepTimer.stop();
+        activityTimer.stop();
         action = name;
-        frameIndex = 0;
-        scheduleFrame();
+        mascot.currentFrame = 0;
+        if (active && !reducedMotion && name !== "idle" && name !== "sleep" && name !== "drag") {
+            actionTimer.interval = clip.duration;
+            actionTimer.restart();
+        }
     }
-    function scheduleFrame() {
-        if (!active || reducedMotion || clip[frameIndex].duration === 0)
+    function scheduleIdleTimers() {
+        if (!active || reducedMotion || petHover.hovered || action !== "idle")
             return;
-        frameTimer.interval = clip[frameIndex].duration;
-        frameTimer.restart();
+        const remaining = Math.max(1, 60000 - (Date.now() - lastInteraction));
+        sleepTimer.interval = remaining;
+        sleepTimer.restart();
+        activityTimer.interval = 32000 + Math.round(Math.random() * 12000);
+        if (remaining > activityTimer.interval + 8000)
+            activityTimer.restart();
     }
     function startIdle() {
         if (celebrationPending && Date.now() > pendingUntil)
@@ -306,8 +209,7 @@ Item {
             return;
         }
         play("idle");
-        if (active && !reducedMotion && !petHover.hovered)
-            sleepTimer.restart();
+        scheduleIdleTimers();
     }
     function playWave(force) {
         if (!active || reducedMotion || dragging || action === "complete" || waving)
@@ -315,6 +217,7 @@ Item {
         if (force) {
             restingByRequest = false;
             lastGreeting = 0;
+            lastInteraction = Date.now();
         }
         if (action === "sleep" || action === "drowsy") {
             play("wake");
@@ -324,6 +227,18 @@ Item {
             return;
         lastGreeting = Date.now();
         play("wave");
+    }
+    function playActivity(manual) {
+        if (!active || reducedMotion || dragging || action === "complete")
+            return;
+        if (!manual && (petHover.hovered || action !== "idle"))
+            return;
+        if (manual)
+            lastInteraction = Date.now();
+        restingByRequest = false;
+        const actions = ["stretch", "puzzle", "glance"];
+        play(actions[activityIndex % actions.length]);
+        activityIndex += 1;
     }
     function rest(manual) {
         if (!active || reducedMotion || dragging || action === "complete")
@@ -351,13 +266,7 @@ Item {
             dragLean = Math.max(-6, Math.min(6, delta / 3));
     }
     function advanceFrame() {
-        if (frameIndex + 1 < clip.length) {
-            frameIndex += 1;
-            scheduleFrame();
-        } else if (action === "idle") {
-            frameIndex = 0;
-            scheduleFrame();
-        } else if (action === "drowsy")
+        if (action === "drowsy")
             play("sleep");
         else if (action === "wake") {
             lastGreeting = 0;

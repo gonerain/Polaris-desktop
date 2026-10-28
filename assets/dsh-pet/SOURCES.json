@@ -1,0 +1,108 @@
+{
+  "repository": "https://github.com/PC2005-cloud/dsh-pet",
+  "commit": "86181ce1660a57ab27336630bab5b344de71b28c",
+  "common_crop": "314:330:164:10",
+  "size": 256,
+  "clips": {
+    "idle": {
+      "file": "dsh-pet/assets/webm/待机呼吸休闲.webm",
+      "sha256": "deb965d05a85dacf5ff4a20faa757846f0d11679598c3ec578a5571487660395",
+      "start": 0,
+      "seconds": 10,
+      "fps": 8,
+      "frames": 80,
+      "duration": 10000,
+      "output_sha256": "40f78b338296d9ca9417802d878013bc86a96480d0c90d5578b1fad57db81798"
+    },
+    "wave": {
+      "file": "dsh-pet/assets/webm/点击回应-元气挥手.webm",
+      "sha256": "48cd729ccdcf746369942ea954d242e9afdd5643e1dac3827fa5e67450eb8776",
+      "start": 1.3,
+      "seconds": 2.5,
+      "fps": 12,
+      "frames": 30,
+      "duration": 2499,
+      "output_sha256": "4d05f61e4090c889104cfef5f3f7600de37c459633d5d169e92a89b0f7a5d864"
+    },
+    "drowsy": {
+      "file": "dsh-pet/assets/webm/哈欠连天.webm",
+      "sha256": "2b23372e1ff2bc2f9078c09740708c960d4ea021f9fc3cca294d9df11e393ec8",
+      "start": 0.7,
+      "seconds": 3.2,
+      "fps": 10,
+      "frames": 32,
+      "duration": 3200,
+      "output_sha256": "086a13cba00f6877a1e294c14ecf72faedddc948bdf7467ac392012408d6a613"
+    },
+    "sleep": {
+      "file": "dsh-pet/assets/webm/原地小憩沉眠.webm",
+      "sha256": "31d4a6b36a29b2a4fe097384173d3bbeb3fa2f40f526b13191791456bf7507a1",
+      "start": 2.5,
+      "seconds": 6,
+      "fps": 6,
+      "frames": 36,
+      "duration": 5999,
+      "output_sha256": "7e398dba4eda8d6e6a508c6b930a2c44ce4b428b8cfd9558f115650dd6c7c125"
+    },
+    "wake": {
+      "file": "dsh-pet/assets/webm/打瞌睡被惊醒.webm",
+      "sha256": "7e10c87cfcbd63b20b5a3787be71b0500381d54ea04a5ac0e9d99f59ed49a6d7",
+      "start": 4,
+      "seconds": 2.2,
+      "fps": 12,
+      "frames": 26,
+      "duration": 2166,
+      "output_sha256": "99d17b85950a4f33221e1eda506b81db316371158d53bde428db2978fe1afed9"
+    },
+    "drag": {
+      "file": "dsh-pet/assets/webm/被鼠标拖拽悬空反馈.webm",
+      "sha256": "31373a86026636eecc890db763760309360310eb095cf5575b13c9ca2a6cc80e",
+      "start": 1,
+      "seconds": 4,
+      "fps": 8,
+      "frames": 32,
+      "duration": 4000,
+      "output_sha256": "d07b1e340d029966f39b53afaa6e34ed10a6a0da0f195684f86cca7fda0383c9"
+    },
+    "complete": {
+      "file": "dsh-pet/assets/webm/工作状态-雀跃庆祝.webm",
+      "sha256": "3ff681051a0bb4f152d7535d64b7f3194c30298bf56d41e521216a278f135d3e",
+      "start": 1.5,
+      "seconds": 3,
+      "fps": 12,
+      "frames": 36,
+      "duration": 2999,
+      "output_sha256": "a83e196da0a14e717f654f6df11b95890172e5ea1470fb0e558835cee697c68c"
+    },
+    "stretch": {
+      "file": "dsh-pet/assets/webm/超大伸懒腰.webm",
+      "sha256": "0ac66d918cc5efd49be1273c3830de73eae5f9bdcd5fcb968d1b2f9b487705ad",
+      "start": 1,
+      "seconds": 7,
+      "fps": 10,
+      "frames": 70,
+      "duration": 7000,
+      "output_sha256": "1ad9fa13bf8e07ef61b6a546b684b5fcd079ffe9b8021a9451966b0247f2f884"
+    },
+    "puzzle": {
+      "file": "dsh-pet/assets/webm/原地专心玩魔方.webm",
+      "sha256": "ad54da175ba86b19a84b73b3169fb418b2df016560bb274283f200aca351e712",
+      "start": 0,
+      "seconds": 8,
+      "fps": 10,
+      "frames": 80,
+      "duration": 8000,
+      "output_sha256": "b32fb924eb6401ea5ddf53010c4c87de2fbbdd76248000fcc23faa96770f7b88"
+    },
+    "glance": {
+      "file": "dsh-pet/assets/webm/东张西望.webm",
+      "sha256": "a20ed02ccc5e72075a3ca83fabb57d9aac5ded699f52d00ec6de72069799fcd5",
+      "start": 0,
+      "seconds": 5,
+      "fps": 10,
+      "frames": 50,
+      "duration": 5000,
+      "output_sha256": "0f92a473e52098d1845d7d32261d689531ec39dc1a24c7de16109a13324ac03a"
+    }
+  }
+}

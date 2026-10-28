@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 def create_tray(app, window, coordinator, data_directory):
     if not QSystemTrayIcon.isSystemTrayAvailable():
         return None
-    icon = QIcon(str(Path(__file__).resolve().parent.parent / "assets/whale/idle_pillow_awake.webp"))
+    icon = QIcon(str(Path(__file__).resolve().parent.parent / "assets/dsh-pet/poster.webp"))
     tray = QSystemTrayIcon(icon, app)
     tray.setToolTip("Polaris · 日程")
     menu = QMenu()

@@ -1,8 +1,8 @@
 # Polaris
 
-轻量桌宠式悬浮日程，Python + PySide6 / Qt Quick。点击鲸鱼打开日程，右键或托盘菜单退出。
+轻量桌宠式悬浮日程，Python + PySide6 / Qt Quick。点击鲸鱼娘打开日程，右键或托盘菜单退出。
 
-- 桌宠支持眨眼、挥手、打盹/睡眠、惊醒、拖起/落定和完成庆祝；右键可休息或减少动态，不加养成系统。
+- 当前使用 dsh-pet 女仆鲸鱼娘：呼吸待机、挥手、哈欠/睡眠、惊醒、悬空拖动、庆祝，以及伸懒腰、玩魔方、东张西望；右键可换个小动作、休息或减少动态，不加养成系统。
 - 紧凑面板默认“我的一天”，支持任务、时间、子任务、完成勾选，以及按需查看月历。
 - `↗` 打开任务工作台：我的一天、任务库、周/月计划和完成记录；紧凑任务行、按需详情、全局搜索和点选改期。
 - 收集箱可先记录、不选日期；我的一天支持重点星标和拖动排序，详情里按需写下一步笔记。
@@ -25,4 +25,12 @@ py -3.13 -m venv .venv
 
 参见 [组件协议](docs/component-board.md) 和 [日程设计、存储恢复及已知边界](docs/schedule-design.md)。当前没有云同步、重复任务或程序关闭后的后台提醒。
 
-鲸鱼娘素材来自 [Er1c0v0/dsh-whale-pet](https://github.com/Er1c0v0/dsh-whale-pet)，采用 **CC BY 4.0**；参考动画代码为 **MIT**。署名、修改说明和完整协议随包附于 [assets/whale/ATTRIBUTION.md](assets/whale/ATTRIBUTION.md)。其他桌宠的授权取舍与行为边界见 [桌宠设计](docs/pet-design.md)。
+## 素材与非商业使用限制
+
+当前动画选自 **[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)**。上游动画素材允许开源使用、**禁止商用**，角色及本包转换后的素材遵守 **CC BY-NC-SA 4.0（署名、非商业、相同方式共享）**。角色原型作者为上善无形，女仆鲸鱼娘设计为 ZipZipPipe；不是 DeepSeek 官方形象。
+
+**不能将包含这套素材的发布包直接用于收费、广告变现等商业用途。** 商用前须更换为已获适当授权的素材，或另行取得完整授权。代码 MIT 不等于美术素材 MIT；素材限制不自动给整个代码库更换许可。
+
+署名、固定来源、修改记录及许可随发布包附于 [assets/dsh-pet/ATTRIBUTION.md](assets/dsh-pet/ATTRIBUTION.md)。[桌宠设计](docs/pet-design.md) 说明动作与性能边界；`tools/import_dsh_pet.py` 可从固定提交的原始透明视频重建素材，FFmpeg 仅构建时需要。
+
+此前 Er1c0v0 的素材与许可保留在 `assets/whale/`，当前不启用，也不随新发布包打包。

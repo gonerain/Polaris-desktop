@@ -256,6 +256,13 @@ Window {
                 onTriggered: petMascot.playWave(true)
             }
             MenuItem {
+                objectName: "petActivityMenuItem"
+                text: qsTr("换个小动作")
+                font.pixelSize: 12
+                enabled: window.compact && !window.reducedPetMotion
+                onTriggered: petMascot.playActivity(true)
+            }
+            MenuItem {
                 objectName: "petRestMenuItem"
                 text: qsTr("休息一下")
                 font.pixelSize: 12
@@ -271,9 +278,9 @@ Window {
                 onTriggered: window.reducedPetMotion = checked
             }
             MenuItem {
-                text: qsTr("素材与协议…")
+                text: qsTr("素材协议 · 非商用")
                 font.pixelSize: 12
-                onTriggered: Qt.openUrlExternally("https://github.com/Er1c0v0/dsh-whale-pet/blob/2e10c80abecfb66e599dac82609295659c3657de/ASSET_ATTRIBUTION.md")
+                onTriggered: Qt.openUrlExternally("https://github.com/PC2005-cloud/dsh-pet/blob/86181ce1660a57ab27336630bab5b344de71b28c/README.md#%E8%AE%B8%E5%8F%AF")
             }
             MenuSeparator {}
             MenuItem {
