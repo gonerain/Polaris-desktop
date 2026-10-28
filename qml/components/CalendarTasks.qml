@@ -25,18 +25,14 @@ Rectangle {
             store.goToday()
         }
     }
-    readonly property var taskStore: store
+    required property var taskStore
+    readonly property var store: taskStore
     signal dragActiveChanged(bool active)
     signal focusRequested(var factory, var options, var properties)
 
     Component {
         id: fullViewFactory
         CalendarFocusView { }
-    }
-
-    CalendarTaskStore {
-        id: store
-        objectName: "calendarTaskStore"
     }
 
     StoreStatus {

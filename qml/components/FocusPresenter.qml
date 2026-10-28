@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls.Basic
 
 // A window-level presentation layer, deliberately independent of panel allocation.
 Item {

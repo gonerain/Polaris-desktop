@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls.Basic
 import Polaris 1.0
 import "components"
 import "components/Theme.js" as Theme
@@ -46,6 +45,8 @@ Window {
     property bool moving: false
     property bool applyingState: false
     property bool collapsing: false
+    readonly property bool contextMenuVisible: popupLoader.item ? popupLoader.item.menuVisible : false
+    readonly property bool quitConfirmationVisible: popupLoader.item ? popupLoader.item.quitVisible : false
     property int editorPopupCount: 0
     onEditorPopupCountChanged: {
         if (editorPopupCount > 0) {
@@ -62,7 +63,11 @@ Window {
         lastPetX = x
     }
     property bool allowQuit: false
-    property var calendarStore: null
+    readonly property var calendarStore: calendarModel
+    CalendarTaskStore {
+        id: calendarModel
+        objectName: "calendarTaskStore"
+    }
     property real expandedWidth: 528
     property real expandedHeight: 300 + navigationHeight
 
@@ -78,7 +83,7 @@ Window {
         root.forceActiveFocus()
         if (calendarStore && calendarStore.storageError && !calendarStore.retrySave()) {
             autoCollapse.stop()
-            unsavedQuitDialog.open()
+            ensurePopups().confirmQuit()
             return
         }
         finishQuit()
@@ -108,7 +113,30 @@ Window {
         return true
     }
 
+    function ensurePopups() {
+        if (!popupLoader.source.toString())
+            popupLoader.setSource("components/ShellPopups.qml", {shell: window, pet: petMascot, presenter: focusPresenter})
+        return popupLoader.item
+    }
+
+    function pauseAutoCollapse() { autoCollapse.stop() }
+    function resumeAutoCollapse() {
+        if (!compact && !windowHover.hovered && !focusPresenter.busy) autoCollapse.restart()
+    }
+
+    function setWorkspaceMoving(active, nativeMove) {
+        moving = active
+        if (active && nativeMove) startSystemMove()
+        else if (!active && !windowHover.hovered && !compact) autoCollapse.restart()
+    }
+
     function expand() {
+        if (!expandedContent.source.toString()) {
+            expandedContent.setSource("components/Workspace.qml", {
+                shell: window, presenter: focusPresenter, taskStore: calendarStore,
+                agentHub: agentHub, componentApi: componentApi
+            })
+        }
         if (!compact) {
             if (collapsing)
                 cancelCollapse()
@@ -126,7 +154,7 @@ Window {
     }
 
     function collapse() {
-        if (compact || collapsing || focusPresenter.busy || unsavedQuitDialog.visible || editorPopupCount > 0)
+        if (compact || collapsing || focusPresenter.busy || quitConfirmationVisible || editorPopupCount > 0)
             return
         autoCollapse.stop()
         root.forceActiveFocus()
@@ -292,127 +320,13 @@ Window {
             acceptedButtons: Qt.RightButton
 
             onSingleTapped: function(eventPoint, button) {
-                contextMenu.popup(eventPoint.position)
+                window.ensurePopups().popup(eventPoint.position)
             }
         }
 
-        Dialog {
-            id: unsavedQuitDialog
-            objectName: "unsavedQuitDialog"
-            anchors.centerIn: parent
-            popupType: Popup.Window
-            modal: true
-            width: 360
-            title: qsTr("日程尚未保存")
-            standardButtons: Dialog.Discard | Dialog.Cancel
-            onOpened: {
-                standardButton(Dialog.Discard).text = qsTr("仍然退出")
-                standardButton(Dialog.Cancel).text = qsTr("返回")
-            }
-            Label {
-                width: parent.width
-                text: qsTr("保存失败，退出会丢失尚未写入的修改。建议返回后重试保存或备份数据。")
-                wrapMode: Text.Wrap
-            }
-            onDiscarded: window.finishQuit()
-        }
-
-        Menu {
-            id: contextMenu
-            objectName: "quitMenu"
-            parent: root
-            // A window popup cannot be clipped by the 180px transparent pet.
-            popupType: Popup.Window
-            // Custom backgrounds have no implicit size: explicitly size the menu,
-            // otherwise the list can collapse to padding-only (8px) on Windows.
-            implicitWidth: 152
-            padding: 4
-            onOpened: autoCollapse.stop()
-            onClosed: {
-                if (!window.compact && !windowHover.hovered && !focusPresenter.busy)
-                    autoCollapse.restart()
-            }
-
-            background: Rectangle {
-                color: Theme.surface
-                radius: 8
-                border.width: 1
-                border.color: Theme.border
-            }
-
-            MenuItem {
-                objectName: "agentPageMenuItem"
-                text: qsTr("Agent 会话") + (window.agentHub && window.agentHub.unreadCount ? " · " + window.agentHub.unreadCount : "")
-                font.pixelSize: 12
-                enabled: !focusPresenter.transitioning
-                onTriggered: window.showPage("agents")
-            }
-            MenuItem {
-                text: qsTr("打开日程")
-                font.pixelSize: 12
-                enabled: !focusPresenter.transitioning
-                onTriggered: window.showPage("calendar")
-            }
-            MenuSeparator {}
-            MenuItem {
-                objectName: "petGreetMenuItem"
-                text: qsTr("打个招呼")
-                font.pixelSize: 12
-                enabled: window.compact
-                onTriggered: {
-                    window.showSpeech(qsTr("Hi！👋"), 6500)
-                    if (!window.reducedPetMotion) petMascot.playWave(true)
-                }
-            }
-            MenuItem {
-                objectName: "petActivityMenuItem"
-                text: qsTr("换个小动作")
-                font.pixelSize: 12
-                enabled: window.compact && !window.reducedPetMotion
-                onTriggered: petMascot.playActivity(true)
-            }
-            MenuItem {
-                objectName: "petRestMenuItem"
-                text: qsTr("休息一下")
-                font.pixelSize: 12
-                enabled: window.compact && !window.reducedPetMotion
-                onTriggered: petMascot.rest(true)
-            }
-            MenuItem {
-                objectName: "petMotionMenuItem"
-                text: qsTr("减少动态")
-                font.pixelSize: 12
-                checkable: true
-                checked: window.reducedPetMotion
-                onTriggered: window.reducedPetMotion = checked
-            }
-            MenuItem {
-                text: qsTr("素材协议 · 非商用")
-                font.pixelSize: 12
-                onTriggered: Qt.openUrlExternally("https://github.com/PC2005-cloud/dsh-pet/blob/86181ce1660a57ab27336630bab5b344de71b28c/README.md#%E8%AE%B8%E5%8F%AF")
-            }
-            MenuSeparator {}
-            MenuItem {
-                id: quitItem
-                objectName: "quitMenuItem"
-                text: qsTr("退出")
-                implicitWidth: 144
-                implicitHeight: 30
-
-                contentItem: Text {
-                    text: quitItem.text
-                    color: Theme.danger
-                    font.pixelSize: 12
-                    verticalAlignment: Text.AlignVCenter
-                }
-
-                background: Rectangle {
-                    radius: 6
-                    color: quitItem.hovered ? "#FEF2F2" : "transparent"
-                }
-
-                onTriggered: window.requestQuit()
-            }
+        Loader {
+            id: popupLoader
+            anchors.fill: parent
         }
 
         HoverHandler {
@@ -423,13 +337,13 @@ Window {
                     autoCollapse.stop()
                     if (window.collapsing)
                         window.cancelCollapse()
-                } else if (!window.compact && !window.moving && !window.collapsing && !contextMenu.visible && window.editorPopupCount === 0) {
+                } else if (!window.compact && !window.moving && !window.collapsing && !window.contextMenuVisible && window.editorPopupCount === 0) {
                     autoCollapse.restart()
                 }
             }
         }
 
-        Item {
+        Loader {
             id: expandedContent
             objectName: "expandedContent"
             width: window.compact ? window.expandedWidth : window.width
@@ -449,94 +363,6 @@ Window {
                 NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic }
             }
 
-            Rectangle {
-                width: parent.width
-                height: window.navigationHeight
-                radius: 8
-                color: Theme.surface
-                border.color: Theme.border
-                DragHandler {
-                    objectName: "componentNavigationDrag"
-                    target: null
-                    acceptedButtons: Qt.LeftButton
-                    onActiveChanged: {
-                        window.moving = active
-                        if (active) window.startSystemMove()
-                        else if (!windowHover.hovered && !window.compact) autoCollapse.restart()
-                    }
-                }
-            }
-            Row {
-                height: window.navigationHeight
-                spacing: 4
-                enabled: !focusPresenter.busy
-                Button {
-                    id: calendarNavigation
-                    objectName: "calendarPageButton"
-                    text: qsTr("日程")
-                    height: window.navigationHeight - 2
-                    width: 72
-                    background: Rectangle { radius: 7; color: window.selectedPage === "calendar" ? Theme.primarySoft : Theme.surface }
-                    contentItem: Text {
-                        text: calendarNavigation.text
-                        font.pixelSize: 12
-                        color: window.selectedPage === "calendar" ? Theme.primary : Theme.muted
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    font.pixelSize: 12
-                    onClicked: window.showPage("calendar")
-                }
-                Button {
-                    id: agentNavigation
-                    objectName: "agentPageButton"
-                    text: qsTr("Agent") + (window.agentHub && window.agentHub.unreadCount ? " · " + window.agentHub.unreadCount : "")
-                    height: window.navigationHeight - 2
-                    width: 100
-                    background: Rectangle { radius: 7; color: window.selectedPage === "agents" ? Theme.primarySoft : Theme.surface }
-                    contentItem: Text {
-                        text: agentNavigation.text
-                        font.pixelSize: 12
-                        color: window.selectedPage === "agents" ? Theme.primary : Theme.muted
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    font.pixelSize: 12
-                    onClicked: window.showPage("agents")
-                }
-            }
-
-            AgentPanel {
-                objectName: "agentPanel"
-                x: 0
-                y: window.navigationHeight
-                width: parent.width
-                height: parent.height - window.navigationHeight
-                visible: window.selectedPage === "agents"
-                hub: window.agentHub
-                components: window.componentApi
-            }
-
-            ComponentBoard {
-                id: board
-                objectName: "componentBoard"
-                width: focusPresenter.busy ? focusPresenter.savedGeometry.width : parent.width
-                y: window.navigationHeight
-                height: (focusPresenter.busy ? focusPresenter.savedGeometry.height : parent.height) - window.navigationHeight
-                visible: window.selectedPage === "calendar"
-                presenter: focusPresenter
-                panelSize: Qt.size(260, 260)
-                panelCount: 2
-                gap: 8
-            }
-
-            WindowResizeHandles {
-                objectName: "resizeHandles"
-                z: 10
-                anchors.fill: parent
-                targetWindow: window
-                enabled: !window.collapsing && !focusPresenter.busy
-            }
         }
 
         Rectangle {
@@ -648,27 +474,4 @@ Window {
         }
     }
 
-    Component {
-        id: calendarFactory
-        CalendarTasks {
-            objectName: "calendarTasks"
-
-            onFocusRequested: function(factory, options, properties) {
-                board.presentItem(this, factory, options, properties)
-            }
-            onDragActiveChanged: function(active) {
-                window.moving = active
-                if (!active && !windowHover.hovered && !window.compact && !window.collapsing)
-                    autoCollapse.restart()
-            }
-        }
-    }
-
-    Component.onCompleted: {
-        const calendar = board.request(calendarFactory, {cells: [[0, 0], [1, 0]]})
-        if (!calendar.ok)
-            console.error("初始化画板失败", calendar.error)
-        else
-            window.calendarStore = calendar.item.taskStore
-    }
 }
