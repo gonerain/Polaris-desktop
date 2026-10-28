@@ -16,12 +16,14 @@ pi install PATH_TO_POLARIS/integrations
 只试用一次可运行 `pi -e PATH_TO_POLARIS/integrations/pi/polaris.ts`。
 已有会话安装后执行 `/reload`，新会话自动加载；未加载插件的旧会话不会被扫描出来。
 
+- 每轮结束后，桌宠自动弹出「会话标题」的会话结束了；**不需要模型调用工具或授权桌宠组件**。
+  Pi 使用 `agent_settled`，不是中途可能继续执行的 `agent_end`。断线不提醒，重复事件只提醒一次。
 - `/polaris`：查看连接状态；`/polaris connect` 可立即再试连接。
 - `polaris_components`：发现组件；`polaris_help`：查询用法；`polaris_call`：按 help 调用。
 - 进入 Polaris 的 Agent 页，按连接和组件授予只读或修改权限。默认拒绝数据访问。
   断线重连和 reload 后授权清空；不会自动把日程加入模型上下文。
 
-### 让桌宠弹文字气泡
+### 可选：主动让桌宠发言（不是结束提醒所必需）
 
 先在 Agent 页为当前连接的“桌宠”选择“允许修改”，再查询 `polaris_help({component:"pet"})`，
 使用 `polaris_call({component:"pet",operation:"say",args:{text:"Hi！👋",durationMs:6500}})`。

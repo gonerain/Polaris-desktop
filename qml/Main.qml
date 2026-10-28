@@ -41,6 +41,7 @@ Window {
     property bool windowPositioningSupported: true
     property bool nativeNotificationsAvailable: false
     property string inlineReminderText: ""
+    property double speechExpiresAt: 0
     property bool compact: true
     property bool moving: false
     property bool applyingState: false
@@ -144,6 +145,10 @@ Window {
         width = compactSize
         height = compactSize
         applyingState = false
+        if (inlineReminderTimer.running && speechExpiresAt > Date.now()) {
+            inlineReminderTimer.stop()
+            showBubble(inlineReminderText, Math.max(1, speechExpiresAt - Date.now()))
+        }
     }
 
     function cancelCollapse() {
@@ -154,6 +159,7 @@ Window {
     }
 
     function showSpeech(message, durationMs) {
+        speechExpiresAt = Date.now() + durationMs
         if (compact) {
             showBubble(message, durationMs)
             return "bubble"
@@ -214,10 +220,8 @@ Window {
     Connections {
         target: window.agentHub
         function onCompleted(message) {
-            // No pet response, forced page switch or focus change.
-            if (!window.nativeNotificationsAvailable && !window.compact) {
-                window.showSpeech(message, 6500)
-            }
+            // A lifecycle event, not a model tool call. Never steals focus or changes pages.
+            window.showSpeech(message, 6500)
         }
     }
 

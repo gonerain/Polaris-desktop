@@ -58,6 +58,7 @@ export default function (pi: ExtensionAPI) {
     });
     pi.on("agent_settled", event => {
         if (!context || !runId) return;
+        snapshot(); // Refresh the native session title before reporting settlement.
         outcome = event.aborted || lastStop === "aborted" ? "cancelled"
             : lastStop === "error" ? "failed" : lastStop === "stop" ? "ended" : "unknown";
         client?.event("run.ended", { sessionId: sessionId(), runId, outcome });
@@ -75,7 +76,7 @@ export default function (pi: ExtensionAPI) {
         description: "查看 Polaris 连接状态（connect 可重新尝试连接）",
         handler: async (args, ctx) => {
             if (args.trim() === "connect") void client?.connect();
-            if (ctx.hasUI) ctx.ui.notify(client?.ready ? "Polaris 已连接；组件数据访问需在 Agent 页授权"
+            if (ctx.hasUI) ctx.ui.notify(client?.ready ? "Polaris 已连接；结束气泡自动触发，只有组件工具访问需要授权"
                 : "Polaris 未连接：" + (client?.lastError || "正在连接，请稍后重试")
                   + "。请打开 Polaris，检查端点或 POLARIS_RELAY", "info");
         },

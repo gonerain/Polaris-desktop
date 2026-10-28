@@ -87,7 +87,7 @@ def main() -> int:
     engine = create_engine(storage_path=data_directory / "tasks.json")
     window = engine.rootObjects()[0]
     coordinator = window.findChild(QObject, "interactionCoordinator")
-    tray = create_tray(app, window, coordinator, data_directory, engine._agents)
+    tray = create_tray(app, window, coordinator, data_directory)
     window.setProperty("nativeNotificationsAvailable",
                        tray is not None and QSystemTrayIcon.supportsMessages())
     # All reminder subscribers must exist before attach() emits its first check.

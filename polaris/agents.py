@@ -135,7 +135,10 @@ class AgentHub(QObject):
             self._results.insert(0, {"text": message, "time": datetime.now().strftime("%H:%M"), "unread": True})
             del self._results[10:]
             self.changed.emit()
-            self.completed.emit(message)
+            title = " ".join(row["name"].split())
+            if len(title) > 24:
+                title = title[:24] + "…"
+            self.completed.emit(f"「{title}」的会话结束了")
         else:
             raise ApiError("unknown_event", "未知会话事件")
 
