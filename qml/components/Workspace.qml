@@ -14,13 +14,13 @@ Item {
     property var agentHandle: null
     readonly property var componentBoard: board
 
-    function requestComponent(url, cells, properties) {
+    function requestComponent(url, cells, properties, title) {
         const factory = Qt.createComponent(url)
         if (factory.status !== Component.Ready) {
             console.error("组件加载失败", url, factory.errorString())
             return null
         }
-        const handle = board.request(factory, {cells: cells}, properties)
+        const handle = board.request(factory, {cells: cells, title: title}, properties)
         if (!handle.ok) {
             console.error("组件申请 cell 失败", url, handle.error)
             return null
@@ -37,7 +37,7 @@ Item {
 
     Component.onCompleted: {
         calendarHandle = requestComponent("CalendarTasks.qml", [[0, 0], [1, 0]],
-            {taskStore: taskStore, objectName: "calendarTasks"})
+            {taskStore: taskStore, objectName: "calendarTasks"}, qsTr("日程"))
         if (calendarHandle) {
             calendarHandle.item.focusRequested.connect(function(factory, options, properties) {
                 board.presentItem(calendarHandle.item, factory, options, properties)
@@ -48,7 +48,7 @@ Item {
         }
         agentHandle = requestComponent("AgentPanel.qml", [[0, 0]],
             {hub: agentHub, components: componentApi, objectName: "agentPanel",
-             obscured: Qt.binding(function() { return workspace.presenter.busy })})
+             obscured: Qt.binding(function() { return workspace.presenter.busy })}, qsTr("Agent"))
         if (agentHandle) {
             agentHandle.item.expandRequested.connect(openAgentDetails)
             agentHandle.item.dragActiveChanged.connect(function(active) {
@@ -66,12 +66,15 @@ Item {
         panelSize: Qt.size(260, 260)
         panelCount: 4
         gap: 8
+        interactionsEnabled: !workspace.shell.editorPopupCount && !workspace.shell.quitConfirmationVisible
+                             && !workspace.shell.collapsing
+        onDraggingChanged: workspace.shell.setWorkspaceMoving(dragging, false)
     }
     WindowResizeHandles {
         objectName: "resizeHandles"
         z: 10
         anchors.fill: parent
         targetWindow: workspace.shell
-        enabled: !workspace.shell.collapsing && !workspace.presenter.busy
+        enabled: !workspace.shell.collapsing && !workspace.presenter.busy && !board.dragging
     }
 }

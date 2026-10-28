@@ -18,6 +18,10 @@ Item {
     property var _handles: ({})
     // The presenter belongs to the window, not the allocator.
     property var presenter: null
+    property bool interactionsEnabled: true
+    property bool dragging: false
+    readonly property bool layoutLocked: !interactionsEnabled || (presenter && presenter.busy)
+    readonly property int chromeHeight: 32
 
     function present(handle, factory, options, properties): bool {
         if (!presenter || !handle || _handles[String(handle.id)] !== handle)
@@ -63,7 +67,8 @@ Item {
             return allocation
         let host = null
         try {
-            host = hostFactory.createObject(board, {allocation: allocation, board: board}) as ComponentHost
+            host = hostFactory.createObject(board, {allocation: allocation, board: board,
+                                                   caption: options && options.title ? options.title : "组件"}) as ComponentHost
             if (!host || !host.instantiate(factory, properties))
                 throw new Error("组件创建失败，根对象必须是 Item")
             const handle = {ok: true, id: allocation.id, item: host.componentItem, allocation: allocation, host: host}
@@ -79,6 +84,45 @@ Item {
         }
     }
 
+    function move(handle, column, row): bool {
+        if (layoutLocked || !handle || _handles[String(handle.id)] !== handle
+                || !Number.isInteger(column) || !Number.isInteger(row) || column < 0 || row < 0)
+            return false
+        const result = allocator.relocate(handle.id, column, row, true)
+        if (!result.ok) return false
+        for (const allocation of result.allocations) {
+            const moved = _handles[String(allocation.id)]
+            moved.allocation = allocation
+            moved.host.allocation = allocation
+        }
+        return true
+    }
+
+    function setMinimized(handle, minimized): bool {
+        if (layoutLocked || dragging || typeof minimized !== "boolean"
+                || !handle || _handles[String(handle.id)] !== handle)
+            return false
+        handle.host.forceActiveFocus()
+        handle.host.minimized = !!minimized
+        return true
+    }
+
+    function handleFor(host) {
+        return _handles[String(host.allocation.id)]
+    }
+
+    function finishDrag(host): bool {
+        const centerX = host.x + host.width / 2
+        const centerY = host.y + host.height / 2
+        if (centerX < 0 || centerY < 0 || centerX >= width || centerY >= height)
+            return false
+        const column = Math.max(0, Math.min(columns - host.spanX,
+                                           Math.round(host.x / (cellWidth + gap))))
+        const row = Math.max(0, Math.min(rows - host.spanY,
+                                        Math.round(host.y / (cellHeight + gap))))
+        return move(handleFor(host), column, row)
+    }
+
     function regionsFor(cells, cellWidth, cellHeight, gap): var {
         return allocator ? allocator.regionsFor(cells, cellWidth, cellHeight, gap) : []
     }
@@ -86,7 +130,7 @@ Item {
     function release(handle: var): bool {
         if (!handle || _handles[String(handle.id)] !== handle)
             return false
-        if (presenter && presenter.busy && presenter.sourceHandle === handle)
+        if (handle.host.dragging || (presenter && presenter.busy && presenter.sourceHandle === handle))
             return false
         delete _handles[String(handle.id)]
         handle.host.visible = false

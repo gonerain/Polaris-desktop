@@ -1,6 +1,6 @@
 """与 Qt 无关的 panel 分配、形状和像素区域计算。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite, isqrt
 from numbers import Real
 
@@ -171,6 +171,50 @@ class PanelAllocator:
                 self._occupied.update({cell: allocation.id for cell in absolute})
                 return allocation
         return None
+
+    def move(self, allocation_id: int, column: int, row: int, *, swap=True):
+        """Atomically relocate, optionally exchanging with exactly one other shape."""
+        if type(swap) is not bool:
+            raise ValueError("swap 必须是布尔值")
+        if any(type(value) is not int or value < 0 for value in (allocation_id, column, row)):
+            raise ValueError("分配 ID 和目标 cell 必须是非负整数")
+        source = self._allocations.get(allocation_id)
+        if source is None:
+            return None
+
+        def cells_at(allocation, origin):
+            cells = {(origin[0] + x, origin[1] + y) for x, y in allocation.cells}
+            if any(x >= self.columns or y >= self.rows or y * self.columns + x >= self.panel_count
+                   for x, y in cells):
+                return None
+            return cells
+
+        target = column, row
+        destination = cells_at(source, target)
+        if destination is None:
+            return None
+        collisions = {self._occupied[cell] for cell in destination
+                      if cell in self._occupied and self._occupied[cell] != allocation_id}
+        origins = {allocation_id: target}
+        if collisions:
+            if not swap or len(collisions) != 1:
+                return None
+            other_id = next(iter(collisions))
+            origins[other_id] = source.origin
+        occupied = {cell: owner for cell, owner in self._occupied.items() if owner not in origins}
+        changed = []
+        for identity, origin in origins.items():
+            allocation = self._allocations[identity]
+            cells = cells_at(allocation, origin)
+            if cells is None or any(cell in occupied for cell in cells):
+                return None
+            occupied.update({cell: identity for cell in cells})
+            changed.append(replace(allocation, origin=origin,
+                                   x=origin[0] * (self.panel_size[0] + self.gap),
+                                   y=origin[1] * (self.panel_size[1] + self.gap)))
+        self._occupied = occupied
+        self._allocations.update({allocation.id: allocation for allocation in changed})
+        return tuple(changed)
 
     def release(self, allocation_id: int) -> bool:
         if isinstance(allocation_id, bool) or not isinstance(allocation_id, int):

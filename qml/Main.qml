@@ -33,7 +33,7 @@ Window {
     // Updated from QScreen.availableGeometry(), including taskbar offsets.
     property rect availableGeometry: Qt.rect(0, 0, 0, 0)
     readonly property int expandedMinimumWidth: Math.min(528, availableGeometry.width || 528)
-    readonly property int expandedMinimumHeight: Math.min(608, availableGeometry.height || 608)
+    readonly property int expandedMinimumHeight: Math.min(672, availableGeometry.height || 672)
     // Supplied before creation by the host, based on the actual Qt platform.
     property bool windowPositioningSupported: true
     property bool nativeNotificationsAvailable: false
@@ -67,7 +67,7 @@ Window {
         objectName: "calendarTaskStore"
     }
     property real expandedWidth: 528
-    property real expandedHeight: 608
+    property real expandedHeight: 672
 
     onClosing: function(close) {
         // Even a blocked close request must commit the currently edited field.

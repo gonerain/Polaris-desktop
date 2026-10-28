@@ -43,6 +43,13 @@ Module {
             Parameter { name: "allocation_id"; type: "int" }
         }
         Method {
+            name: "relocate"; type: "QVariantMap"
+            Parameter { name: "allocation_id"; type: "int" }
+            Parameter { name: "column"; type: "int" }
+            Parameter { name: "row"; type: "int" }
+            Parameter { name: "swap"; type: "bool" }
+        }
+        Method {
             name: "regionsFor"; type: "QVariantList"
             Parameter { name: "cells"; type: "QVariantList" }
             Parameter { name: "cellWidth"; type: "double" }

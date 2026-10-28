@@ -95,6 +95,20 @@ class PanelLayout(QObject):
         self.usageChanged.emit()
         return allocation.as_dict()
 
+    @Slot(int, int, int, bool, result="QVariantMap")
+    def relocate(self, allocation_id, column, row, swap=True):
+        try:
+            changed = self._allocator.move(allocation_id, column, row, swap=swap)
+        except ValueError as error:
+            self._set_error(str(error))
+            return {"ok": False, "error": self._error}
+        if changed is None:
+            self._set_error("目标无法容纳组件；交换必须让双方都放得下且不覆盖其他组件")
+            return {"ok": False, "error": self._error}
+        self._set_error("")
+        self.usageChanged.emit()
+        return {"ok": True, "allocations": [allocation.as_dict() for allocation in changed]}
+
     @Slot(int, result=bool)
     def release(self, allocation_id):
         if not self._allocator.release(allocation_id):
