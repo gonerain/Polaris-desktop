@@ -9,6 +9,7 @@ import "Theme.js" as Theme
 ColumnLayout {
     id: root
     property var taskStore
+    property bool canvasManaged: false
     property alias composerOpen: composer.opened
     property bool showFocusButton: false
     property bool showCalendarButton: true
@@ -42,6 +43,7 @@ ColumnLayout {
         spacing: 8
         DragHandler {
             objectName: "agendaMoveHandler"
+            enabled: !root.canvasManaged
             target: null
             acceptedButtons: Qt.LeftButton
             onActiveChanged: {

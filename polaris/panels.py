@@ -173,7 +173,7 @@ class PanelAllocator:
         return None
 
     def move(self, allocation_id: int, column: int, row: int, *, swap=True):
-        """Atomically step one cell on one axis, optionally exchanging one shape."""
+        """Atomically exchange a cardinal group, preserving perpendicular origins."""
         if type(swap) is not bool:
             raise ValueError("swap 必须是布尔值")
         if any(type(value) is not int or value < 0 for value in (allocation_id, column, row)):
@@ -196,19 +196,27 @@ class PanelAllocator:
         destination = cells_at(source, target)
         if destination is None:
             return None
-        collisions = {self._occupied[cell] for cell in destination
-                      if cell in self._occupied and self._occupied[cell] != allocation_id}
         origins = {allocation_id: target}
-        if collisions:
-            if not swap or len(collisions) != 1:
+        pending = [allocation_id]
+        while pending:
+            mover_id = pending.pop()
+            mover = self._allocations[mover_id]
+            cells = cells_at(mover, origins[mover_id])
+            if cells is None:
                 return None
-            other_id = next(iter(collisions))
-            other = self._allocations[other_id]
-            # Exchange along the chosen axis, preserving each shape's other axis.
-            # A one-cell pet can swap vertically with a two-cell-wide calendar
-            # from either column without shifting the calendar sideways.
-            origins[other_id] = ((source.origin[0], other.origin[1]) if dx
-                                 else (other.origin[0], source.origin[1]))
+            for cell in sorted(cells):
+                other_id = self._occupied.get(cell)
+                if other_id is None or other_id in origins:
+                    continue
+                if not swap:
+                    return None
+                other = self._allocations[other_id]
+                # A wide row may exchange with several single-cell components.
+                # Follow blockers along this axis only; validate the entire group
+                # before touching the occupancy map or any allocation identity.
+                origins[other_id] = ((mover.origin[0], other.origin[1]) if dx
+                                     else (other.origin[0], mover.origin[1]))
+                pending.append(other_id)
         occupied = {cell: owner for cell, owner in self._occupied.items() if owner not in origins}
         changed = []
         for identity, origin in origins.items():

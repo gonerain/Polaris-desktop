@@ -45,7 +45,8 @@ Item {
         targetGeometry = Qt.rect(Math.max(left, Math.min(savedGeometry.x, left + maxWidth - width)),
                                  Math.max(top, Math.min(savedGeometry.y, top + maxHeight - height)), width, height)
         const origin = handle.host.mapToItem(presenter, 0, 0)
-        sourceRect = Qt.rect(origin.x, origin.y, handle.host.width, handle.host.height)
+        const extent = handle.host.mapToItem(presenter, handle.host.width, handle.host.height)
+        sourceRect = Qt.rect(origin.x, origin.y, extent.x - origin.x, extent.y - origin.y)
         sourceHandle = handle
         preparing = true
         const accepted = handle.host.grabToImage(function(result) {

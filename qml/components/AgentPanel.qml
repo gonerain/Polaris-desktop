@@ -64,7 +64,7 @@ Rectangle {
                     DragHandler {
                         target: null
                         acceptedButtons: Qt.LeftButton
-                        enabled: !root.detailed
+                        enabled: !root.detailed && !(root.parent && root.parent.panelContext)
                         onActiveChanged: {
                             root.dragActiveChanged(active);
                             if (active && root.Window.window)

@@ -9,6 +9,7 @@ ColumnLayout {
     id: root
 
     property var taskStore
+    property bool canvasManaged: false
     property bool showBackButton: true
     property int slideDirection: 1
     property real maximumDayHeight: 40
@@ -25,6 +26,7 @@ ColumnLayout {
 
         DragHandler {
             objectName: "calendarMoveHandler"
+            enabled: !root.canvasManaged
             target: null
             acceptedButtons: Qt.LeftButton
             onActiveChanged: {

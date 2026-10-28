@@ -3,8 +3,12 @@ pragma ComponentBehavior: Bound
 import QtQuick
 
 // One allocator and one canvas. Components reserve shapes, never separate pages.
-Item {
+Rectangle {
     id: workspace
+    objectName: "canvasBackground"
+    color: "#E9EDF3"
+    radius: 16
+    border.color: "#CBD5E1"
     required property var shell
     required property var presenter
     required property var taskStore
@@ -57,17 +61,96 @@ Item {
         }
     }
 
+    MouseArea {
+        id: canvasMoveArea
+        objectName: "canvasMoveArea"
+        z: 2
+        containmentMask: QtObject {
+            function contains(point: point): bool {
+                if (point.x < 0 || point.y < 0 || point.x >= canvasMoveArea.width || point.y >= canvasMoveArea.height)
+                    return false
+                const local = board.mapFromItem(canvasMoveArea, point.x, point.y)
+                return !board.containsComponentAt(local)
+            }
+        }
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton
+        cursorShape: workspace.shell.canvasMoving ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        enabled: (!board.layoutLocked || workspace.shell.canvasMoving) && !board.dragging && !board.settling
+        onPressed: function(mouse) {
+            const controls = mapToItem(zoomControls, mouse.x, mouse.y)
+            if (controls.x >= 0 && controls.y >= 0 && controls.x < zoomControls.width && controls.y < zoomControls.height)
+                return
+            workspace.shell.canvasMoving = true
+            workspace.shell.setWorkspaceMoving(true, true)
+        }
+        onReleased: finishMove()
+        onCanceled: finishMove()
+        function finishMove() {
+            workspace.shell.canvasMoving = false
+            workspace.shell.setWorkspaceMoving(board.dragging || board.settling, false)
+        }
+    }
+    Item {
+        z: 3
+        x: workspace.shell.canvasPadding
+        y: 6
+        width: parent.width - 2 * workspace.shell.canvasPadding
+        height: workspace.shell.canvasHeaderHeight
+        Text {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: qsTr("⠿  画布 · 拖动背景移动")
+            color: "#64748B"
+            font.pixelSize: 11
+        }
+        Row {
+            id: zoomControls
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 3
+            IconButton {
+                objectName: "canvasZoomOutButton"
+                text: "−"
+                tooltip: qsTr("缩小画布")
+                enabled: workspace.shell.canZoomCanvas(workspace.shell.canvasZoom - 0.1)
+                onClicked: workspace.shell.zoomCanvas(workspace.shell.canvasZoom - 0.1)
+            }
+            IconButton {
+                objectName: "canvasZoomResetButton"
+                text: Math.round(workspace.shell.canvasZoom * 100) + "%"
+                textSize: 11
+                tooltip: qsTr("恢复100%")
+                enabled: workspace.shell.canZoomCanvas(1)
+                onClicked: workspace.shell.zoomCanvas(1)
+            }
+            IconButton {
+                objectName: "canvasZoomInButton"
+                text: "+"
+                tooltip: qsTr("放大画布")
+                enabled: workspace.shell.canZoomCanvas(workspace.shell.canvasZoom + 0.1)
+                onClicked: workspace.shell.zoomCanvas(workspace.shell.canvasZoom + 0.1)
+            }
+        }
+    }
+
     ComponentBoard {
         id: board
         objectName: "componentBoard"
-        width: workspace.presenter.busy ? workspace.presenter.savedGeometry.width : parent.width
-        height: workspace.presenter.busy ? workspace.presenter.savedGeometry.height : parent.height
+        x: workspace.shell.canvasPadding
+        y: workspace.shell.canvasPadding + workspace.shell.canvasHeaderHeight
+        width: ((workspace.presenter.busy ? workspace.presenter.savedGeometry.width : parent.width)
+                - 2 * workspace.shell.canvasPadding) / workspace.shell.canvasZoom
+        height: ((workspace.presenter.busy ? workspace.presenter.savedGeometry.height : parent.height)
+                 - workspace.shell.canvasHeaderHeight - 2 * workspace.shell.canvasPadding) / workspace.shell.canvasZoom
+        scale: workspace.shell.canvasZoom
+        transformOrigin: Item.TopLeft
         presenter: workspace.presenter
         panelSize: Qt.size(260, 260)
         panelCount: 4
         gap: 8
         interactionsEnabled: !workspace.shell.editorPopupCount && !workspace.shell.quitConfirmationVisible
-                             && !workspace.shell.collapsing
+                             && !workspace.shell.collapsing && !workspace.shell.canvasMoving
         onDraggingChanged: workspace.shell.setWorkspaceMoving(dragging || settling, false)
         onSettlingChanged: workspace.shell.setWorkspaceMoving(dragging || settling, false)
     }
@@ -76,6 +159,6 @@ Item {
         z: 10
         anchors.fill: parent
         targetWindow: workspace.shell
-        enabled: !workspace.shell.collapsing && !workspace.presenter.busy && !board.dragging && !board.settling
+        enabled: !board.layoutLocked && !board.dragging && !board.settling
     }
 }

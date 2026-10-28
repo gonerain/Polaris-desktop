@@ -15,8 +15,8 @@ RegionSurface {
     property point pressPoint: Qt.point(0, 0)
     property point pointerPoint: Qt.point(0, 0)
     property string moveAxis: ""
-    property int grabColumn: 0
-    property int grabRow: 0
+    property int pressColumn: 0
+    property int pressRow: 0
     property real displayColumn: allocation.origin[0]
     property real displayRow: allocation.origin[1]
     readonly property int spanX: Math.max(...allocation.cells.map(cell => cell[0])) + 1
@@ -77,8 +77,8 @@ RegionSurface {
         pressPoint = point
         pointerPoint = point
         moveAxis = ""
-        grabColumn = Math.floor(point.x / (board.cellWidth + board.gap)) - allocation.origin[0]
-        grabRow = Math.floor(point.y / (board.cellHeight + board.gap)) - allocation.origin[1]
+        pressColumn = allocation.origin[0]
+        pressRow = allocation.origin[1]
     }
     function updateMove(point, finalStep) {
         pointerPoint = point

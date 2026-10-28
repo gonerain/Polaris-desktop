@@ -46,6 +46,7 @@ Rectangle {
         AgendaPanel {
             id: agendaPanel
             objectName: "agendaPanel"
+            canvasManaged: true
             anchors.fill: parent
             visible: !widget.calendarVisible
             taskStore: store
@@ -60,6 +61,7 @@ Rectangle {
 
         CalendarMonthView {
             objectName: "calendarMonthView"
+            canvasManaged: true
             anchors.fill: parent
             visible: widget.calendarVisible
             taskStore: store

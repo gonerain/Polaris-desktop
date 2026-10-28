@@ -103,7 +103,7 @@ class PanelLayout(QObject):
             self._set_error(str(error))
             return {"ok": False, "error": self._error}
         if changed is None:
-            self._set_error("目标无法容纳组件；交换必须让双方都放得下且不覆盖其他组件")
+            self._set_error("目标无法容纳同轴换位组，布局保持不变")
             return {"ok": False, "error": self._error}
         self._set_error("")
         self.usageChanged.emit()

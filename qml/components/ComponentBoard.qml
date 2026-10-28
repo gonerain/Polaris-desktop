@@ -137,19 +137,34 @@ Item {
     function hoverStep(host, point, finalStep): bool {
         if (point.x < 0 || point.y < 0 || point.x >= width || point.y >= height)
             return false
-        const pointerColumn = Math.floor(point.x / (cellWidth + gap))
-        const pointerRow = Math.floor(point.y / (cellHeight + gap))
-        // The gap between cells is a neutral zone, preventing boundary jitter.
-        if (point.x - pointerColumn * (cellWidth + gap) >= cellWidth
-                || point.y - pointerRow * (cellHeight + gap) >= cellHeight)
-            return false
+        const horizontal = host.moveAxis === "x"
+        const pitch = horizontal ? cellWidth + gap : cellHeight + gap
+        const distance = horizontal ? point.x - host.pressPoint.x : point.y - host.pressPoint.y
+        const threshold = Math.min(48, pitch / 4)
+        const steps = Math.abs(distance) < threshold ? 0
+            : Math.sign(distance) * (1 + Math.floor((Math.abs(distance) - threshold) / pitch))
         const origin = host.allocation.origin
-        const desiredColumn = pointerColumn - host.grabColumn
-        const desiredRow = pointerRow - host.grabRow
-        const column = host.moveAxis === "x" ? origin[0] + Math.sign(desiredColumn - origin[0]) : origin[0]
-        const row = host.moveAxis === "y" ? origin[1] + Math.sign(desiredRow - origin[1]) : origin[1]
+        const start = horizontal ? host.pressColumn : host.pressRow
+        const current = (horizontal ? origin[0] : origin[1]) - start
+        // Reverse at half the forward threshold, not at the same boundary.
+        if (current > 0 && steps < current && distance > (current - 1) * pitch + threshold / 2)
+            return false
+        if (current < 0 && steps > current && distance < (current + 1) * pitch - threshold / 2)
+            return false
+        const direction = Math.sign(start + steps - (horizontal ? origin[0] : origin[1]))
+        const column = horizontal ? origin[0] + direction : origin[0]
+        const row = horizontal ? origin[1] : origin[1] + direction
         if (column === origin[0] && row === origin[1]) return false
         return move(handleFor(host), column, row, finalStep)
+    }
+
+    function containsComponentAt(point): bool {
+        for (const key in _handles) {
+            const host = _handles[key].host
+            if (host.visible && host.containsPoint(host.mapFromItem(board, point.x, point.y)))
+                return true
+        }
+        return false
     }
 
     function regionsFor(cells, cellWidth, cellHeight, gap): var {

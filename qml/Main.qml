@@ -26,14 +26,19 @@ Window {
     required property var componentApi
     property string pendingComponent: ""
     readonly property int compactSize: 180
+    readonly property int canvasPadding: 12
+    readonly property int canvasHeaderHeight: 32
+    property real canvasZoom: 1
+    property bool canvasSized: false
+    property bool canvasMoving: false
     readonly property int bubbleHeight: 84
     property bool bubbleBelow: false
     property bool bubbleVisible: false
     property string bubbleText: ""
     // Updated from QScreen.availableGeometry(), including taskbar offsets.
     property rect availableGeometry: Qt.rect(0, 0, 0, 0)
-    readonly property int expandedMinimumWidth: Math.min(528, availableGeometry.width || 528)
-    readonly property int expandedMinimumHeight: Math.min(672, availableGeometry.height || 672)
+    readonly property int expandedMinimumWidth: Math.min(528 * canvasZoom + 2 * canvasPadding, availableGeometry.width || 552)
+    readonly property int expandedMinimumHeight: Math.min(672 * canvasZoom + canvasHeaderHeight + 2 * canvasPadding, availableGeometry.height || 728)
     // Supplied before creation by the host, based on the actual Qt platform.
     property bool windowPositioningSupported: true
     property bool nativeNotificationsAvailable: false
@@ -66,8 +71,12 @@ Window {
         id: calendarModel
         objectName: "calendarTaskStore"
     }
-    property real expandedWidth: 528
-    property real expandedHeight: 672
+    property real expandedWidth: 552
+    property real expandedHeight: 728
+    property real canvasLogicalWidth: 528
+    property real canvasLogicalHeight: 672
+    property int canvasTargetWidth: 552
+    property int canvasTargetHeight: 728
 
     onClosing: function(close) {
         // Even a blocked close request must commit the currently edited field.
@@ -94,8 +103,20 @@ Window {
         Qt.quit()
     }
 
-    onWidthChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedWidth = width
-    onHeightChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedHeight = height
+    onWidthChanged: if (!compact && !applyingState && !focusPresenter.busy) {
+        expandedWidth = width
+        if (width !== canvasTargetWidth) {
+            canvasLogicalWidth = Math.max(528, (width - 2 * canvasPadding) / canvasZoom)
+            canvasTargetWidth = width
+        }
+    }
+    onHeightChanged: if (!compact && !applyingState && !focusPresenter.busy) {
+        expandedHeight = height
+        if (height !== canvasTargetHeight) {
+            canvasLogicalHeight = Math.max(672, (height - canvasHeaderHeight - 2 * canvasPadding) / canvasZoom)
+            canvasTargetHeight = height
+        }
+    }
 
     function showComponent(identity) {
         if (identity !== "calendar" && identity !== "agents") return false
@@ -128,12 +149,50 @@ Window {
     }
 
     function setWorkspaceMoving(active, nativeMove) {
-        moving = active
+        moving = active || canvasMoving
         if (active && nativeMove) startSystemMove()
         else if (!active && !windowHover.hovered && !compact) autoCollapse.restart()
     }
 
+    function canZoomCanvas(value) {
+        if (compact || moving || editorPopupCount || quitConfirmationVisible || focusPresenter.busy)
+            return false
+        const next = Math.round(value * 10) / 10
+        if (next < 0.8 || next > 1.5) return false
+        return Math.ceil(528 * next + 2 * canvasPadding) <= availableGeometry.width
+            && Math.ceil(672 * next + canvasHeaderHeight + 2 * canvasPadding) <= availableGeometry.height
+    }
+
+    function zoomCanvas(value) {
+        if (!canZoomCanvas(value)) return false
+        const next = Math.round(value * 10) / 10
+        applyingState = true
+        const wantedWidth = Math.ceil(canvasLogicalWidth * next + 2 * canvasPadding)
+        const wantedHeight = Math.ceil(canvasLogicalHeight * next + canvasHeaderHeight + 2 * canvasPadding)
+        canvasTargetWidth = Math.min(wantedWidth, availableGeometry.width)
+        canvasTargetHeight = Math.min(wantedHeight, availableGeometry.height)
+        if (canvasTargetWidth < wantedWidth)
+            canvasLogicalWidth = (canvasTargetWidth - 2 * canvasPadding) / next
+        if (canvasTargetHeight < wantedHeight)
+            canvasLogicalHeight = (canvasTargetHeight - canvasHeaderHeight - 2 * canvasPadding) / next
+        canvasZoom = next
+        width = canvasTargetWidth
+        height = canvasTargetHeight
+        expandedWidth = width
+        expandedHeight = height
+        applyingState = false
+        return true
+    }
+
     function expand() {
+        if (!canvasSized) {
+            const fit = Math.min(1, (availableGeometry.width - 2 * canvasPadding) / 528,
+                                    (availableGeometry.height - canvasHeaderHeight - 2 * canvasPadding) / 672)
+            canvasZoom = Math.max(0.8, Math.floor(fit * 10) / 10)
+            expandedWidth = Math.ceil(528 * canvasZoom + 2 * canvasPadding)
+            expandedHeight = Math.ceil(672 * canvasZoom + canvasHeaderHeight + 2 * canvasPadding)
+            canvasSized = true
+        }
         if (!expandedContent.source.toString()) {
             expandedContent.setSource("components/Workspace.qml", {
                 shell: window, presenter: focusPresenter, taskStore: calendarStore,
@@ -151,8 +210,10 @@ Window {
         collapsing = false
         applyingState = true
         compact = false
-        width = Math.max(expandedWidth, expandedMinimumWidth)
-        height = Math.max(expandedHeight, expandedMinimumHeight)
+        canvasTargetWidth = Math.ceil(Math.max(expandedWidth, expandedMinimumWidth))
+        canvasTargetHeight = Math.ceil(Math.max(expandedHeight, expandedMinimumHeight))
+        width = canvasTargetWidth
+        height = canvasTargetHeight
         applyingState = false
     }
 
