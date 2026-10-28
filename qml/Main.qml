@@ -44,6 +44,12 @@ Window {
             autoCollapse.restart()
         }
     }
+    property bool reducedPetMotion: false
+    property real lastPetX: 0
+    onXChanged: {
+        if (compact && moving) petMascot.lean(x - lastPetX)
+        lastPetX = x
+    }
     property bool allowQuit: false
     property var calendarStore: null
     property real expandedWidth: 528
@@ -158,6 +164,8 @@ Window {
         function onNotification(kind, entryId, text) {
             if (kind === "task.upcoming")
                 window.showBubble(text)
+            else if (kind === "task.completed")
+                petMascot.celebrate()
         }
     }
 
@@ -225,7 +233,7 @@ Window {
             popupType: Popup.Window
             // Custom backgrounds have no implicit size: explicitly size the menu,
             // otherwise the list can collapse to padding-only (8px) on Windows.
-            implicitWidth: 120
+            implicitWidth: 152
             padding: 4
             onOpened: autoCollapse.stop()
             onClosed: {
@@ -241,10 +249,38 @@ Window {
             }
 
             MenuItem {
+                objectName: "petGreetMenuItem"
+                text: qsTr("打个招呼")
+                font.pixelSize: 12
+                enabled: window.compact && !window.reducedPetMotion
+                onTriggered: petMascot.playWave(true)
+            }
+            MenuItem {
+                objectName: "petRestMenuItem"
+                text: qsTr("休息一下")
+                font.pixelSize: 12
+                enabled: window.compact && !window.reducedPetMotion
+                onTriggered: petMascot.rest(true)
+            }
+            MenuItem {
+                objectName: "petMotionMenuItem"
+                text: qsTr("减少动态")
+                font.pixelSize: 12
+                checkable: true
+                checked: window.reducedPetMotion
+                onTriggered: window.reducedPetMotion = checked
+            }
+            MenuItem {
+                text: qsTr("素材与协议…")
+                font.pixelSize: 12
+                onTriggered: Qt.openUrlExternally("https://github.com/Er1c0v0/dsh-whale-pet/blob/2e10c80abecfb66e599dac82609295659c3657de/ASSET_ATTRIBUTION.md")
+            }
+            MenuSeparator {}
+            MenuItem {
                 id: quitItem
                 objectName: "quitMenuItem"
                 text: qsTr("退出")
-                implicitWidth: 112
+                implicitWidth: 144
                 implicitHeight: 30
 
                 contentItem: Text {
@@ -343,8 +379,12 @@ Window {
             }
 
             PetMascot {
+                id: petMascot
                 objectName: "petMascot"
                 anchors.fill: parent
+                active: window.compact && window.visible
+                dragging: window.compact && window.moving
+                reducedMotion: window.reducedPetMotion
             }
 
             Rectangle {

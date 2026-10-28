@@ -20,7 +20,8 @@ def create_tray(app, window, coordinator, data_directory):
     tray.setContextMenu(menu)
     tray.activated.connect(lambda reason: window.expand() if reason == QSystemTrayIcon.ActivationReason.DoubleClick else None)
     coordinator.notification.connect(lambda kind, identity, text: tray.showMessage(
-        "Polaris · 日程提醒", text, QSystemTrayIcon.MessageIcon.Information, 10_000))
+        "Polaris · 日程提醒", text, QSystemTrayIcon.MessageIcon.Information, 10_000)
+        if kind == "task.upcoming" else None)
     # Keep the Python-owned menu alive for the tray's entire lifetime.
     tray._menu = menu
     tray.show()

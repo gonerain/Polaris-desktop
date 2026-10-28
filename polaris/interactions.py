@@ -14,6 +14,7 @@ class InteractionCoordinator(QObject):
         self._clock = clock or datetime.now
         self._store = None
         self._sent = set()
+        self._done_states = {}
         self._timer = QTimer(self)
         self._timer.setInterval(30_000)
         self._timer.timeout.connect(self.check)
@@ -22,9 +23,19 @@ class InteractionCoordinator(QObject):
         if self._store is not None:
             raise RuntimeError("联动协调器已绑定日程组件")
         self._store = store
+        self._done_states = {row["task"].entryId: row["task"].done for row in store.allEntries}
+        store.contentChanged.connect(self._check_completions)
         store.scheduleChanged.connect(self.check)
         self._timer.start()
         self.check()
+
+    def _check_completions(self):
+        tasks = [row["task"] for row in self._store.allEntries]
+        previous = self._done_states
+        self._done_states = {task.entryId: task.done for task in tasks}
+        for task in tasks:
+            if task.done and previous.get(task.entryId) is False:
+                self.notification.emit("task.completed", task.entryId, "完成了一件事")
 
     def check(self):
         if self._store is None:
