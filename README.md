@@ -1,9 +1,9 @@
 # Polaris
 
-轻量桌宠式悬浮组件工作台，Python + PySide6 / Qt Quick。点击鲸鱼娘打开画布，切换日程或 Agent，右键或托盘菜单退出。
+轻量桌宠式悬浮组件工作台，Python + PySide6 / Qt Quick。点击鲸鱼娘打开平铺画布，日程和 Agent 共用 cell 分配器，右键或托盘菜单退出。
 
 - 当前使用 dsh-pet 女仆鲸鱼娘：呼吸待机、挥手、哈欠/睡眠、惊醒、悬空拖动、庆祝，以及伸懒腰、玩魔方、东张西望；右键可换个小动作、休息或减少动态，不加养成系统。
-- 通用 Agent 页展示已接入的活跃会话和本轮结束提醒；Pi 通过薄插件接入，来源不限 Pi，断连不冒充完成。
+- 通用 Agent 单格面板展示已接入的活跃会话和本轮结束提醒；Pi 通过薄插件接入，来源不限 Pi，断连不冒充完成。
 - 组件通过发现 → help → 调用提供自身能力；外部访问默认拒绝，按连接和组件授权，不自动上传日程或会话全文。
 - 日程画布默认“我的一天”，支持任务、时间、子任务、完成勾选，以及按需查看月历。
 - `↗` 打开任务工作台：我的一天、任务库、周/月计划和完成记录；紧凑任务行、按需详情、全局搜索和点选改期。
@@ -13,11 +13,12 @@
 - 过期待办可以单项或全部移到今天，已完成任务默认收起。
 - 自动保存、上个版本备份、损坏保护、主任务删除撤销和单实例锁。
 - 组件支持画布态与独立完整态，以及连续展开 / 返回动画。
-- 日程、Agent 界面和弹层按需创建；业务模型始终保留，已打开的界面也保留实例，不因收起丢失草稿。[资源测量说明](docs/performance.md)。
+- 默认 2×2 画布：日程申请两个 cell，Agent 申请一个，余下一格留空；不加顶栏分页，也不自动填补空格。
+- 画布和弹层首次使用时创建；业务模型始终保留，已打开的界面也保留实例，不因收起丢失草稿。[资源测量说明](docs/performance.md)。
 
 ## Pi 插件
 
-先打开 Polaris，再运行 `pi install PATH_TO_POLARIS/integrations`；发布包的插件目录为 `Polaris/_internal/integrations`。已有 Pi 会话执行 `/reload`，新会话自动接入。通过 `/polaris` 检查连接，在 Agent 页授权组件访问。
+先打开 Polaris，再运行 `pi install PATH_TO_POLARIS/integrations`；发布包的插件目录为 `Polaris/_internal/integrations`。已有 Pi 会话执行 `/reload`，新会话自动接入。通过 `/polaris` 检查连接，在 Agent 面板的 `↗` 完整视图中授权组件访问。
 
 提供 `polaris_components / polaris_help / polaris_call` 三个通用工具，不内置日程工具或 Codex 分支。安装、WSL 中继与其他 Agent 接入见 [接入说明](integrations/README.md) 和 [协议 v1](docs/agent-bridge.md)。
 

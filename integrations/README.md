@@ -20,12 +20,12 @@ pi install PATH_TO_POLARIS/integrations
   Pi 使用 `agent_settled`，不是中途可能继续执行的 `agent_end`。断线不提醒，重复事件只提醒一次。
 - `/polaris`：查看连接状态；`/polaris connect` 可立即再试连接。
 - `polaris_components`：发现组件；`polaris_help`：查询用法；`polaris_call`：按 help 调用。
-- 进入 Polaris 的 Agent 页，按连接和组件授予只读或修改权限。默认拒绝数据访问。
+- 在 Polaris 画布的 Agent 面板点击 `↗`，按连接和组件授予只读或修改权限。默认拒绝数据访问。
   断线重连和 reload 后授权清空；不会自动把日程加入模型上下文。
 
 ### 可选：主动让桌宠发言（不是结束提醒所必需）
 
-先在 Agent 页为当前连接的“桌宠”选择“允许修改”，再查询 `polaris_help({component:"pet"})`，
+先在 Agent 面板的 `↗` 完整视图中为当前连接的“桌宠”选择“允许修改”，再查询 `polaris_help({component:"pet"})`，
 使用 `polaris_call({component:"pet",operation:"say",args:{text:"Hi！👋",durationMs:6500}})`。
 紧凑状态在桌宠旁弹泡泡；画布展开时显示界面内短提示，不切页、不抢焦点。
 新消息替换旧消息，1000..15000毫秒后消失。只支持短消息，不播放语音、不自动转发聊天全文。

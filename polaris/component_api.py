@@ -62,7 +62,7 @@ class ComponentRegistry(QObject):
             raise ApiError("unknown_operation", "操作未登记；请查询 help")
         level = grants.get(identity, "none")
         if level not in ("read", "write") or (definition["access"] == "write" and level != "write"):
-            raise ApiError("permission_denied", "请用户在 Polaris 的 Agent 页授权此连接访问该组件")
+            raise ApiError("permission_denied", "请用户在 Polaris 的 Agent 面板点击 ↗，授权此连接访问该组件")
         if not isinstance(args, dict):
             raise ApiError("invalid_params", "args 必须是对象")
         return api.call(operation, args)

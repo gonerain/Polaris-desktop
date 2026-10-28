@@ -57,13 +57,13 @@ Item {
             text: qsTr("Agent 会话") + (popups.shell.agentHub && popups.shell.agentHub.unreadCount ? " · " + popups.shell.agentHub.unreadCount : "")
             font.pixelSize: 12
             enabled: !popups.presenter.transitioning
-            onTriggered: popups.shell.showPage("agents")
+            onTriggered: popups.shell.showComponent("agents")
         }
         MenuItem {
             text: qsTr("打开日程")
             font.pixelSize: 12
             enabled: !popups.presenter.transitioning
-            onTriggered: popups.shell.showPage("calendar")
+            onTriggered: popups.shell.showComponent("calendar")
         }
         MenuSeparator {}
         MenuItem {

@@ -1,10 +1,8 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls.Basic
-import "Theme.js" as Theme
 
-// Created on the first expansion, then retained so drafts and focus views survive.
+// One allocator and one canvas. Components reserve shapes, never separate pages.
 Item {
     id: workspace
     required property var shell
@@ -12,114 +10,61 @@ Item {
     required property var taskStore
     required property var agentHub
     required property var componentApi
-    property var calendarFactory: null
     property var calendarHandle: null
+    property var agentHandle: null
     readonly property var componentBoard: board
 
-    function ensurePage() {
-        if (shell.selectedPage === "agents") {
-            if (!agentLoader.source.toString())
-                agentLoader.setSource("AgentPanel.qml", {hub: agentHub, components: componentApi, objectName: "agentPanel"})
-            return
+    function requestComponent(url, cells, properties) {
+        const factory = Qt.createComponent(url)
+        if (factory.status !== Component.Ready) {
+            console.error("组件加载失败", url, factory.errorString())
+            return null
         }
-        if (calendarHandle)
-            return
-        // A URL, rather than an inline CalendarTasks type, defers its imports too.
-        if (!calendarFactory)
-            calendarFactory = Qt.createComponent("CalendarTasks.qml")
-        if (calendarFactory.status !== Component.Ready) {
-            console.error("日程界面加载失败", calendarFactory.errorString())
-            return
+        const handle = board.request(factory, {cells: cells}, properties)
+        if (!handle.ok) {
+            console.error("组件申请 cell 失败", url, handle.error)
+            return null
         }
-        const result = board.request(calendarFactory, {cells: [[0, 0], [1, 0]]}, {taskStore: taskStore, objectName: "calendarTasks"})
-        if (!result.ok) {
-            console.error("初始化画板失败", result.error)
-            return
-        }
-        calendarHandle = result
-        result.item.focusRequested.connect(function(factory, options, properties) {
-            board.presentItem(result.item, factory, options, properties)
-        })
-        result.item.dragActiveChanged.connect(function(active) {
-            workspace.shell.setWorkspaceMoving(active, false)
-        })
+        handle.factory = factory
+        return handle
     }
 
-    Connections {
-        target: workspace.shell
-        function onSelectedPageChanged() { workspace.ensurePage() }
+    function openAgentDetails() {
+        return agentHandle && board.present(agentHandle, agentHandle.factory,
+            {span: Qt.size(3, 2)}, {hub: agentHub, components: componentApi, detailed: true,
+                                   objectName: "agentFullView"})
     }
-    Component.onCompleted: ensurePage()
 
-    Rectangle {
-        width: parent.width
-        height: workspace.shell.navigationHeight
-        radius: 8
-        color: Theme.surface
-        border.color: Theme.border
-        DragHandler {
-            objectName: "componentNavigationDrag"
-            target: null
-            acceptedButtons: Qt.LeftButton
-            onActiveChanged: workspace.shell.setWorkspaceMoving(active, true)
+    Component.onCompleted: {
+        calendarHandle = requestComponent("CalendarTasks.qml", [[0, 0], [1, 0]],
+            {taskStore: taskStore, objectName: "calendarTasks"})
+        if (calendarHandle) {
+            calendarHandle.item.focusRequested.connect(function(factory, options, properties) {
+                board.presentItem(calendarHandle.item, factory, options, properties)
+            })
+            calendarHandle.item.dragActiveChanged.connect(function(active) {
+                workspace.shell.setWorkspaceMoving(active, false)
+            })
         }
-    }
-    Row {
-        height: workspace.shell.navigationHeight
-        spacing: 4
-        enabled: !workspace.presenter.busy
-        Button {
-            id: calendarNavigation
-            objectName: "calendarPageButton"
-            text: qsTr("日程")
-            height: workspace.shell.navigationHeight - 2
-            width: 72
-            background: Rectangle { radius: 7; color: workspace.shell.selectedPage === "calendar" ? Theme.primarySoft : Theme.surface }
-            contentItem: Text {
-                text: calendarNavigation.text
-                font.pixelSize: 12
-                color: workspace.shell.selectedPage === "calendar" ? Theme.primary : Theme.muted
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-            onClicked: workspace.shell.showPage("calendar")
-        }
-        Button {
-            id: agentNavigation
-            objectName: "agentPageButton"
-            text: qsTr("Agent") + (workspace.agentHub && workspace.agentHub.unreadCount ? " · " + workspace.agentHub.unreadCount : "")
-            height: workspace.shell.navigationHeight - 2
-            width: 100
-            background: Rectangle { radius: 7; color: workspace.shell.selectedPage === "agents" ? Theme.primarySoft : Theme.surface }
-            contentItem: Text {
-                text: agentNavigation.text
-                font.pixelSize: 12
-                color: workspace.shell.selectedPage === "agents" ? Theme.primary : Theme.muted
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-            onClicked: workspace.shell.showPage("agents")
+        agentHandle = requestComponent("AgentPanel.qml", [[0, 0]],
+            {hub: agentHub, components: componentApi, objectName: "agentPanel",
+             obscured: Qt.binding(function() { return workspace.presenter.busy })})
+        if (agentHandle) {
+            agentHandle.item.expandRequested.connect(openAgentDetails)
+            agentHandle.item.dragActiveChanged.connect(function(active) {
+                workspace.shell.setWorkspaceMoving(active, false)
+            })
         }
     }
 
-    Loader {
-        id: agentLoader
-        x: 0
-        y: workspace.shell.navigationHeight
-        width: parent.width
-        height: parent.height - workspace.shell.navigationHeight
-        visible: workspace.shell.selectedPage === "agents"
-    }
     ComponentBoard {
         id: board
         objectName: "componentBoard"
         width: workspace.presenter.busy ? workspace.presenter.savedGeometry.width : parent.width
-        y: workspace.shell.navigationHeight
-        height: (workspace.presenter.busy ? workspace.presenter.savedGeometry.height : parent.height) - workspace.shell.navigationHeight
-        visible: workspace.shell.selectedPage === "calendar"
+        height: workspace.presenter.busy ? workspace.presenter.savedGeometry.height : parent.height
         presenter: workspace.presenter
         panelSize: Qt.size(260, 260)
-        panelCount: 2
+        panelCount: 4
         gap: 8
     }
     WindowResizeHandles {

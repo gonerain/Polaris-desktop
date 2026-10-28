@@ -24,9 +24,7 @@ Window {
 
     required property var agentHub
     required property var componentApi
-    property string selectedPage: "calendar"
-    property string pendingPage: ""
-    readonly property int navigationHeight: 32
+    property string pendingComponent: ""
     readonly property int compactSize: 180
     readonly property int bubbleHeight: 84
     property bool bubbleBelow: false
@@ -35,7 +33,7 @@ Window {
     // Updated from QScreen.availableGeometry(), including taskbar offsets.
     property rect availableGeometry: Qt.rect(0, 0, 0, 0)
     readonly property int expandedMinimumWidth: Math.min(528, availableGeometry.width || 528)
-    readonly property int expandedMinimumHeight: Math.min(300 + navigationHeight, availableGeometry.height || 300 + navigationHeight)
+    readonly property int expandedMinimumHeight: Math.min(608, availableGeometry.height || 608)
     // Supplied before creation by the host, based on the actual Qt platform.
     property bool windowPositioningSupported: true
     property bool nativeNotificationsAvailable: false
@@ -69,7 +67,7 @@ Window {
         objectName: "calendarTaskStore"
     }
     property real expandedWidth: 528
-    property real expandedHeight: 300 + navigationHeight
+    property real expandedHeight: 608
 
     onClosing: function(close) {
         // Even a blocked close request must commit the currently edited field.
@@ -99,17 +97,22 @@ Window {
     onWidthChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedWidth = width
     onHeightChanged: if (!compact && !applyingState && !focusPresenter.busy) expandedHeight = height
 
-    function showPage(page) {
-        if (page !== "calendar" && page !== "agents") return false
+    function showComponent(identity) {
+        if (identity !== "calendar" && identity !== "agents") return false
         if (focusPresenter.busy) {
             if (focusPresenter.transitioning) return false
-            if (page !== selectedPage) { pendingPage = page; focusPresenter.close() }
+            pendingComponent = identity
+            focusPresenter.close()
             return true
         }
         root.forceActiveFocus()
-        selectedPage = page
-        if (page === "agents") agentHub.markRead()
         expand()
+        if (identity === "agents") {
+            Qt.callLater(function() {
+                if (!window.compact && expandedContent.item && !focusPresenter.busy)
+                    expandedContent.item.openAgentDetails()
+            })
+        }
         return true
     }
 
@@ -302,10 +305,10 @@ Window {
             window.cancelCollapse()
         }
         onClosed: {
-            if (window.pendingPage) {
-                const page = window.pendingPage
-                window.pendingPage = ""
-                window.showPage(page)
+            if (window.pendingComponent) {
+                const identity = window.pendingComponent
+                window.pendingComponent = ""
+                window.showComponent(identity)
             } else if (!windowHover.hovered)
                 autoCollapse.restart()
         }

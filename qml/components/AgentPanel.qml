@@ -3,27 +3,42 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Window
 import "Theme.js" as Theme
 
 Rectangle {
     id: root
     required property var hub
     required property var components
+    property bool detailed: false
+    property bool obscured: false
+    readonly property var presentation: detailed && parent ? parent.presentationContext : null
+    signal expandRequested
+    signal dragActiveChanged(bool active)
     color: Theme.surface
     radius: 12
     border.color: Theme.border
     clip: true
-    onVisibleChanged: if (visible && hub) hub.markRead()
+    onVisibleChanged: if (visible && !obscured && hub)
+        hub.markRead()
     Connections {
         target: root.hub
-        function onChanged() { if (root.visible) root.hub.markRead() }
+        function onChanged() {
+            if (root.visible && !root.obscured)
+                root.hub.markRead();
+        }
     }
 
     function stateLabel(state) {
-        return state === "running" ? qsTr("执行中") : state === "disconnected" ? qsTr("连接断开") : qsTr("空闲")
+        return state === "running" ? qsTr("执行中") : state === "disconnected" ? qsTr("连接断开") : qsTr("空闲");
     }
     function outcomeLabel(outcome) {
-        return ({ended: qsTr("本轮已结束"), failed: qsTr("本轮失败"), cancelled: qsTr("已取消"), unknown: qsTr("结果未知")})[outcome] || ""
+        return ({
+                ended: qsTr("本轮已结束"),
+                failed: qsTr("本轮失败"),
+                cancelled: qsTr("已取消"),
+                unknown: qsTr("结果未知")
+            })[outcome] || "";
     }
 
     ListView {
@@ -38,15 +53,40 @@ Rectangle {
         header: Column {
             width: list.width
             spacing: 8
-            Text {
-                text: qsTr("Agent 会话")
-                font.pixelSize: 16
-                font.bold: true
-                color: Theme.ink
+            RowLayout {
+                width: list.width
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Agent 会话")
+                    font.pixelSize: root.detailed ? 16 : 14
+                    font.bold: true
+                    color: Theme.ink
+                    DragHandler {
+                        target: null
+                        acceptedButtons: Qt.LeftButton
+                        enabled: !root.detailed
+                        onActiveChanged: {
+                            root.dragActiveChanged(active);
+                            if (active && root.Window.window)
+                                root.Window.window.startSystemMove();
+                        }
+                    }
+                }
+                IconButton {
+                    objectName: "openAgentFocusButton"
+                    text: root.detailed ? qsTr("返回") : "↗"
+                    tooltip: root.detailed ? qsTr("返回画布") : qsTr("完整查看与组件授权")
+                    onClicked: {
+                        if (root.detailed && root.presentation)
+                            root.presentation.close();
+                        else
+                            root.expandRequested();
+                    }
+                }
             }
             Text {
                 width: parent.width
-                text: qsTr("只显示已接入的会话；断连不代表完成。")
+                text: root.detailed ? qsTr("只显示已接入的会话；断连不代表完成。") : qsTr("已接入会话；↗ 查看详情与授权")
                 font.pixelSize: 11
                 color: Theme.muted
                 wrapMode: Text.Wrap
@@ -66,7 +106,10 @@ Rectangle {
                 font.pixelSize: 12
                 visible: list.count === 0
             }
-            Item { width: 1; height: 2 }
+            Item {
+                width: 1
+                height: 2
+            }
         }
         delegate: Rectangle {
             id: sessionRow
@@ -84,7 +127,7 @@ Rectangle {
                     width: parent.width
                     Text {
                         Layout.fillWidth: true
-                        text: sessionRow.modelData.source + " · " + sessionRow.modelData.name
+                        text: root.detailed ? sessionRow.modelData.source + " · " + sessionRow.modelData.name : sessionRow.modelData.name
                         textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: 12
@@ -99,113 +142,132 @@ Rectangle {
                 }
                 Text {
                     width: parent.width
-                    text: sessionRow.modelData.project || qsTr("未提供项目")
+                    text: root.detailed ? (sessionRow.modelData.project || qsTr("未提供项目"))
+                                       : sessionRow.modelData.source + (sessionRow.modelData.project ? " · " + sessionRow.modelData.project : "")
                     textFormat: Text.PlainText
                     color: Theme.muted
                     font.pixelSize: 11
                     elide: Text.ElideMiddle
                 }
                 Text {
-                    text: qsTr("连接 ") + sessionRow.modelData.instanceId.slice(0, 8)
-                          + (sessionRow.modelData.outcome ? " · " + root.outcomeLabel(sessionRow.modelData.outcome) : "")
+                    text: qsTr("连接 ") + sessionRow.modelData.instanceId.slice(0, 8) + (sessionRow.modelData.outcome ? " · " + root.outcomeLabel(sessionRow.modelData.outcome) : "")
                     color: sessionRow.modelData.outcome === "failed" ? Theme.danger : Theme.muted
                     font.pixelSize: 10
                 }
             }
         }
-        footer: Column {
+        footer: Loader {
             width: list.width
-            spacing: 10
-            Item { width: 1; height: 4 }
-            Text { text: qsTr("组件访问 · 当前连接有效"); color: Theme.ink; font.pixelSize: 12; font.bold: true }
-            Text {
-                width: parent.width
-                text: qsTr("默认不允许读取或修改数据。只给你信任的连接授权。来源名称由客户端自报。")
-                wrapMode: Text.Wrap
-                color: Theme.muted
-                font.pixelSize: 11
-            }
-            Repeater {
-                model: root.hub ? root.hub.clients : []
-                delegate: Column {
-                    id: clientRow
-                    required property var modelData
+            active: root.detailed
+            sourceComponent: Component {
+                Column {
                     width: list.width
-                    spacing: 4
+                    spacing: 10
+                    Item {
+                        width: 1
+                        height: 4
+                    }
                     Text {
-                        width: parent.width
-                        text: clientRow.modelData.name + " · " + clientRow.modelData.instanceId.slice(0, 8)
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
+                        text: qsTr("组件访问 · 当前连接有效")
                         color: Theme.ink
                         font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Text {
+                        width: parent.width
+                        text: qsTr("默认不允许读取或修改数据。只给你信任的连接授权。来源名称由客户端自报。")
+                        wrapMode: Text.Wrap
+                        color: Theme.muted
+                        font.pixelSize: 11
                     }
                     Repeater {
-                        model: root.components ? root.components.components : []
-                        delegate: RowLayout {
-                            id: permissionRow
+                        model: root.hub ? root.hub.clients : []
+                        delegate: Column {
+                            id: clientRow
                             required property var modelData
-                            width: clientRow.width
+                            width: list.width
+                            spacing: 4
                             Text {
-                                Layout.fillWidth: true
-                                text: permissionRow.modelData.name
+                                width: parent.width
+                                text: clientRow.modelData.name + " · " + clientRow.modelData.instanceId.slice(0, 8)
                                 textFormat: Text.PlainText
-                                font.pixelSize: 11
-                                color: Theme.muted
+                                elide: Text.ElideRight
+                                color: Theme.ink
+                                font.pixelSize: 12
                             }
-                            ComboBox {
-                                id: permissionControl
-                                objectName: "agentPermissionControl"
-                                readonly property string componentId: permissionRow.modelData.id
-                                implicitWidth: 130
-                                implicitHeight: 28
-                                font.pixelSize: 11
-                                model: permissionRow.modelData.writable
-                                       ? [qsTr("未授权"), qsTr("只读"), qsTr("允许修改")]
-                                       : [qsTr("未授权"), qsTr("只读")]
-                                readonly property string level: clientRow.modelData.grants[permissionRow.modelData.id] || "none"
-                                currentIndex: level === "write" && permissionRow.modelData.writable ? 2 : level !== "none" ? 1 : 0
-                                onActivated: function(index) {
-                                    root.hub.setPermission(clientRow.modelData.instanceId, permissionRow.modelData.id,
-                                                           ["none", "read", "write"][index])
-                                }
-                                popup: EditorPopup {
-                                    focus: false
-                                    anchorItem: permissionControl
-                                    width: permissionControl.width
-                                    implicitHeight: contentItem.implicitHeight + 8
-                                    padding: 4
-                                    contentItem: ListView {
-                                        clip: true
-                                        implicitHeight: contentHeight
-                                        model: permissionControl.popup.visible ? permissionControl.delegateModel : null
-                                        currentIndex: permissionControl.highlightedIndex
+                            Repeater {
+                                model: root.components ? root.components.components : []
+                                delegate: RowLayout {
+                                    id: permissionRow
+                                    required property var modelData
+                                    width: clientRow.width
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: permissionRow.modelData.name
+                                        textFormat: Text.PlainText
+                                        font.pixelSize: 11
+                                        color: Theme.muted
                                     }
-                                    background: Rectangle {
-                                        color: Theme.surface
-                                        border.color: Theme.border
-                                        radius: 6
+                                    ComboBox {
+                                        id: permissionControl
+                                        objectName: "agentPermissionControl"
+                                        readonly property string componentId: permissionRow.modelData.id
+                                        implicitWidth: 130
+                                        implicitHeight: 28
+                                        font.pixelSize: 11
+                                        model: permissionRow.modelData.writable ? [qsTr("未授权"), qsTr("只读"), qsTr("允许修改")] : [qsTr("未授权"), qsTr("只读")]
+                                        readonly property string level: clientRow.modelData.grants[permissionRow.modelData.id] || "none"
+                                        currentIndex: level === "write" && permissionRow.modelData.writable ? 2 : level !== "none" ? 1 : 0
+                                        onActivated: function (index) {
+                                            root.hub.setPermission(clientRow.modelData.instanceId, permissionRow.modelData.id, ["none", "read", "write"][index]);
+                                        }
+                                        popup: EditorPopup {
+                                            focus: false
+                                            anchorItem: permissionControl
+                                            width: permissionControl.width
+                                            implicitHeight: contentItem.implicitHeight + 8
+                                            padding: 4
+                                            contentItem: ListView {
+                                                clip: true
+                                                implicitHeight: contentHeight
+                                                model: permissionControl.popup.visible ? permissionControl.delegateModel : null
+                                                currentIndex: permissionControl.highlightedIndex
+                                            }
+                                            background: Rectangle {
+                                                color: Theme.surface
+                                                border.color: Theme.border
+                                                radius: 6
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    Text {
+                        text: qsTr("最近结束 · 仅本次运行")
+                        color: Theme.ink
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Repeater {
+                        model: root.hub ? root.hub.results : []
+                        delegate: Text {
+                            required property var modelData
+                            width: list.width
+                            text: modelData.time + "  " + modelData.text
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: Theme.muted
+                            font.pixelSize: 11
+                        }
+                    }
+                    Item {
+                        width: 1
+                        height: 12
+                    }
                 }
             }
-            Text { text: qsTr("最近结束 · 仅本次运行"); color: Theme.ink; font.pixelSize: 12; font.bold: true }
-            Repeater {
-                model: root.hub ? root.hub.results : []
-                delegate: Text {
-                    required property var modelData
-                    width: list.width
-                    text: modelData.time + "  " + modelData.text
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    color: Theme.muted
-                    font.pixelSize: 11
-                }
-            }
-            Item { width: 1; height: 12 }
         }
     }
 }
