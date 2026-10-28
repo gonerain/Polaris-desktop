@@ -1,0 +1,11 @@
+{
+  "name": "polaris",
+  "version": "0.1.0",
+  "description": "Connect Codex lifecycle events and component tools to the local Polaris desktop.",
+  "hooks": "./codex/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Polaris",
+    "shortDescription": "Local desktop companion and component tools"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "timeout": 3,
+            "command": "node \"${PLUGIN_ROOT}/codex/hook.mjs\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "timeout": 3,
+            "command": "node \"${PLUGIN_ROOT}/codex/hook.mjs\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "timeout": 3,
+            "command": "node \"${PLUGIN_ROOT}/codex/hook.mjs\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "timeout": 3,
+            "command": "node \"${PLUGIN_ROOT}/codex/hook.mjs\"",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "timeout": 3,
+            "command": "node \"${PLUGIN_ROOT}/codex/hook.mjs\"",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
