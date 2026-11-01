@@ -20,7 +20,10 @@ def run(runtime):
     ]
     installed = {item['id']: item for item in runtime.snapshot()}
     saved = {item['manifest']['id']: item for item in runtime.export_installations()}
+    removed = runtime.removed_installations()
     for identity, name, factory, kwargs in definitions:
+        if identity in removed:
+            continue
         if identity not in installed:
             manifest = {'id': identity, 'name': name, 'version': '0.1.0', 'platformApi': 1,
                         'entry': {'mode': 'inprocess', 'factory': 'polaris_platform.desktop:' + factory,
@@ -28,21 +31,28 @@ def run(runtime):
             runtime.install(manifest, load_factory(manifest, Path.cwd(), runtime, trusted_bindings=True), trusted_bindings=True)
         if identity not in installed or identity in ('window', 'manager') or saved[identity]['autostart']:
             runtime.start_component(identity)
-    host = runtime.component_instance('window')
+    host = runtime.component_instance('window') if 'window' not in removed else None
     manager = runtime.component_instance('manager')
     # These are the precise, installed capabilities of the default local interaction.
     # Existing installations retain every user revocation and never gain new items here.
-    pet_is_new = 'pet' not in installed
+    pet_is_new = 'pet' not in installed and 'pet' not in removed
     defaults = [('pet', 'show', 'operation'), ('pet', 'hide', 'operation'),
                 ('canvas', 'show', 'operation'), ('canvas', 'status', 'operation'), ('canvas', 'dismissed', 'event'),
                 ('manager', 'show', 'operation')]
     defaults += [('window', name, 'operation') for name in ('status', 'create', 'show', 'hide', 'update', 'move')]
     if pet_is_new:
         for target, name, kind in defaults:
+            if target in removed:
+                continue
             runtime.grant('pet', target, name, kind=kind)
-    pet = runtime.component_instance('pet')
+    pet = runtime.component_instance('pet') if 'pet' not in removed else None
     from PySide6.QtCore import QTimer
     def display_pet():
+        if 'pet' in removed or 'window' in removed:
+            # Keep a trusted management entry available after removing or disabling
+            # the usual desktop entry point, without reinstalling that component.
+            manager.show()
+            return
         if pet is None:
             print('桌宠启动失败：桌宠已停用，未启动。', file=sys.stderr)
             app.exit(1)

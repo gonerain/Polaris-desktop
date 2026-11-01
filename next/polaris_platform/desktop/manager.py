@@ -11,6 +11,8 @@ from ..protocol import PlatformError
 class ManagerBridge(QObject):
     changed = Signal()
     completed = Signal(object)
+    installationReady = Signal()
+    installationCancelled = Signal()
     planReady = Signal()
     planCancelled = Signal()
     approvalFinished = Signal(str, str)
@@ -19,6 +21,7 @@ class ManagerBridge(QObject):
         self.runtime = runtime
         self._data, self._permissions, self._plan_json = '[]', '[]', '[]'
         self._notice = ''
+        self._installation_plan = None
         self._busy, self._closed = False, False
         self._worker, self._pending_plan = None, None
         self._pending_user_request = []
@@ -41,6 +44,12 @@ class ManagerBridge(QObject):
     def planSubject(self): return self._pending_plan.get('subject', '') if self._pending_plan else ''
     @Property(str, notify=changed)
     def notice(self): return self._notice
+    @Property(str, notify=changed)
+    def installationPrompt(self):
+        plan = self._installation_plan
+        if not plan: return ''
+        return ('覆盖安装' if plan['action'] == 'replace' else '卸载') + '“' + plan['name'] + '”？'
+
     @Property(bool, notify=changed)
     def busy(self): return self._busy
 
@@ -73,6 +82,12 @@ class ManagerBridge(QObject):
         self._busy = False
         if error:
             self._notice = error
+        elif isinstance(value, dict) and '_installation_plan' in value:
+            self._installation_plan = value['_installation_plan']
+            self._notice = ''
+            self.installationReady.emit()
+        elif isinstance(value, dict) and '_notice' in value:
+            self._notice = value['_notice']
         elif isinstance(value, dict) and '_view_plan' in value:
             self.cancelView()
             self._pending_plan = value['_view_plan']
@@ -80,7 +95,7 @@ class ManagerBridge(QObject):
         elif value is not None:
             self._notice = json.dumps(value, ensure_ascii=False, default=str)[:1200]
         if snapshot is not None:
-            records = [dict(item, name=item['manifest']['name']) for item in snapshot]
+            records = [dict(item, name=item['manifest']['name'], manageable=item['id'] != getattr(self.runtime, 'management_component_id', 'manager') and item['id'] not in self.runtime.roles.values()) for item in snapshot]
             self._data = json.dumps(records, ensure_ascii=False, default=str)
             self._permissions = json.dumps(decisions, ensure_ascii=False)
             if self._pending_plan:
@@ -108,11 +123,69 @@ class ManagerBridge(QObject):
     def lifecycle(self, target, action):
         self.submit(lambda: getattr(self.runtime, action + '_component')(target))
 
+    def _installation_record(self, target):
+        return next((row for row in self.runtime.export_installations() if row['manifest']['id'] == target), None)
+
+    def _check_manageable(self, target, action='uninstall'):
+        options = self.runtime.management_options(target) if hasattr(self.runtime, 'management_options') else {}
+        if options.get(action) is False or target == getattr(self.runtime, 'management_component_id', 'manager') or target in self.runtime.roles.values():
+            raise ValueError('此组件需在退出后通过启动配置更改')
+
+    def _installation_confirmation(self, record, action, **extra):
+        target = record['manifest']['id']
+        self._check_manageable(target, 'replace' if action == 'replace' else 'uninstall')
+        return {'_installation_plan': dict(action=action, target=target,
+                name=record['manifest']['name'], identity=record['installationId'],
+                directory=record.get('directory'), **extra)}
+
     @Slot(str)
     def loadDirectory(self, path):
         from PySide6.QtCore import QUrl
-        local = QUrl(path).toLocalFile() if path.startswith('file:') else path
-        self.submit(lambda: self.runtime.install_directory(local))
+        from pathlib import Path
+        local = str(Path(QUrl(path).toLocalFile() if path.startswith('file:') else path).resolve())
+        def load():
+            manifest = json.loads((Path(local) / 'manifest.json').read_text())
+            existing = self._installation_record(manifest['id'])
+            if existing:
+                return self._installation_confirmation(existing, 'replace', path=local, manifest=manifest)
+            self.runtime.install_directory(local)
+            return {'_notice': '已安装“' + manifest['name'] + '”'}
+        self.submit(load, user_input=True)
+
+    @Slot(str)
+    def prepareUninstall(self, target):
+        def prepare():
+            record = self._installation_record(target)
+            if record is None: raise ValueError('组件已卸载，请重新选择')
+            return self._installation_confirmation(record, 'uninstall')
+        self.submit(prepare, user_input=True)
+
+    @Slot()
+    def cancelInstallation(self):
+        self._installation_plan = None
+        self.installationCancelled.emit()
+        self.changed.emit()
+
+    @Slot()
+    def confirmInstallation(self):
+        plan = self._installation_plan
+        if plan is None: return
+        self.cancelInstallation()
+        def execute():
+            current = self._installation_record(plan['target'])
+            if (current is None or current['installationId'] != plan['identity']
+                    or current.get('directory') != plan['directory']):
+                raise ValueError('安装信息已变化，请重新选择')
+            self._check_manageable(plan['target'], 'replace' if plan['action'] == 'replace' else 'uninstall')
+            if plan['action'] == 'replace':
+                from pathlib import Path
+                manifest = json.loads((Path(plan['path']) / 'manifest.json').read_text())
+                if manifest != plan['manifest']: raise ValueError('组件目录已变化，请重新加载')
+                self.runtime.install_directory(plan['path'], replace=True)
+                return {'_notice': '已覆盖安装“' + plan['name'] + '”'}
+            self.runtime.uninstall_component(plan['target'])
+            return {'_notice': '已卸载“' + plan['name'] + '”'}
+        self.submit(execute, user_input=True)
 
     @Slot(str, str, str, str, bool, bool)
     def permission(self, requester, target, name, kind, background, allow):
@@ -216,6 +289,7 @@ class ManagerBridge(QObject):
 
     def cancel_all(self):
         self.cancelView()
+        self.cancelInstallation()
         self._pending_user_request.clear()
         for token in tuple(self._approvals):
             self._finish_approval(token, 'cancelled')
@@ -277,6 +351,7 @@ class Manager(Presentation):
         self.bridge = ManagerBridge(runtime) if runtime is not None else None
 
     def start(self, port):
+        if self.runtime is not None: self.runtime.management_component_id = port.id
         super().start(port)
         if self.bridge is None and self.runtime is not None:
             self.bridge = self._gui.run(lambda: ManagerBridge(self.runtime))

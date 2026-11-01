@@ -68,6 +68,7 @@ class Runtime(Component):
         self.roles = {}
         self._authorization_records = []
         self._storage = None
+        self._removed_installations = set()
         self._state_dir = None
         self.operation("list")(lambda p, c: self.snapshot())
         self.operation("start", access="write")(lambda p, c: self.start_component(p["id"]))
@@ -81,11 +82,7 @@ class Runtime(Component):
             authorization.bind_identity(identity, record["installation"])
 
     def install(self, manifest, factory, installation_id=None, directory=None, autostart=False, trusted_bindings=False):
-        for key in ("id", "name", "version", "platformApi", "entry"):
-            if key not in manifest:
-                raise PlatformError("invalid_manifest", f"Missing {key}")
-        if manifest["platformApi"] != 1 or manifest["entry"].get("mode") not in ("process", "inprocess"):
-            raise PlatformError("invalid_manifest", "Unsupported platform API or entry mode")
+        self.validate_manifest(manifest)
         component_id = manifest["id"]
         with self._lock:
             if component_id in self._records:
@@ -94,8 +91,28 @@ class Runtime(Component):
                 installation=installation_id or uuid4().hex, instance=None, state="installed", component=None, error=None, directory=str(Path(directory).resolve()) if directory else None, autostart=bool(autostart), trustedBindings=bool(trusted_bindings))
         if self.authorization is not None:
             self.authorization.bind_identity(component_id, self._records[component_id]["installation"])
+        self._removed_installations.discard(component_id)
         self._persist()
         return component_id
+
+    @staticmethod
+    def validate_manifest(manifest):
+        if not isinstance(manifest, dict):
+            raise PlatformError("invalid_manifest", "Manifest must be an object")
+        for key in ("id", "name", "version", "platformApi", "entry"):
+            if key not in manifest:
+                raise PlatformError("invalid_manifest", f"Missing {key}")
+        if not isinstance(manifest["id"], str) or not manifest["id"] or not isinstance(manifest["entry"], dict):
+            raise PlatformError("invalid_manifest", "ID must be a nonempty string and entry an object")
+        if manifest["platformApi"] != 1 or manifest["entry"].get("mode") not in ("process", "inprocess"):
+            raise PlatformError("invalid_manifest", "Unsupported platform API or entry mode")
+        entry = manifest["entry"]
+        if entry["mode"] == "process":
+            command = entry.get("command")
+            if not isinstance(command, list) or not command or not all(isinstance(part, str) and part for part in command):
+                raise PlatformError("invalid_manifest", "Process entry requires a nonempty command array")
+        if not isinstance(entry.get("kwargs", {}), dict):
+            raise PlatformError("invalid_manifest", "Entry kwargs must be an object")
 
     def export_installations(self):
         """Public manager migration record; component-owned data is not included."""
@@ -123,11 +140,77 @@ class Runtime(Component):
         record.update(manifest=dict(manifest), factory=factory, component=None)
         return self.start_component(component_id)
 
-    def install_directory(self, path):
-        from .bootstrap import load_factory
+    def management_options(self, component_id):
+        record = self._record(component_id)
+        injected = any(isinstance(value, dict) and (value.get("runtime") is True or "component" in value)
+                       for value in record["manifest"]["entry"].get("kwargs", {}).values())
+        protected = component_id in self.roles.values()
+        management_self = getattr(self, "management_component_id", None) == component_id
+        protected = protected or management_self
+        return {"uninstall": not protected, "replace": not protected and not injected,
+                "reason": "Changing foundation or management control components requires a new bootstrap" if protected else
+                ("Directory replacement of trusted control bindings requires a new bootstrap" if injected else None)}
+
+    def _check_management(self, component_id, action="replace"):
+        if _active.get() is not None:
+            raise PlatformError("permission_denied", "Installation changes require trusted user management")
+        options = self.management_options(component_id)
+        if not options[action]:
+            raise PlatformError("restart_required", options["reason"])
+        if self._record(component_id)["state"] == "starting":
+            raise PlatformError("busy", component_id)
+
+    def uninstall_component(self, component_id):
+        self._check_management(component_id, "uninstall")
+        self.stop_component(component_id, persist=False)
+        record = self._record(component_id)
+        from .bootstrap import invalidate_plugin_modules
+        try:
+            invalidate_plugin_modules(record["manifest"], record["directory"], installations=self.export_installations())
+        except PlatformError:
+            pass  # Shared package entries remain loaded until host restart.
+        with self._lock:
+            del self._records[component_id]
+            self._removed_installations.add(component_id)
+            self._persist()
+        return {"id": component_id, "state": "uninstalled"}
+
+    def install_directory(self, path, replace=False):
+        if _active.get() is not None:
+            raise PlatformError("permission_denied", "Installation changes require trusted user management")
+        from .bootstrap import load_factory, invalidate_plugin_modules
         directory = Path(path).resolve()
         manifest = json.loads((directory / "manifest.json").read_text())
-        return self.install(manifest, load_factory(manifest, directory, self), directory=directory)
+        self.validate_manifest(manifest)
+        factory = load_factory(manifest, directory, self)
+        component_id = manifest["id"]
+        if component_id not in self._records:
+            # A fresh shared entry may legitimately reuse an already loaded
+            # package. Do not invalidate another installation's code.
+            reference = manifest["entry"].get("factory") or manifest["entry"].get("callable") or ""
+            root = reference.split(":")[0].split(".")[0]
+            shared = any((item["manifest"]["entry"].get("factory") or item["manifest"]["entry"].get("callable") or "").split(":")[0].split(".")[0] == root
+                         for item in self.export_installations())
+            if not shared:
+                invalidate_plugin_modules(manifest, directory, installations=self.export_installations())
+            return self.install(manifest, factory, directory=directory)
+        if not replace:
+            raise PlatformError("already_installed", component_id)
+        self._check_management(component_id)
+        record = self._record(component_id)
+        # Validate reload eligibility before withdrawing the old instance.
+        invalidate_plugin_modules(record["manifest"], record["directory"], check_only=True, installations=self.export_installations())
+        invalidate_plugin_modules(manifest, directory, check_only=True, installations=self.export_installations())
+        running, autostart = record["state"] == "running", record["autostart"]
+        self.stop_component(component_id, persist=False)
+        invalidate_plugin_modules(record["manifest"], record["directory"], installations=self.export_installations())
+        invalidate_plugin_modules(manifest, directory, installations=self.export_installations())
+        record.update(manifest=dict(manifest), factory=factory, directory=str(directory),
+                      component=None, error=None, autostart=autostart)
+        self._persist()
+        if running:
+            self.start_component(component_id)
+        return component_id
 
     def _record(self, component_id):
         try:
@@ -135,9 +218,13 @@ class Runtime(Component):
         except KeyError:
             raise PlatformError("not_installed", component_id) from None
 
+    def removed_installations(self):
+        return frozenset(self._removed_installations)
+
     def load_installations(self, path):
         from .persistence import read_json
-        return read_json(path, [])
+        self._removed_installations = set(read_json(Path(path).with_name("removed-installations.json"), []))
+        return [item for item in read_json(path, []) if item["manifest"]["id"] not in self._removed_installations]
 
     def configure_storage(self, state_dir):
         self._state_dir = Path(state_dir).resolve()
@@ -149,6 +236,7 @@ class Runtime(Component):
         if self._storage is not None:
             from .persistence import write_json
             with self._lock:
+                write_json(self._storage.with_name("removed-installations.json"), sorted(self._removed_installations))
                 write_json(self._storage, self.export_installations())
 
     def component_data_directory(self, component_id):

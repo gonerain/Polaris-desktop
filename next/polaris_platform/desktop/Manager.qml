@@ -53,6 +53,22 @@ Rectangle {
             }
         }
     }
+    Connections { target: manager
+        function onInstallationReady() { installationDialog.open() }
+        function onInstallationCancelled() { installationDialog.close() }
+    }
+    Dialog {
+        id: installationDialog; objectName: 'installationDialog'; title: '确认操作'
+        modal: true; anchors.centerIn: parent; width: Math.min(440, root.width - 48)
+        onRejected: manager.cancelInstallation()
+        contentItem: ColumnLayout {
+            Label { text: manager ? manager.installationPrompt : ''; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            RowLayout { Layout.alignment: Qt.AlignRight
+                Button { objectName: 'cancelInstallation'; text: '取消'; onClicked: manager.cancelInstallation() }
+                Button { objectName: 'confirmInstallation'; text: '确认'; onClicked: manager.confirmInstallation() }
+            }
+        }
+    }
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 24; spacing: 16
         RowLayout {
@@ -107,6 +123,7 @@ Rectangle {
                             Text { visible: !!root.description(root.current).view_state; text: root.description(root.current).view_state?.visible ? '视图已显示' : '视图已隐藏'; color: '#738098'; font.pixelSize: 12 }
                             RowLayout {
                                 Button { text: '启动'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'start') }
+                                Button { objectName: 'uninstallComponent'; text: '卸载'; enabled: !!root.current.id && root.current.manageable && manager && !manager.busy; onClicked: manager.prepareUninstall(root.current.id) }
                                 Button { text: '停止'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'stop') }
                                 Repeater { model: root.viewActions(root.current)
                                     Button { required property var modelData; text: modelData.label; enabled: !!root.subjectId && manager && !manager.busy
