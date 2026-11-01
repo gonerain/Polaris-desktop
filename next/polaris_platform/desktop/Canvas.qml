@@ -96,26 +96,49 @@ Rectangle {
             Rectangle { Layout.fillWidth: true; height: 1; color: colors.border }
             ListView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 4
-                model: typeof canvasActions === 'undefined' ? [] : JSON.parse(canvasActions.viewsJson)
+                model: {
+                    var groups = []
+                    var views = typeof canvasActions === 'undefined' ? [] : JSON.parse(canvasActions.viewsJson)
+                    views.forEach(function(view, index) {
+                        var group = groups.find(function(g) { return g.target === view.target })
+                        if (!group) { group = {target: view.target, name: view.componentName, views: []}; groups.push(group) }
+                        group.views.push({title: view.title, index: index})
+                    })
+                    return groups
+                }
                 ScrollBar.vertical: ScrollBar { }
-                delegate: ItemDelegate {
-                    id: choice
-                    objectName: "componentViewChoice"
-                    width: ListView.view.width; height: 64
-                    hoverEnabled: true
-                    Accessible.name: modelData.componentName + "，" + modelData.title
-                    background: Rectangle { radius: 8; color: choice.down ? colors.pressed : choice.hovered || choice.visualFocus ? colors.hover : "transparent"; border.width: choice.visualFocus ? 1 : 0; border.color: colors.focus }
-                    contentItem: RowLayout {
-                        spacing: 12
-                        Rectangle { width: 36; height: 36; radius: 9; color: colors.hover; CanvasIcon { anchors.centerIn: parent; kind: "board"; ink: colors.muted } }
-                        Column {
-                            Layout.fillWidth: true; spacing: 4
-                            Text { width: parent.width; elide: Text.ElideRight; text: modelData.componentName; textFormat: Text.PlainText; font.pixelSize: 14; font.weight: Font.Medium; color: colors.ink }
-                            Text { visible: modelData.title !== modelData.componentName; width: parent.width; elide: Text.ElideRight; text: modelData.title; textFormat: Text.PlainText; font.pixelSize: 12; color: colors.muted }
+                delegate: Column {
+                    id: componentChoice
+                    required property var modelData
+                    width: ListView.view.width
+                    property bool expanded: false
+                    ItemDelegate {
+                        id: choice
+                        objectName: "componentViewChoice"
+                        width: parent.width; height: 56; hoverEnabled: true
+                        Accessible.name: componentChoice.modelData.name
+                        background: Rectangle { radius: 8; color: choice.down ? colors.pressed : choice.hovered || choice.visualFocus ? colors.hover : "transparent"; border.width: choice.visualFocus ? 1 : 0; border.color: colors.focus }
+                        contentItem: RowLayout {
+                            spacing: 12
+                            Rectangle { width: 36; height: 36; radius: 9; color: colors.hover; CanvasIcon { anchors.centerIn: parent; kind: "board"; ink: colors.muted } }
+                            Text { Layout.fillWidth: true; elide: Text.ElideRight; text: componentChoice.modelData.name; textFormat: Text.PlainText; font.pixelSize: 14; font.weight: Font.Medium; color: colors.ink }
+                            CanvasIcon { kind: componentChoice.modelData.views.length === 1 ? "plus" : "down"; ink: choice.hovered ? colors.ink : colors.muted }
                         }
-                        CanvasIcon { kind: "plus"; ink: choice.hovered ? colors.ink : colors.muted }
+                        onClicked: {
+                            if (componentChoice.modelData.views.length === 1) { canvasActions.mountSelected(componentChoice.modelData.views[0].index); viewPicker.close() }
+                            else componentChoice.expanded = !componentChoice.expanded
+                        }
                     }
-                    onClicked: { canvasActions.mountSelected(index); viewPicker.close() }
+                    Repeater {
+                        model: componentChoice.expanded ? componentChoice.modelData.views : []
+                        ItemDelegate {
+                            id: subChoice; required property var modelData
+                            width: componentChoice.width; height: 38; leftPadding: 56
+                            contentItem: Text { text: subChoice.modelData.title; color: colors.ink; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
+                            background: Rectangle { radius: 8; color: subChoice.hovered ? colors.hover : "transparent" }
+                            onClicked: { canvasActions.mountSelected(subChoice.modelData.index); viewPicker.close() }
+                        }
+                    }
                 }
                 Label { anchors.centerIn: parent; visible: parent.count === 0; text: '暂无可添加的组件'; font.pixelSize: 13; color: colors.muted }
             }

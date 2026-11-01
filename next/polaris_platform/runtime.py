@@ -57,6 +57,20 @@ class Client:
     def background_context(self):
         raise PlatformError("explicit_background_required", "Trusted user management must issue a background context for an explicit task")
 
+    def remember_task(self, name, operations, context):
+        context = self._context(context)
+        self.__runtime.remember_task(self, name, operations, context)
+
+    def forget_task(self, name, context):
+        self._context(context)
+        self.__runtime.forget_task(self, name)
+
+    def resume_task(self, name):
+        self.__runtime.validate_client(self)
+        if _active.get() is not None:
+            raise PlatformError('scope_escalation', 'Task restoration cannot replace an active request')
+        return self.__runtime.resume_task(self, name)
+
 
 class Runtime(Component):
     def __init__(self):
@@ -70,6 +84,7 @@ class Runtime(Component):
         self._storage = None
         self._removed_installations = set()
         self._state_dir = None
+        self._tasks, self._task_storage = {}, None
         self.operation("list")(lambda p, c: self.snapshot())
         self.operation("start", access="write")(lambda p, c: self.start_component(p["id"]))
         self.operation("stop", access="write")(lambda p, c: self.stop_component(p["id"]))
@@ -180,7 +195,7 @@ class Runtime(Component):
             raise PlatformError("permission_denied", "Installation changes require trusted user management")
         from .bootstrap import load_factory, invalidate_plugin_modules
         directory = Path(path).resolve()
-        manifest = json.loads((directory / "manifest.json").read_text())
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         self.validate_manifest(manifest)
         factory = load_factory(manifest, directory, self)
         component_id = manifest["id"]
@@ -223,6 +238,8 @@ class Runtime(Component):
 
     def load_installations(self, path):
         from .persistence import read_json
+        self._task_storage = Path(path).with_name('tasks.json')
+        self._tasks = read_json(self._task_storage, {})
         self._removed_installations = set(read_json(Path(path).with_name("removed-installations.json"), []))
         return [item for item in read_json(path, []) if item["manifest"]["id"] not in self._removed_installations]
 
@@ -231,6 +248,50 @@ class Runtime(Component):
         self._storage = self._state_dir / "installations.json"
         self._persist()
         self.authorization.configure_storage(self._state_dir / "authorization.json")
+        self._task_storage = self._state_dir / 'tasks.json'
+        self._persist_tasks()
+
+    def _task_key(self, client, name):
+        self.validate_client(client)
+        if not isinstance(name, str) or not name or len(name) > 64:
+            raise PlatformError('invalid_params', 'Invalid task name')
+        return self._record(client.id)['installation'] + ':' + name
+
+    def remember_task(self, client, name, operations, context):
+        """Persist a user-authorized delegation, never a serialized Context."""
+        self.validate_context(context)
+        if context.source != 'user':
+            raise PlatformError('permission_denied', 'Task setup requires user authority')
+        key = self._task_key(client, name)
+        selected = {(self._record(target)['installation'], operation) for target, operation in operations}
+        scope = [list(cap) for cap in context.scope
+                 if cap[1] == 'operation' and (cap[0], cap[2]) in selected]
+        with self._lock:
+            self._tasks[key] = dict(origin=context.origin, originInstallation=context.origin_installation, scope=scope)
+            self._persist_tasks()
+
+    def forget_task(self, client, name):
+        with self._lock:
+            self._tasks.pop(self._task_key(client, name), None)
+            self._persist_tasks()
+
+    def resume_task(self, client, name):
+        from .protocol import Context
+        with self._lock:
+            task = self._tasks.get(self._task_key(client, name))
+            if task is None:
+                return None
+            origin = self._record(task['origin'])
+            if origin['installation'] != task['originInstallation']:
+                raise PlatformError('stale_instance', 'Task authorization owner was replaced')
+            # Every operation still checks the current authorization record.
+            return self._stamp(Context(task['origin'], client.id, 'user',
+                frozenset(tuple(cap) for cap in task['scope']), origin_installation=task['originInstallation']))
+
+    def _persist_tasks(self):
+        if self._task_storage is not None:
+            from .persistence import write_json
+            write_json(self._task_storage, self._tasks)
 
     def _persist(self):
         if self._storage is not None:

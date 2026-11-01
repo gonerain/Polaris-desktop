@@ -38,8 +38,8 @@ export function install(pi, markSchema, Client = BridgeClient) {
         client.on('command', command => {
             if (command.command !== 'session.send' || seen.has(command.requestId)) return;
             seen.add(command.requestId);
-            const result = (status, detail) => client?.event('command.result', {
-                requestId: command.requestId, status, detail,
+            const result = (status, detail, submittedRun) => client?.event('command.result', {
+                requestId: command.requestId, status, detail, ...(submittedRun ? {runId:submittedRun} : {}),
             });
             try {
                 if (version !== generation || !context || command.sessionId !== bound ||
@@ -48,9 +48,11 @@ export function install(pi, markSchema, Client = BridgeClient) {
                 if (!['start', 'steer'].includes(command.mode)) return result('rejected', 'unsupported_mode');
                 if (command.mode === 'start' && !context.isIdle()) return result('rejected', 'session_busy');
                 if (command.mode === 'steer' && context.isIdle()) return result('rejected', 'session_idle');
+                if (command.mode === 'start') { runId = randomUUID(); reply = ''; lastStop = ''; }
+                const submittedRun = runId;
                 pi.sendUserMessage(command.text, command.mode === 'start'
                     ? {expandPromptTemplates: false} : {deliverAs: 'steer', expandPromptTemplates: false});
-                result('accepted', 'Submitted to the bound Pi session');
+                result('accepted', 'Submitted to the bound Pi session', submittedRun);
             } catch { result('unknown', 'Host dispatch failed; do not retry automatically'); }
         });
         client.start();

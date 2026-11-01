@@ -56,7 +56,7 @@ class WindowHost(Component):
         self.operation('update', 'write')(lambda p, c: self._owned(p, c, lambda: self.update_view(p['handle'], p.get('properties', {}))))
         self.operation('show', 'write')(lambda p, c: self._owned(p, c, lambda: self.show_view(p['handle'])))
         self.operation('hide', 'write')(lambda p, c: self._owned(p, c, lambda: self.hide_view(p['handle'])))
-        self.operation('move', 'write')(lambda p, c: self._owned(p, c, lambda: self.move_view(p['handle'], p['x'], p['y'])))
+        self.operation('move', 'write')(lambda p, c: self._owned(p, c, lambda: self.move_view(p['handle'], p['x'], p['y'], p.get('constrain', True))))
         self.operation('release', 'write')(lambda p, c: self._owned(p, c, lambda: self.release_view(p['handle'])))
 
     def _owned(self, params, context, fn):
@@ -173,17 +173,28 @@ class WindowHost(Component):
         return self.dispatcher.run(state)
 
     def _clamp(self, view, x, y):
-        bounds = (view.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        target = QRect(round(x), round(y), view.width(), view.height())
+        screens = QGuiApplication.screens()
+        if not screens:
+            return round(x), round(y)
+        def score(screen):
+            bounds = screen.availableGeometry()
+            overlap = bounds.intersected(target)
+            center = target.center()
+            dx = max(bounds.left() - center.x(), 0, center.x() - bounds.right())
+            dy = max(bounds.top() - center.y(), 0, center.y() - bounds.bottom())
+            return (overlap.width() * overlap.height(), -(dx * dx + dy * dy))
+        bounds = max(screens, key=score).availableGeometry()
         return (max(bounds.left(), min(int(x), max(bounds.left(), bounds.right() - view.width() + 1))),
                 max(bounds.top(), min(int(y), max(bounds.top(), bounds.bottom() - view.height() + 1))))
 
-    def move_view(self, handle, x, y):
+    def move_view(self, handle, x, y, constrain=True):
         self._check()
         def move():
             if handle not in self._views:
                 raise PlatformError('stale_view', '展示窗口已经释放')
             view = self._views[handle]
-            view.setPosition(*self._clamp(view, x, y))
+            view.setPosition(*(self._clamp(view, x, y) if constrain else (round(x), round(y))))
             return self.view_status(handle)
         return self.dispatcher.run(move)
 

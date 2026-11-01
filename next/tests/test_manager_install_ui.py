@@ -72,7 +72,7 @@ def exercise():
     assert runtime.calls == [] and bridge._installation_plan is None
     with tempfile.TemporaryDirectory() as directory:
         manifest = dict(id='example', name='示例', version='2')
-        (Path(directory) / 'manifest.json').write_text(json.dumps(manifest))
+        (Path(directory) / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         bridge.submit(lambda: time.sleep(0.08))
         bridge.loadDirectory(directory); wait()
         assert bridge._installation_plan is not None
@@ -87,7 +87,7 @@ def exercise():
         assert len(runtime.calls) == 1 and '已变化' in bridge.notice
         bridge.loadDirectory(directory); wait()
         manifest['version'] = '3'
-        (Path(directory) / 'manifest.json').write_text(json.dumps(manifest))
+        (Path(directory) / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         click('confirmInstallation')
         assert len(runtime.calls) == 1 and '目录已变化' in bridge.notice
     click('uninstallComponent')

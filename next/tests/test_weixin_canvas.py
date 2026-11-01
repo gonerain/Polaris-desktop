@@ -151,6 +151,43 @@ else:
                 presentation.dispatcher.run = original
                 self.wait(lambda: not worker.is_alive())
 
+        def test_weixin_marks_real_agent_and_both_canvas_views_refresh(self):
+            from test_weixin_agent_e2e import ScriptedModel, tool, call, TARGET, OPERATIONS
+            from polaris_agent import Agent
+            from polaris_weixin.agent import WeixinAgent
+            agent = Agent(data_dir=Path(self.directory.name) / 'agent')
+            self.runtime.install(dict(id=TARGET, name='Agent', version='1', platformApi=1,
+                entry=dict(mode='inprocess')), lambda: agent)
+            self.runtime.start_component(TARGET)
+            for name in agent.describe()['operations']:
+                self.runtime.grant('canvas', TARGET, name)
+            row = agent.store.snapshot('fixture', 'ui', 'ui-session', title='画布联调会话')
+            self.component.agent.agent = WeixinAgent(ScriptedModel([
+                tool('help', component='Agent'), call('mark', session_id=row['id']), {'content': '画布会话已标记'},
+                tool('help', component='Agent'), call('unmark', session_id=row['id']), {'content': '画布会话已取消标记'}]))
+            self.mount_by_picker()
+            weixin_bridge = next(iter(self.component._presentation._views.values()))[2]
+            self.assertTrue(weixin_bridge.invoke('connect', '{}'))
+            self.wait(lambda: self.component.client.state == 'connected')
+            self.assertTrue(weixin_bridge.invoke('configure_agent', json.dumps({'enabled': True,
+                'allowed': [{'target': TARGET, 'operation': name} for name in OPERATIONS]})))
+            self.canvas.mount({'target': TARGET, 'descriptor': agent.views[0]}, self.runtime.user_context('canvas'))
+            self.wait(lambda: len(self.canvas.status()['mounts']) == 2 and
+                      all(m['state'] == 'mounted' for m in self.canvas.status()['mounts']))
+            agent_bridge = next(iter(agent._presentation._views.values()))[2]
+            for index, marked in enumerate((True, False)):
+                with self.fake.lock:
+                    self.fake.incoming.append(dict(message_id='canvas-e2e-' + str(index), message_type=1,
+                        message_state=2, from_user_id='fake-user', context_token='fake-context',
+                        create_time_ms=time.time()*1000,
+                        item_list=[{'type': 1, 'text_item': {'text': '标记' if marked else '取消标记'}}]))
+                self.wait(lambda: len(self.fake.sent) == index + 1 and not self.component.agent.busy)
+                self.wait(lambda: json.loads(agent_bridge.dataJson)['sessions'][0]['marked'] is marked)
+                self.wait(lambda: len(json.loads(weixin_bridge.dataJson)['messages']) == 2*(index + 1))
+                self.assertTrue(json.loads(weixin_bridge.agentJson)['enabled'])
+                self.assertEqual(weixin_bridge.lastError, '')
+                self.assertEqual(agent_bridge.lastError, '')
+
         def test_multiple_views_release_independently(self):
             self.mount_by_picker()
             presentation = self.component._presentation

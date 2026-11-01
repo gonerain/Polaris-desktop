@@ -213,12 +213,13 @@ class Presentation:
             self._notice_timer = QTimer(self.changes)
             self._notice_timer.setSingleShot(True)
             self._notice_timer.timeout.connect(self._notice.hide)
-        statuses = {'completed': '已完成', 'failed': '失败', 'stopped': '已停止', 'unknown': '结束未确认'}
+        statuses = {'completed': '已完成', 'failed': '失败', 'stopped': '已停止', 'unknown': '完成状态未知'}
         root = self._notice.rootObject()
         if root is None:
             return
         root.setProperty('noticeTitle', str(session.get('title') or session.get('sessionId') or 'Agent')[:120])
-        root.setProperty('noticeState', statuses.get(run.get('status'), '结果未确认'))
+        root.setProperty('noticeState', '收到回复，完成状态未知' if run.get('status') == 'unknown' and run.get('reply')
+                         else statuses.get(run.get('status'), '完成状态未知'))
         self._notice.resize(320, 86)
         screen = QGuiApplication.primaryScreen()
         if screen:

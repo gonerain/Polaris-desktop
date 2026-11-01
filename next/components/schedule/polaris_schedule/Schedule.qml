@@ -29,6 +29,13 @@ Rectangle {
         })
     }
     function iso(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') }
+    function refreshToday(value) {
+        var followToday = selectedDate === todayDate
+        todayDate = value
+        if (followToday) selectedDate = value
+    }
+    Timer { interval: 1000; repeat: true; running: true; onTriggered: root.refreshToday(root.iso(new Date())) }
+    onVisibleChanged: if (visible) refreshToday(iso(new Date()))
     function shiftDate(n) { var d = new Date(selectedDate + 'T12:00:00'); d.setDate(d.getDate()+n); selectedDate = iso(d) }
     function changePeriod(direction) {
         if (presentation !== '月') { shiftDate(direction * (presentation === '周' ? 7 : 1)); return }
@@ -60,7 +67,7 @@ Rectangle {
             ScheduleButton { objectName: 'previousDay'; text: '‹'; onClicked: root.changePeriod(-1) }
             ScheduleButton { objectName: 'selectedDay'; text: root.presentation === '月' ? root.selectedDate.slice(0,7) : root.selectedDate.slice(5).replace('-', ' / '); onClicked: datePopup.open() }
             ScheduleButton { objectName: 'nextDay'; text: '›'; onClicked: root.changePeriod(1) }
-            ScheduleButton { text: '今天'; visible: root.wide; onClicked: root.selectedDate = root.iso(new Date()) }
+            ScheduleButton { objectName: 'todayButton'; text: '今天'; visible: root.wide || root.selectedDate !== root.todayDate; onClicked: root.selectedDate = root.iso(new Date()) }
             ScheduleButton { objectName: 'searchButton'; text: '⌕'; onClicked: { search.visible = !search.visible; if (search.visible) search.forceActiveFocus(); else { search.clear(); root.query = '' } } }
             ScheduleButton { objectName: 'scheduleModes'; text: root.presentation + ' ▾'; visible: root.wide; onClicked: modes.open() }
         }

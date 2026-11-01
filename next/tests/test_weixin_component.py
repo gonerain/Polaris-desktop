@@ -91,6 +91,22 @@ class WeixinComponentTests(unittest.TestCase):
         self.assertEqual(description['views'][0]['adapter'], 'qt-quick-item')
         self.assertEqual(description['operations']['create_view']['profile'], 'qt-native')
         self.assertEqual(self.call('release_view', handle='missing'), {'released': False})
+
+    def test_saved_binding_connects_on_start_without_opening_view(self):
+        from types import SimpleNamespace
+        from polaris_weixin import Weixin
+        component = Weixin(data_dir=self.directory.name, credentials=Credentials(ACCOUNT), transport=self.fake)
+        try:
+            self.assertEqual(self.fake.calls, [])
+            component.start(SimpleNamespace(id=self.identity))
+            self.wait(lambda: component.get()['state'] == 'connected')
+            self.assertIn('ilink/bot/getupdates', self.fake.calls)
+            self.assertEqual(self.fake.sent, [])
+            component.client.disconnect()
+            time.sleep(.05)
+            self.assertEqual(component.get()['state'], 'offline')
+        finally:
+            component.stop()
     def test_fake_login_receive_send_clear_and_logout(self):
         self.call('login')
         self.wait(lambda: self.call('get')['state'] == 'connected')

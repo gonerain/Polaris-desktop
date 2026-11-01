@@ -62,6 +62,120 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(self.effects, ['ok'])
         self.assertEqual(len(self.fake.sent), 1)
         self.assertEqual(self.fake.sent[0]['item_list'][0]['text_item']['text'], '完成')
+
+    def test_final_model_failure_acknowledges_committed_write_and_stays_enabled(self):
+        from polaris_weixin.model import ModelError
+        class BrokenFinal(Model):
+            def complete(self, *args, **kwargs):
+                if self.step == 2:
+                    raise ModelError('请求超时')
+                return super().complete(*args, **kwargs)
+        self.component.agent.agent = WeixinAgent(BrokenFinal())
+        self.enable(); self.receive(timestamp=time.time()*1000)
+        self.wait(lambda: len(self.component.agent.history) == 2)
+        self.assertEqual(self.effects, ['ok'])
+        self.assertEqual(len(self.fake.sent), 1)
+        reply = self.fake.sent[0]['item_list'][0]['text_item']['text']
+        self.assertIn('已确认执行成功', reply)
+        self.assertIn('请求超时', reply)
+        self.assertTrue(self.component.agent.enabled)
+
+    def test_model_failure_before_tools_reports_failure_without_claiming_success(self):
+        from polaris_weixin.model import ModelError
+        class Broken:
+            def complete(self, *args, **kwargs):
+                raise ModelError('DeepSeek 请求失败，请检查网络或配置')
+        self.component.agent.agent = WeixinAgent(Broken())
+        self.enable(); self.receive(timestamp=time.time()*1000)
+        self.wait(lambda: len(self.component.agent.history) == 2)
+        reply = self.fake.sent[0]['item_list'][0]['text_item']['text']
+        self.assertIn('请求失败', reply)
+        self.assertNotIn('执行成功', reply)
+        self.assertEqual(self.effects, [])
+        self.assertTrue(self.component.agent.enabled)
+
+    def test_waiting_for_sender_has_deadline_and_does_not_resend(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        self.enable()
+        self.component.client.sending = True
+        ticks = iter([0, 31])
+        clock = SimpleNamespace(time=time.time, monotonic=lambda: next(ticks))
+        with patch('polaris_weixin.controller.time', clock):
+            self.receive(timestamp=time.time()*1000)
+            self.wait(lambda: not self.component.agent.worker_running)
+        self.assertFalse(self.component.agent.busy)
+        self.assertFalse(self.component.agent.enabled)
+        self.assertIn('发送未确认', self.component.agent.error)
+        self.assertEqual(self.effects, ['ok'])
+        self.assertEqual(self.fake.sent, [])
+        self.component.client.sending = False
+
+    def test_failure_summary_never_claims_unknown_write_succeeded(self):
+        executor = ToolExecutor(None, [], 'collaboration')
+        executor.writes[('toy', 'echo', '{}')] = (None, True)
+        reply = executor.failure_reply('请求超时')
+        self.assertIn('结果未确认', reply)
+        self.assertNotIn('已确认执行成功', reply)
+
+    def test_failure_summary_distinguishes_submission_from_completion(self):
+        executor = ToolExecutor(None, [], 'collaboration')
+        for status, expected in [('pending', '等待接收方确认'), ('accepted', '运行结果需另行查询'),
+                                 ('rejected', '已拒绝'), ('unknown', '结果未确认')]:
+            executor.writes[('org.polaris.agent', 'send', '{}')] = ({'status': status}, False)
+            reply = executor.failure_reply('请求超时')
+            self.assertIn(expected, reply)
+            self.assertNotIn('已确认执行成功', reply)
+
+    def test_display_name_help_and_canonical_call_complete_full_reply(self):
+        import json
+        target = 'org.polaris.agent'
+        component = Component()
+        component.operation('sessions')(lambda: [{'title': '测试会话', 'online': True}])
+        self.runtime.install(dict(id=target, name='Agent', version='1', platformApi=1,
+                                  entry=dict(mode='inprocess')), lambda: component)
+        self.runtime.start_component(target)
+        self.runtime.grant('user', target, 'sessions')
+        self.context = self.runtime.user_context('user')
+        class DisplayNameModel:
+            step = 0
+            def complete(self, messages, tools, cancel, timeout=30):
+                self.step += 1
+                if self.step == 4:
+                    result = json.loads(messages[-1]['content'])
+                    assert result == [{'title': '测试会话', 'online': True}], result
+                    return {'role': 'assistant', 'content': 'Agent 有一个在线测试会话'}
+                name, args = [('components', {}), ('help', {'component': 'Agent'}),
+                    ('call', {'component': 'org.polaris.agent', 'operation': 'sessions', 'arguments': {}})][self.step-1]
+                return {'role': 'assistant', 'tool_calls': [{'id': str(self.step), 'type': 'function',
+                    'function': {'name': name, 'arguments': json.dumps(args)}}]}
+        self.component.agent.agent = WeixinAgent(DisplayNameModel())
+        self.call('configure_agent', enabled=True, allowed=[{'target': target, 'operation': 'sessions'}])
+        self.receive(timestamp=time.time()*1000)
+        self.wait(lambda: len(self.component.agent.history) == 2)
+        self.assertEqual(self.fake.sent[0]['item_list'][0]['text_item']['text'], 'Agent 有一个在线测试会话')
+
+    def test_component_aliases_do_not_bypass_allowlist_or_ambiguity(self):
+        owner = self
+        class Ctx:
+            def call(self, target, operation, params):
+                return owner.runtime.client('user').call(target, operation, params, context=owner.context)
+        executor = ToolExecutor(Ctx(), [{'target': 'toy', 'operation': 'echo'}], 'collaboration')
+        self.assertEqual(executor.resolve_component('TOY'), 'toy')
+        with self.assertRaises(PlatformError) as unknown:
+            executor.resolve_component('No such component')
+        self.assertEqual(unknown.exception.code, 'component_not_found')
+        with self.assertRaises(PlatformError) as denied:
+            executor.resolve_component('User')
+        self.assertEqual(denied.exception.code, 'denied')
+        self.runtime.install(dict(id='duplicate', name='Toy', version='1', platformApi=1,
+                                  entry=dict(mode='inprocess')), Component)
+        self.runtime.start_component('duplicate')
+        executor.execute('components', {}, threading.Event())
+        with self.assertRaises(PlatformError) as ambiguous:
+            executor.resolve_component('Toy')
+        self.assertEqual(ambiguous.exception.code, 'ambiguous_component')
+        self.assertEqual(executor.resolve_component('toy'), 'toy')
     def test_old_missing_and_duplicate_messages_never_trigger(self):
         self.receive('before', time.time()*1000)
         self.enable()
@@ -105,14 +219,83 @@ class AgentRuntimeTests(unittest.TestCase):
         with self.assertRaises(PlatformError): executor.execute('call', args, cancel)
         self.assertEqual(len(calls), 2)
 
-    def test_settings_restart_stays_disabled_and_context_never_saved(self):
+    def test_settings_restart_remembers_choice_but_context_never_saved(self):
         from polaris_weixin.controller import AgentController
         self.enable()
         restored = AgentController(self.component.client, self.component.agent.path, lambda: None)
         self.assertFalse(restored.enabled)
+        self.assertTrue(restored.settings()['resumePending'])
         self.assertIsNone(restored.ctx)
         self.assertEqual(restored.allowed, [{'target':'toy','operation':'echo'}])
-        self.assertEqual(set(__import__('json').loads(restored.path.read_text())), {'version','allowed'})
+        self.assertEqual(set(__import__('json').loads(restored.path.read_text())), {'version','allowed','enabled'})
+        self.call('configure_agent', enabled=False)
+        disabled = AgentController(self.component.client, self.component.agent.path, lambda: None)
+        self.assertFalse(disabled.settings()['resumePending'])
+
+    def test_restart_without_any_view_restores_reply_and_reconnects(self):
+        self.enable()
+        self.runtime.stop_component(self.identity, persist=False)
+        self.runtime.start_component(self.identity)
+        self.component = self.runtime.component_instance(self.identity)
+        self.component.agent.agent = WeixinAgent(Model())
+        self.component.client.transport = self.fake
+        self.component.client.account = dict(ACCOUNT)
+        self.component.client.credentials = Credentials(ACCOUNT)
+        self.call('connect')
+        self.assertIsNone(self.component._presentation)
+        self.receive('after-restart', time.time()*1000)
+        self.wait(lambda: len(self.component.agent.history) == 2)
+        self.assertEqual(self.effects, ['ok'])
+        self.assertEqual(len(self.fake.sent), 1)
+        self.call('disconnect')
+        self.call('connect')
+        self.component.agent.agent = WeixinAgent(Model())
+        self.receive('after-reconnect', time.time()*1000)
+        self.wait(lambda: len(self.fake.sent) == 2)
+        self.assertIsNone(self.component._presentation)
+
+    def test_disabled_reply_does_not_restore_after_restart(self):
+        self.enable()
+        self.call('configure_agent', enabled=False)
+        self.runtime.stop_component(self.identity, persist=False)
+        self.runtime.start_component(self.identity)
+        self.component = self.runtime.component_instance(self.identity)
+        self.component.client.transport = self.fake
+        self.component.client.account = dict(ACCOUNT)
+        self.component.client.state = 'connected'
+        self.receive(timestamp=time.time()*1000)
+        self.assertFalse(self.component.agent.enabled)
+        self.assertEqual(self.fake.sent, [])
+
+    def test_saved_reply_choice_resumes_through_live_view_authority(self):
+        from PySide6.QtCore import QCoreApplication
+        from polaris_weixin.controller import AgentController
+        from polaris_weixin.view import Bridge
+        app = QCoreApplication.instance() or QCoreApplication([])
+        self.enable()
+        self.component.agent = AgentController(self.component.client, self.component.agent.path,
+                                               lambda: None, 'collaboration', self.identity, WeixinAgent(Model()))
+        self.component.client.on_text = self.component.agent.receive
+        self.component.client.on_invalidate = self.component.agent.invalidate
+        owner = self
+        class Context:
+            def call(self, target, operation, params):
+                return owner.call(operation, **params)
+        bridge = Bridge(self.component, Context(), None)
+        try:
+            self.assertTrue(bridge.refresh())
+            self.assertTrue(self.component.agent.enabled)
+            self.receive(timestamp=time.time()*1000)
+            self.wait(lambda: len(self.component.agent.history) == 2)
+            self.assertEqual(len(self.fake.sent), 1)
+            self.component.agent.invalidate()
+            self.runtime.revoke('user', self.identity, 'configure_agent')
+            bridge._resume_attempted = False
+            self.assertTrue(bridge.refresh())
+            self.assertFalse(self.component.agent.enabled)
+            self.assertTrue(bridge.lastError)
+        finally:
+            bridge._timer.stop()
 
     def test_actual_manifest_identity_cannot_be_selected_or_called(self):
         self.assertEqual(self.component.agent.own_id, self.identity)

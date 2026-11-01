@@ -28,6 +28,101 @@ class Executor:
 
 
 class CoreTests(unittest.TestCase):
+    def test_review_keeps_original_context_after_tool_rounds(self):
+        class Reviewed(FakeModel):
+            def review(self, request, draft, evidence, cancel, timeout=30):
+                self.request = json.loads(request)
+                return {'needs_tools':False,'reply':draft,'reason':''}
+        history=[{'role':'user','content':'请把上一段转发给目标'},
+                 {'role':'assistant','content':'请提供正文和发送模式'}]
+        model=Reviewed([{'tool_calls':[tool('components',{})]}]*6+[{'content':'已处理'}])
+        WeixinAgent(model).run('start，待转发的正文',history,Executor(),threading.Event())
+        self.assertEqual(model.request['recent_messages'][:2],history)
+        self.assertEqual(model.request['current'],'start，待转发的正文')
+
+    def test_unexecuted_success_draft_is_checked_before_sending(self):
+        class ReviewedModel(FakeModel):
+            def review(self, request, draft, evidence, cancel, timeout=30):
+                if not evidence:
+                    self.asserted_empty_evidence = True
+                    return {'needs_tools': True, 'reply': '', 'reason': '没有实际取消标记'}
+                return {'needs_tools': False, 'reply': draft, 'reason': ''}
+        model = ReviewedModel([{'role': 'assistant', 'content': '已取消标记'},
+            {'tool_calls': [tool('help', {'component': 'x'})]},
+            {'tool_calls': [tool('call', {'component': 'x', 'operation': 'unmark', 'arguments': {}})]},
+            {'content': '已核实取消标记'}])
+        executor = Executor()
+        result = WeixinAgent(model).run('取消标记', [], executor, threading.Event())
+        self.assertTrue(model.asserted_empty_evidence)
+        self.assertEqual(result.text, '已核实取消标记')
+        self.assertEqual([name for name, _ in executor.calls], ['help', 'call'])
+
+    def test_catalog_reply_review_receives_directory_evidence(self):
+        class Reviewed(FakeModel):
+            def review(self, request, draft, evidence, cancel, timeout=30):
+                self.evidence = evidence
+                return {'needs_tools': False, 'reply': draft, 'reason': ''}
+        model = Reviewed([{'tool_calls': [tool('components', {})]}, {'content': '可用组件'}])
+        result = WeixinAgent(model).run('你能做什么', [], Executor(), threading.Event())
+        self.assertEqual(result.text, '可用组件')
+        self.assertEqual(model.evidence[0]['tool'], 'components')
+
+    def test_repeated_unsupported_claims_fail_instead_of_being_sent(self):
+        class Unsupported(FakeModel):
+            def review(self, *args, **kwargs):
+                return {'needs_tools': True, 'reply': '', 'reason': '没有执行证据'}
+        model = Unsupported([{'role': 'assistant', 'content': '已完成'}] * 3)
+        with self.assertRaisesRegex(ModelError, '可核实'):
+            WeixinAgent(model).run('执行', [], Executor(), threading.Event())
+
+    def test_cancel_during_review_never_returns_answer(self):
+        cancel = threading.Event()
+        class CancelReview(FakeModel):
+            def review(self, *args, **kwargs):
+                cancel.set()
+                return {'needs_tools': False, 'reply': '迟到的回复', 'reason': ''}
+        with self.assertRaises(ModelError):
+            WeixinAgent(CancelReview([{'content': '完成'}])).run('查询', [], Executor(), cancel)
+
+    def test_review_transport_forces_structured_verdict_and_rejects_invalid_reply(self):
+        class Response:
+            def __init__(self, message): self.data = json.dumps({'choices': [{'message': message}]}).encode()
+            def read(self, size):
+                result, self.data = self.data, b''
+                return result
+            def close(self): pass
+        class Opener:
+            message = {'tool_calls': [tool('review_reply', {'needs_tools': True, 'reply': '', 'reason': '缺少实际标记'})]}
+            def open(self, request, timeout):
+                self.payload = json.loads(request.data)
+                return Response(self.message)
+        opener = Opener()
+        model = DeepSeek('fake-key12345', opener)
+        result = model.review('标记会话', '已标记', [], threading.Event())
+        self.assertTrue(result['needs_tools'])
+        self.assertEqual(opener.payload['tool_choice']['function']['name'], 'review_reply')
+        opener.message = {'content': '已完成'}
+        with self.assertRaisesRegex(ModelError, '核对失败'):
+            model.review('标记会话', '已标记', [], threading.Event())
+
+    def test_platform_denial_keeps_code_and_exact_missing_permission(self):
+        from polaris_platform.protocol import PlatformError
+        class Denied:
+            def execute(self, *args):
+                raise PlatformError('permission_required', 'Explicit permission required',
+                                    {'requester': 'canvas', 'capability': ['installation', 'operation', 'sessions', 1, 'read', 1]})
+        class RecordingModel(FakeModel):
+            def complete(self, messages, *args, **kwargs):
+                self.messages = list(messages)
+                return super().complete(messages, *args, **kwargs)
+        model = RecordingModel([{'tool_calls': [tool('help', {'component': 'org.polaris.agent'})]}, {'content': '缺少 sessions 读取权限'}])
+        WeixinAgent(model).run('查看会话', [], Denied(), threading.Event())
+        error = json.loads(next(row['content'] for row in model.messages if row.get('role') == 'tool'))
+        self.assertEqual(error['code'], 'permission_required')
+        self.assertEqual(error['requester'], 'canvas')
+        self.assertEqual(error['operation'], 'sessions')
+        self.assertIn('不是调用参数错误', error['error'])
+
     def test_help_gate_and_order(self):
         model = FakeModel([
             {'role': 'assistant', 'tool_calls': [tool('call', {'component': 'x'})]},
@@ -108,9 +203,25 @@ class CoreTests(unittest.TestCase):
                 'a', [], Interrupted(), threading.Event())
 
     def test_request_budget_raises(self):
-        model = FakeModel([{'tool_calls': [tool('components', {})]}] * 6)
+        model = FakeModel([{'tool_calls': [tool('components', {})]}] * 7)
         with self.assertRaises(ModelError):
             WeixinAgent(model).run('a', [], Executor(), threading.Event())
+
+    def test_last_tool_round_still_gets_final_reply_without_tools(self):
+        class Model(FakeModel):
+            def complete(self, messages, tools, *args, **kwargs):
+                response = super().complete(messages, tools, *args, **kwargs)
+                if response.get('content'):
+                    self.final_tools = tools
+                return response
+        replies = [{'tool_calls': [tool('help', {'component': 'x'})]}] * 5
+        replies += [{'tool_calls': [tool('call', {'component': 'x', 'operation': 'mark', 'arguments': {'session_id': 's'}})]},
+                    {'content': '已标记'}]
+        model, executor = Model(replies), Executor()
+        result = WeixinAgent(model).run('标记', [], executor, threading.Event())
+        self.assertEqual(result.text, '已标记')
+        self.assertEqual(model.final_tools, [])
+        self.assertEqual(sum(name == 'call' for name, _ in executor.calls), 1)
 
     def test_printable_key_and_whitespace(self):
         model = DeepSeek('  fake!key-123  ')

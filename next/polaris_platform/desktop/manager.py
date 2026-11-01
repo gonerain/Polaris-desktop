@@ -144,7 +144,7 @@ class ManagerBridge(QObject):
         from pathlib import Path
         local = str(Path(QUrl(path).toLocalFile() if path.startswith('file:') else path).resolve())
         def load():
-            manifest = json.loads((Path(local) / 'manifest.json').read_text())
+            manifest = json.loads((Path(local) / 'manifest.json').read_text(encoding="utf-8"))
             existing = self._installation_record(manifest['id'])
             if existing:
                 return self._installation_confirmation(existing, 'replace', path=local, manifest=manifest)
@@ -179,7 +179,7 @@ class ManagerBridge(QObject):
             self._check_manageable(plan['target'], 'replace' if plan['action'] == 'replace' else 'uninstall')
             if plan['action'] == 'replace':
                 from pathlib import Path
-                manifest = json.loads((Path(plan['path']) / 'manifest.json').read_text())
+                manifest = json.loads((Path(plan['path']) / 'manifest.json').read_text(encoding="utf-8"))
                 if manifest != plan['manifest']: raise ValueError('组件目录已变化，请重新加载')
                 self.runtime.install_directory(plan['path'], replace=True)
                 return {'_notice': '已覆盖安装“' + plan['name'] + '”'}
@@ -203,6 +203,29 @@ class ManagerBridge(QObject):
             return self.runtime.client(requester).call(target, operation, values,
                                                        context=self.runtime.user_context(requester))
         self.submit(call)
+
+    @Slot(str, str, str)
+    def componentPermission(self, requester, target, mode):
+        if mode not in ('none', 'read', 'all'):
+            return
+        record = self.runtime.status(target)
+        description = record.get('description', {})
+        installation = record['installation']
+        capabilities = [(kind, name, metadata) for kind, section in
+                        (('operation', 'operations'), ('event', 'events'))
+                        for name, metadata in description.get(section, {}).items()]
+        def change():
+            current = self.runtime.status(target)
+            if (current['installation'] != installation or any(
+                    current.get('description', {}).get('operations' if kind == 'operation' else 'events', {}).get(name) != metadata
+                    for kind, name, metadata in capabilities)):
+                raise ValueError('组件能力已变化，请重新选择')
+            for kind, name, metadata in capabilities:
+                allow = mode == 'all' or mode == 'read' and metadata.get('access', 'read') == 'read'
+                method = self.runtime.grant if allow else self.runtime.revoke
+                method(requester, target, name, kind=kind, background=False)
+            return {'_notice': '已更新组件权限：' + {'none': '禁止', 'read': '只读', 'all': '允许全部'}[mode]}
+        self.submit(change, user_input=True)
 
     def _make_plan(self, requester, target, action):
         records = {row['id']: row for row in self.runtime.snapshot()}

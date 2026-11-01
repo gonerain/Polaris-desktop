@@ -120,7 +120,7 @@ def build(config, base_dir=None, state_dir=None):
     for item in config["components"]:
         item = dict(item)
         directory = (base_dir / (item.get("directory") or ".")).resolve()
-        manifest = item.get("manifest") or json.loads((directory / "manifest.json").read_text())
+        manifest = item.get("manifest") or json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         item.update(manifest=manifest, directory=str(directory))
         if manifest["id"] in runtime.removed_installations():
             continue
@@ -139,7 +139,7 @@ def build(config, base_dir=None, state_dir=None):
         directory = (base_dir / (specification.get("directory") or ".")).resolve()
         manifest = specification.get("manifest")
         if manifest is None:
-            manifest = json.loads((directory / "manifest.json").read_text())
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         role = next((r for r, target in runtime.roles.items() if target == manifest["id"]), None)
         if role == "runtime":
             factory = lambda: runtime
@@ -194,7 +194,7 @@ def build(config, base_dir=None, state_dir=None):
 
 def from_file(path, state_dir=None):
     path = Path(path).resolve()
-    return build(json.loads(path.read_text()), path.parent, state_dir)
+    return build(json.loads(path.read_text(encoding="utf-8")), path.parent, state_dir)
 
 
 def default_config():

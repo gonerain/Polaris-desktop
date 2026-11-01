@@ -47,39 +47,43 @@ async function start(path, initial) {
         let result;
         if (command.sessionId !== state.sessionId || sending) result = { status: 'rejected', detail: 'wrong_session_or_busy' };
         else if (!['start','steer'].includes(command.mode)) result = {status:'rejected',detail:'unsupported_mode'};
-        else if (command.mode==='start' && state.runId) result = {status:'rejected',detail:'session_busy'};
-        else if (command.mode==='steer' && !state.runId) result = {status:'rejected',detail:'session_idle'};
         else {
             sending = true;
             try {
-                const answer = await sendDesktopMessage({ sessionId: state.sessionId, text: command.text, mode: command.mode, project: state.project });
+                const answer = await sendDesktopMessage({ sessionId: state.sessionId, text: command.text, mode: command.mode,
+                    project: state.project, readState:true, onState:host => state.hostState(host) });
                 result = {
                     status: answer.status === 'failed' ? 'rejected' : answer.status,
                     detail: answer.error || '',
-                    ...(answer.turnId ? {turnId: answer.turnId} : {}),
+                    ...(answer.turnId ? {turnId: answer.turnId, runId: digest(answer.turnId)} : {}),
                 };
                 if (answer.error === 'owner_unavailable') { client.event('session.removed', {sessionId:state.sessionId}); }
             } finally { sending = false; }
         }
         client.event('command.result', { requestId: command.requestId, ...result });
     });
+    let probing = false, stopped = false;
     const probe = async () => {
-        if (process.platform !== 'linux') return;
-        const result = await sendDesktopMessage({sessionId:state.sessionId, probeOnly:true});
-        state.ownerVerified = result.status === 'available';
-        state.currentSnapshot();
-        if (result.error === 'owner_unavailable') {
-            client.event('session.removed', {sessionId:state.sessionId});
-            stop();
-        }
+        if (probing || stopped) return;
+        probing = true;
+        try {
+            const result = await sendDesktopMessage({sessionId:state.sessionId, probeOnly:true, readState:true});
+            if (!stopped) state.ownerResult(result);
+        } finally { probing = false; }
     };
-    client.on('connected', () => {
+    client.on('connected', async () => {
         state.ownerVerified = false;
+        state.ownerUnavailable = false;
         state.currentSnapshot();
+        try {
+            const saved = await client.request('session.status', {sessionId:state.sessionId});
+            state.restoreRuns(saved.runs);
+        } catch { /* The first snapshot may not yet have created the row. */ }
         void probe();
     });
     let lease;
     const stop = () => {
+        stopped = true;
         clearInterval(lease);
         client.stop();
         server.close();
@@ -126,8 +130,9 @@ async function start(path, initial) {
         setTimeout(() => process.exit(0), 50);
     });
     server.listen(path, () => {
-        // Probe only this session's owner. Idle duration never expires a live owner.
-        if (process.platform === 'linux') lease = setInterval(() => { void probe(); }, 60000);
+        // Keep checking an absent owner so reopening the chat recovers automatically.
+        // Probe only this session; idle duration never expires a responsive owner.
+        lease = setInterval(() => { void probe(); }, 15000);
         client.start();
         process.send?.('ready');
         process.disconnect?.();

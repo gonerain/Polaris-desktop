@@ -40,8 +40,8 @@ class Bridge:
         try:
             if os.name == 'nt':
                 import msvcrt
-                self._instance_lock.write(b'0')
-                self._instance_lock.flush()
+                # Lock the byte range directly, including an empty file;
+                # writing first would touch another instance's locked byte.
                 self._instance_lock.seek(0)
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             else:
@@ -209,6 +209,8 @@ class Bridge:
                     delivery.update(status=status, detail=str(frame.get('detail', ''))[:4096])
                     if frame.get('turnId') is not None:
                         delivery['turnId'] = text(frame['turnId'], 'turnId')
+                    if frame.get('runId') is not None:
+                        delivery['runId'] = text(frame['runId'], 'runId')
                     self.store.changed()
                 return copy.deepcopy(delivery)
             sid = text(frame.get('sessionId'), 'sessionId')
@@ -250,7 +252,7 @@ class Bridge:
             return result
         raise ValueError('unknown operation')
 
-    def send(self, session_id, message, delivery_id=None, mode=None):
+    def send(self, session_id, message, delivery_id=None, mode=None, on_complete=None):
         if mode not in ('start', 'steer'):
             raise ValueError('mode must be start or steer')
         text(message, 'message', 128000)
@@ -259,7 +261,7 @@ class Bridge:
             row = self.store.require(session_id)
             existing = self.store.deliveries.get(delivery_id)
             if existing:
-                if existing['sessionId'] != session_id or existing['text'] != message or existing.get('mode', 'start') != mode:
+                if existing['sessionId'] != session_id or existing['text'] != message or existing.get('mode', 'start') != mode or existing.get('onComplete') != on_complete:
                     raise ValueError('deliveryId already used')
                 return copy.deepcopy(existing)
             if not row['marked'] or not row['online'] or not row['canSend']:
@@ -271,6 +273,8 @@ class Bridge:
             if sum(d['status'] == 'pending' for d in self.store.deliveries.values()) >= 32:
                 raise ValueError('too many pending deliveries')
             delivery = {'id': delivery_id, 'sessionId': session_id, 'owner': list(identity), 'text': message, 'mode': mode, 'status': 'pending', 'createdAt': time.time()}
+            if on_complete is not None:
+                delivery.update(onComplete=copy.deepcopy(on_complete), completionStatus='waiting')
             self.store.deliveries[delivery_id] = delivery
             self.store.changed()
             command = {'type': 'command', 'command': 'session.send', 'requestId': delivery_id, 'sessionId': row['sessionId'], 'text': message, 'mode': mode}

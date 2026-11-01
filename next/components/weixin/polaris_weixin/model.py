@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import urllib.request
+from .instructions import REVIEW_SYSTEM
 
 
 class ModelError(RuntimeError):
@@ -28,11 +29,37 @@ class DeepSeek:
     def redact(self, value):
         return str(value).replace(self._key, '[已隐藏密钥]')
 
-    def complete(self, messages, tools, cancel, timeout=30):
+    def review(self, request, draft, evidence, cancel, timeout=30):
+        schema = {'type': 'function', 'function': {'name': 'review_reply',
+            'description': '核对回复是否有本轮实际工具结果支持。',
+            'parameters': {'type': 'object', 'properties': {
+                'needs_tools': {'type': 'boolean'}, 'reply': {'type': 'string'}, 'reason': {'type': 'string'}},
+                'required': ['needs_tools', 'reply', 'reason'], 'additionalProperties': False}}}
+        messages = [{'role': 'system', 'content': REVIEW_SYSTEM},
+            {'role': 'user', 'content': json.dumps({'request': request, 'draft': draft, 'evidence': evidence}, ensure_ascii=False)}]
+        response = self.complete(messages, [schema], cancel, timeout,
+                                 tool_choice={'type': 'function', 'function': {'name': 'review_reply'}})
+        try:
+            calls = response['tool_calls']
+            if len(calls) != 1 or calls[0]['function']['name'] != 'review_reply':
+                raise ValueError()
+            result = json.loads(calls[0]['function']['arguments'])
+            if (type(result['needs_tools']) is not bool or not isinstance(result['reply'], str)
+                    or not isinstance(result['reason'], str) or not result['needs_tools'] and not result['reply'].strip()):
+                raise ValueError()
+            return result
+        except (KeyError, TypeError, ValueError):
+            raise ModelError('回复结果核对失败') from None
+
+    def complete(self, messages, tools, cancel, timeout=30, tool_choice=None):
         if cancel.is_set():
             raise ModelError('请求已取消')
-        payload = {'model': 'deepseek-flash', 'messages': messages, 'tools': tools,
+        payload = {'model': 'deepseek-flash', 'messages': messages,
                    'thinking': {'type': 'disabled'}, 'stream': False, 'max_tokens': 1024}
+        if tools:
+            payload['tools'] = tools
+        if tool_choice is not None:
+            payload['tool_choice'] = tool_choice
         request = urllib.request.Request('https://api.deepseek.com/chat/completions',
             data=json.dumps(payload, ensure_ascii=False).encode(),
             headers={'Authorization': 'Bearer ' + self._key, 'Content-Type': 'application/json'})

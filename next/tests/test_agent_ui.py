@@ -41,6 +41,7 @@ class AgentUITest(unittest.TestCase):
         item, _, bridge, _ = presentation._views[result['handle']]
         self.assertEqual(item.objectName(), 'agentView')
         self.assertIn('Final reply', bridge.dataJson)
+        self.assertEqual(item.property('selectedId'), 'key')
         item.setProperty('selectedId', 'key')
         self.app.processEvents()
         input_item = item.findChild(QObject, 'agentInput')
@@ -60,6 +61,7 @@ class AgentUITest(unittest.TestCase):
         bridge.refresh()
         self.app.processEvents()
         self.assertFalse(item.findChild(QObject, 'agentSend').property('enabled'))
+        self.assertIn('标记', item.findChild(QObject, 'agentSendUnavailable').property('text'))
         context.denied = True
         self.assertFalse(bridge.invoke('send', '{"session_id":"key","text":"again"}'))
         self.assertFalse(bridge.refresh())
@@ -73,7 +75,7 @@ class AgentUITest(unittest.TestCase):
         self.assertIsNotNone(presentation._notice)
         self.assertFalse(presentation._notice.isActive())
         self.assertTrue(presentation._notice.flags() & Qt.WindowDoesNotAcceptFocus)
-        self.assertEqual(presentation._notice.rootObject().property('noticeState'), '结束未确认')
+        self.assertEqual(presentation._notice.rootObject().property('noticeState'), '完成状态未知')
         self.assertTrue(presentation.release(result['handle'])['released'])
         self.assertFalse(presentation.closed)
         presentation.close()

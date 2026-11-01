@@ -1,8 +1,8 @@
 """The pet owns its local interaction and the canvas presentation it initiates."""
 import threading
 import uuid
-from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer, QPointF
+from PySide6.QtGui import QGuiApplication, QCursor
 from .presentation import Presentation
 from .window import GuiDispatcher
 from .user_access import DesktopUserAccess
@@ -24,7 +24,8 @@ class PetBridge(QObject):
         self._drag_context = None
         self._drag_pending = None
         self._drag_worker = False
-        self._drag_finished = False
+        self._drag_epoch = 0
+        self._drag_last = None
         self._lock = threading.Lock()
         self.completed.connect(self._complete)
         self.reported.connect(self._report)
@@ -62,6 +63,11 @@ class PetBridge(QObject):
         self._busy = False
         self._pending_input = None
         self._drag_start = None
+        with self._lock:
+            self._drag_epoch += 1
+            self._drag_pending = None
+        self._drag_context = None
+        self._drag_last = None
         self.changed.emit()
 
     def submit(self, fn, context=None, user_input=False):
@@ -110,42 +116,55 @@ class PetBridge(QObject):
     @Slot(float, float)
     def beginDrag(self, x, y):
         if self._pet.user_access is None: return
+        with self._lock:
+            self._drag_epoch += 1
+            self._drag_pending = None
         self._drag_start = (x, y, self._pet.position[0], self._pet.position[1])
         self._drag_context = self._pet.user_access.context()
-        self._drag_finished = False
+        self._drag_last = None
+
+    @Slot(result=QPointF)
+    def pointerPosition(self):
+        return QPointF(QCursor.pos())
 
     @Slot(float, float)
     def dragTo(self, x, y):
         if not self._drag_start or self._drag_context is None: return
         sx, sy, px, py = self._drag_start
+        self._drag_last = (px + x - sx, py + y - sy)
+        self._queue_drag(self._drag_last, False)
+
+    def _queue_drag(self, point, final):
         with self._lock:
-            self._drag_pending = (px + x - sx, py + y - sy)
+            self._drag_pending = (point, self._drag_context, self._pet.generation, self._drag_epoch, final)
             if self._drag_worker: return
             self._drag_worker = True
-        context, generation = self._drag_context, self._pet.generation
         def work():
-            try:
-                while self._pet.running and generation == self._pet.generation:
-                    with self._lock:
-                        point, self._drag_pending = self._drag_pending, None
-                    if point is None: break
-                    self._pet.move(point, context)
-            except Exception as exc:
-                self.reported.emit((generation, str(exc)))
-            finally:
+            while True:
                 with self._lock:
-                    self._drag_worker = False
-                if self._drag_finished:
-                    self._pet.save_position()
+                    job, self._drag_pending = self._drag_pending, None
+                    if job is None:
+                        self._drag_worker = False
+                        return
+                point, context, generation, epoch, final = job
+                if not self._pet.running or generation != self._pet.generation or epoch != self._drag_epoch:
+                    continue
+                try:
+                    self._pet.move(point, context, constrain=final)
+                    if final and generation == self._pet.generation and epoch == self._drag_epoch:
+                        self._pet.save_position()
+                except Exception as exc:
+                    self.reported.emit((generation, str(exc)))
         threading.Thread(target=work, daemon=True, name='pet-drag').start()
 
     @Slot()
     def endDrag(self):
-        self._drag_finished = True
+        if self._drag_start is None: return
         self._drag_start = None
-        with self._lock:
-            moving = self._drag_worker
-        if not moving: self._pet.save_position()
+        if self._drag_last is not None:
+            self._queue_drag(self._drag_last, True)
+        self._drag_context = None
+        self._drag_last = None
 
     @Slot()
     def _monitor(self):
@@ -242,8 +261,8 @@ class Pet(Presentation):
         self._window('update', {'handle': self.handle, 'properties': self.properties}, context)
         return {'shown': True}
 
-    def move(self, point, context):
-        result = self._window('move', {'handle': self.handle, 'x': point[0], 'y': point[1]}, context)
+    def move(self, point, context, constrain=True):
+        result = self._window('move', {'handle': self.handle, 'x': point[0], 'y': point[1], 'constrain': constrain}, context)
         self._position = (result['x'], result['y'])
         self.window_options.update(x=result['x'], y=result['y'])
         return result

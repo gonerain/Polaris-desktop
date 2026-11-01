@@ -60,6 +60,7 @@ class Bridge(QObject):
         self._read_error = ''
         self._operation_error = ''
         self._active = True
+        self._resume_attempted = False
         self._qr_content = None
         self._qr_image = ''
         self._qr_error = ''
@@ -124,7 +125,17 @@ class Bridge(QObject):
             data = self._context.call(self._component.port.id, 'get', {})
             data = dict(data)
             settings = data.pop('agent', {})
-            safe = {key: settings.get(key) for key in ('enabled', 'busy', 'error', 'hasKey', 'model', 'allowed', 'queued')}
+            if data.get('state') != 'connected' or not settings.get('resumePending'):
+                self._resume_attempted = False
+            elif not self._resume_attempted:
+                self._resume_attempted = True
+                try:
+                    settings = self._context.call(self._component.port.id, 'configure_agent', {'enabled': True})
+                except Exception as error:
+                    self._failure(error, operation=True)
+            safe = {key: settings.get(key) for key in ('enabled', 'desiredEnabled', 'resumePending', 'busy', 'error', 'hasKey', 'model', 'allowed', 'queued')}
+            if self._resume_attempted and not settings.get('enabled'):
+                safe['resumePending'] = False
             agent = json.dumps(safe, ensure_ascii=False)
             if agent != self._agent:
                 self._agent = agent

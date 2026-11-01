@@ -249,6 +249,49 @@ else:
             saved = json.loads(self.pet._data_path.read_text())
             self.assertEqual((saved['x'], saved['y']), self.pet.position)
 
+        def test_idle_animation_does_not_move_hit_target_or_turn_click_into_drag(self):
+            window = self.pet_window()
+            start = self.hit_point()
+            _mousePress(window, Qt.LeftButton, Qt.NoModifier, start)
+            QTest.qWait(500)
+            self.assertEqual(self.hit_point(), start)
+            _mouseRelease(window, Qt.LeftButton, Qt.NoModifier, start)
+            self.wait(lambda: self.canvas_visible())
+
+        def test_drag_crosses_screen_and_saves_final_queued_position(self):
+            import json
+            import threading
+            from unittest.mock import patch
+            from types import SimpleNamespace
+            from PySide6.QtCore import QRect
+            screens = [SimpleNamespace(availableGeometry=lambda: QRect(0, 0, 1920, 1040)),
+                       SimpleNamespace(availableGeometry=lambda: QRect(-1600, 0, 1600, 860))]
+            self.pet.move((100, 100), self.context)
+            entered, release = threading.Event(), threading.Event()
+            original = self.pet.move
+            calls = []
+            def slow_move(point, context, constrain=True):
+                calls.append((point, constrain))
+                if len(calls) == 1:
+                    entered.set()
+                    self.assertTrue(release.wait(3))
+                return original(point, context, constrain)
+            with patch('polaris_platform.desktop.window.QGuiApplication.screens', return_value=screens), patch.object(self.pet, 'move', side_effect=slow_move):
+                self.pet.bridge.beginDrag(150, 150)
+                self.pet.bridge.dragTo(-50, 150)
+                self.wait(entered.is_set)
+                self.pet.bridge.dragTo(-250, 250)
+                self.pet.bridge.dragTo(-550, 350)
+                self.pet.bridge.endDrag()
+                release.set()
+                self.wait(lambda: not self.pet.bridge._drag_worker)
+            self.assertEqual(self.pet.position, (-600, 300))
+            self.assertEqual(calls[0][1], False)
+            self.assertEqual(calls[-1], ((-600, 300), True))
+            saved = json.loads(self.pet._data_path.read_text())
+            self.assertEqual(saved, {'x': -600, 'y': 300})
+            self.assertFalse(self.canvas_visible())
+
         def test_canvas_stop_and_window_restart_restore_pet(self):
             self.activate()
             self.runtime.stop_component('canvas')

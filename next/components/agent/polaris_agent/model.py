@@ -37,6 +37,8 @@ class AgentStore:
             self.rows = data['sessions']
             self.deliveries = data.get('deliveries', {})
         for delivery in self.deliveries.values():
+            if delivery.get('completionStatus') == 'sending':
+                delivery['completionStatus'] = 'unknown'
             if delivery.get('status') == 'pending':
                 delivery['status'] = 'unknown'
         for row in self.rows.values():
@@ -134,7 +136,8 @@ class AgentStore:
             previous_status = run['status']
             if status is not None and (previous_status == 'running' or
                     (previous_status in ('unknown', 'stopped') and status in ('completed', 'failed')) or
-                    (previous_status == 'unknown' and status == 'unknown')):
+                    (previous_status == 'unknown' and status == 'unknown') or
+                    (previous_status == status and status in ('completed','failed','stopped') and not run.get('reply') and isinstance(reply,str))):
                 run.update(status=status, reply=reply if isinstance(reply, str) else None,
                            detail=str(detail)[:4096], replyTruncated=bool(reply_truncated),
                            endedAt=run.get('endedAt', time.time()) if previous_status == status else time.time())

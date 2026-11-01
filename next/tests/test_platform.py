@@ -356,6 +356,13 @@ c.run()
 
     def test_required_bootstrap_failure_reaps_previously_started_processes(self):
         from polaris_platform.bootstrap import default_config
+        import subprocess
+        from unittest.mock import patch
+        original_popen, children = subprocess.Popen, []
+        def start(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            children.append(process)
+            return process
         with tempfile.TemporaryDirectory() as directory:
             location = Path(directory)
             (location / 'child.py').write_text("import os,sys\nfrom pathlib import Path\nfrom polaris_platform.sdk import Component\nPath(sys.argv[1]+'.pid').write_text(str(os.getpid()))\nc=Component()\nif sys.argv[1]=='bad': c.dependencies=[{'kind':'startup','target':'missing'}]\nc.run()\n")
@@ -366,11 +373,29 @@ c.run()
                 config['components'].append({'manifest': spec, 'directory': directory})
                 config['start'].append(identity)
             config['required'].append('bad')
-            self.denied(lambda: build(config), 'dependency_unavailable')
+            with patch('polaris_platform.transport.subprocess.Popen', side_effect=start):
+                self.denied(lambda: build(config), 'dependency_unavailable')
+            self.assertEqual(len(children), 2)
             for identity in ('good', 'bad'):
                 pid = int((location / (identity + '.pid')).read_text())
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(pid, 0)
+                if os.name == 'nt':
+                    # A Windows venv launcher can have a different PID from
+                    # the interpreter. Query the actual child without os.kill,
+                    # whose Windows implementation is not a liveness probe.
+                    import _winapi
+                    try:
+                        handle = _winapi.OpenProcess(0x100000, False, pid)
+                    except OSError as error:
+                        self.assertEqual(error.winerror, 87)  # process no longer exists
+                    else:
+                        try:
+                            self.assertEqual(_winapi.WaitForSingleObject(handle, 0), 0)
+                        finally:
+                            _winapi.CloseHandle(handle)
+                else:
+                    child = next(process for process in children if process.pid == pid)
+                    self.assertIsNotNone(child.poll(), f'{identity} process is still running')
+            self.assertTrue(all(child.poll() is not None for child in children))
 
     def test_public_installation_export_import_preserves_control_metadata(self):
         from polaris_platform.runtime import Runtime

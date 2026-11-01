@@ -33,6 +33,10 @@ class Component(BaseComponent):
     def run(self):
         serve(self)
 
+    def resume_task(self, name):
+        context = self.port.resume_task(name)
+        return _LocalContext(self.port, context) if context is not None else None
+
 
 class _RemoteContext:
     def __init__(self, peer, token):
@@ -99,6 +103,12 @@ class _LocalContext:
 
     def call(self, target, operation, params=None):
         return self.port.call(target, operation, params, context=self.context)
+
+    def remember_task(self, name, operations):
+        self.port.remember_task(name, operations, self.context)
+
+    def forget_task(self, name):
+        self.port.forget_task(name, self.context)
 
 
 def serve(component):

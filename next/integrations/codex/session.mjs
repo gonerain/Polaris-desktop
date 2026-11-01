@@ -35,17 +35,54 @@ export class Session {
         this.finished = new Set();
         this.candidateTurn = '';
         this.lastEnding = '';
+        this.knownRuns = new Map();
     }
     snapshot() {
+        if (this.ownerUnavailable) {
+            this.client.event('session.removed', {sessionId:this.sessionId});
+            return;
+        }
         this.client.event('session.snapshot', {
             sessionId: this.sessionId, title: this.title || clip(`Codex · ${basename(this.project.replaceAll('\\', '/')) || 'session'} · ${this.sessionId.slice(-6)}`, 128),
-            cwd: this.project, canSend: this.ownerVerified === true,
+            cwd: this.project, canSend: this.ownerVerified === true && this.sendModes?.length > 0,
             liveness: this.ownerVerified === true ? 'host' : 'unverified',
         });
     }
     currentSnapshot() {
         this.snapshot();
-        if (this.runId) this.client.event('run.started', {sessionId:this.sessionId, runId:this.runId});
+        if (!this.ownerUnavailable && this.runId) this.client.event('run.started', {sessionId:this.sessionId, runId:this.runId});
+    }
+    ownerResult(result) {
+        this.ownerVerified = result.status === 'available';
+        this.ownerUnavailable = result.error === 'owner_unavailable';
+        if (result.state) this.hostState(result.state);
+        this.currentSnapshot();
+    }
+    restoreRuns(runs) {
+        for (const run of (runs || []).slice(-100)) {
+            if (!this.knownRuns.has(run.id)) this.knownRuns.set(run.id, run);
+        }
+    }
+    hostState(state) {
+        const latest = state.runs.at(-1);
+        this.snapshot();
+        for (const run of state.runs) {
+            const id = digest(run.turnId), previous = this.knownRuns.get(id);
+            if (!previous && run !== latest && id !== this.runId) continue;
+            if (run.status === 'running') {
+                this.client.event('run.started', {sessionId:this.sessionId,runId:id});
+            } else if (previous?.status !== run.status || (!previous?.reply && run.reply)) {
+                const reply = run.reply ?? previous?.reply;
+                this.client.event('run.ended', {sessionId:this.sessionId,runId:id,status:run.status,
+                    ...(typeof reply === 'string' ? {reply,replyTruncated:(run.reply !== undefined ? run.replyTruncated : previous?.replyTruncated) === true} : {})});
+                this.finished.add(id);
+            }
+            this.knownRuns.set(id, {...previous,...run,id,status:run.status});
+        }
+        const active = state.runs.findLast(run => run.status === 'running');
+        this.runId = active ? digest(active.turnId) : '';
+        if (latest) this.candidateTurn = digest(latest.turnId);
+        while (this.knownRuns.size > 100) this.knownRuns.delete(this.knownRuns.keys().next().value);
     }
     handle(data) {
         if (data.sessionId !== this.sessionId) throw new Error('Wrong session');
@@ -61,6 +98,7 @@ export class Session {
                 this.lastEnding = '';
             }
             this.runId = data.turn;
+            this.knownRuns.set(data.turn, {id:data.turn,status:'running'});
             this.snapshot();
             this.client.event('run.started', {sessionId: this.sessionId, runId: this.runId});
         } else if ((data.event === 'Stop' || data.event === 'Interrupt') && data.turn &&
@@ -74,6 +112,8 @@ export class Session {
             // Stop is only a candidate ending. A later Stop in the same turn may
             // contain a newer reply after another hook requested continuation.
             const fingerprint = JSON.stringify(ending);
+            const previous = this.knownRuns.get(data.turn);
+            if (!['completed','failed','stopped'].includes(previous?.status)) this.knownRuns.set(data.turn, {id:data.turn,...ending});
             if (fingerprint !== this.lastEnding) {
                 this.client.event('run.ended', ending);
                 this.lastEnding = fingerprint;

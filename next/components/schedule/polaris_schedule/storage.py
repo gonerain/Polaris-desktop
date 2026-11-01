@@ -35,10 +35,8 @@ class SnapshotRepository:
         with lock_path.open('a+b') as lock:
             if os.name == 'nt':
                 import msvcrt
-                lock.seek(0, os.SEEK_END)
-                if lock.tell() == 0:
-                    lock.write(b'\0')
-                    lock.flush()
+                # Windows can lock beyond EOF. Writing before acquiring the
+                # lock races another process and can fail with access denied.
                 lock.seek(0)
                 msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
             else:

@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import sys
 import unittest
-from polaris_platform.bootstrap import build, default_config
+from polaris_platform.bootstrap import build, default_config, from_file
 from polaris_platform.component import Component
 from polaris_platform.protocol import PlatformError
 
@@ -57,6 +57,27 @@ class InstallationLifecycleTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, 'stale_handle')
         restarted = build(default_config(), state_dir=self.base / 'state')
         self.assertEqual(restarted.status('plugin')['manifest']['version'], '2')
+
+    def test_utf8_manifest_and_assembly_keep_non_ascii_names(self):
+        directory = self.plugin()
+        path = directory / 'manifest.json'
+        manifest = json.loads(path.read_text(encoding='utf-8'))
+        manifest['name'] = '微信组件'
+        path.write_text(json.dumps(manifest, ensure_ascii=False), encoding='utf-8')
+        self.runtime.install_directory(directory)
+        self.assertEqual(self.runtime.status('plugin')['manifest']['name'], '微信组件')
+        config = default_config()
+        config['components'].append({'directory': str(directory)})
+        config['description'] = '中文装配配置'
+        assembly = self.base / 'config.json'
+        assembly.write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
+        runtime = from_file(assembly)
+        try:
+            self.assertEqual(runtime.status('plugin')['manifest']['name'], '微信组件')
+        finally:
+            for record in reversed(runtime.snapshot()):
+                if record['state'] == 'running':
+                    runtime.stop_component(record['id'], persist=False)
 
     def test_uninstall_keeps_files_and_new_install_has_new_authority(self):
         r = self.runtime

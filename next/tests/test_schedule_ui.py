@@ -102,6 +102,18 @@ else:
                 QCoreApplication.sendEvent(self.window, QKeyEvent(QEvent.KeyRelease, 0, Qt.NoModifier, char))
             QTest.qWait(20)
 
+        def test_day_rollover_follows_today_but_keeps_explicit_browsing(self):
+            self.item.setProperty('todayDate', '2026-10-31')
+            self.item.setProperty('selectedDate', '2026-10-31')
+            self.item.refreshToday('2026-11-01')
+            self.assertEqual(self.item.property('selectedDate'), '2026-11-01')
+            self.item.setProperty('selectedDate', '2026-12-25')
+            self.item.refreshToday('2026-11-02')
+            self.assertEqual(self.item.property('selectedDate'), '2026-12-25')
+            self.item.setWidth(370)
+            self.item.setHeight(220)
+            self.assertTrue(self.control('todayButton').property('visible'))
+
         def test_crud_editor_subtask_restart_and_revocation(self):
             self.type('quickAdd', '<b>Planning</b>')
             QTest.keyClick(self.window, Qt.Key_Return)

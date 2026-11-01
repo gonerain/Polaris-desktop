@@ -10,6 +10,20 @@ from polaris_agent.model import AgentStore
 from polaris_agent.bridge import Bridge
 
 class AgentTests(unittest.TestCase):
+    def test_help_explains_mark_id_and_parameters_match_handlers(self):
+        import inspect
+        from polaris_agent import Agent
+        component = Agent(data_dir=self.path)
+        operations = component.describe()['operations']
+        for name in ('get', 'sessions', 'status', 'result', 'delivery', 'mark', 'unmark', 'send'):
+            signature = inspect.signature(getattr(component, name))
+            schema = operations[name]['parameters']
+            self.assertEqual(set(schema['properties']), set(signature.parameters) - {'ctx'})
+            self.assertEqual(set(schema['required']), {n for n, p in signature.parameters.items() if p.default is p.empty and n != 'ctx'})
+        self.assertIn('不是 sessionId', operations['mark']['parameters']['properties']['session_id']['description'])
+        row = component.store.snapshot('Codex', 'test', 'short-id')
+        marked = component.mark(session_id=row['id'])
+        self.assertTrue(marked['marked'])
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name)
@@ -126,7 +140,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.store.delivery('timeout')['status'], 'unknown')
         self.assertEqual(bridge.send(row['id'], 'hello', 'timeout', 'steer')['status'], 'unknown')
 
-    def test_bridge_exclusive_endpoint_and_symlink(self):
+    def test_bridge_exclusive_endpoint(self):
         bridge = Bridge(self.store, self.path / 'bridge')
         self.addCleanup(bridge.close)
         original = bridge.endpoint.read_text()
@@ -134,10 +148,19 @@ class AgentTests(unittest.TestCase):
             Bridge(self.store, self.path / 'bridge')
         self.assertEqual(bridge.endpoint.read_text(), original)
         bridge.close()
+
+    def test_bridge_replaces_endpoint_symlink_without_touching_target(self):
+        directory = self.path / 'bridge'
+        directory.mkdir()
         target = self.path / 'untouched'
         target.write_text('private')
-        bridge.endpoint.symlink_to(target)
-        replacement = Bridge(self.store, self.path / 'bridge')
+        try:
+            (directory / 'endpoint.json').symlink_to(target)
+        except OSError as error:
+            if getattr(error, 'winerror', None) == 1314:
+                self.skipTest('Windows symlink privilege is unavailable')
+            raise
+        replacement = Bridge(self.store, directory)
         self.addCleanup(replacement.close)
         self.assertEqual(target.read_text(), 'private')
         self.assertFalse(replacement.endpoint.is_symlink())

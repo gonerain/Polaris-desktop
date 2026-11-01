@@ -31,7 +31,7 @@ if __name__ == '__main__' and sys.argv[-1] == 'qt':
         revoked = False
         write_revoked = False
         catalog_calls = 0
-        settings = dict(enabled=False, busy=False, error='', hasKey=True, model='deepseek-v4-flash', allowed=[], queued=0)
+        settings = dict(enabled=False, desiredEnabled=False, busy=False, error='', hasKey=True, model='deepseek-v4-flash', allowed=[], queued=0)
         def call(self, target, operation, params):
             if self.revoked: raise ValueError('读取已撤销')
             if operation == 'get': return dict(agent=self.settings, state='connected', hasAccount=True, canSend=True, messages=[dict(text='测试消息', direction='in', time='12:00')])
@@ -40,7 +40,9 @@ if __name__ == '__main__' and sys.argv[-1] == 'qt':
                 self.catalog_calls += 1
                 return {'components':[{'id':'example','name':'示例组件','description':{'operations':{'list':{'access':'read'},'add':{'access':'write'}}}}]}
             if self.write_revoked: raise ValueError('写入已撤销')
-            if operation == 'configure_agent': self.settings.update(params)
+            if operation == 'configure_agent':
+                self.settings.update(params)
+                self.settings['desiredEnabled'] = params['enabled']
             return self.settings
     ctx = Context()
     bridge = Bridge(SimpleNamespace(port=SimpleNamespace(id='weixin')), ctx, None)
@@ -81,6 +83,20 @@ if __name__ == '__main__' and sys.argv[-1] == 'qt':
     root.openAgent(); QTest.qWait(100)
     assert ctx.catalog_calls == 1
     assert len(json.loads(bridge.catalogJson)) == 2
+    assert find(root, 'weixinAgentOperations').property('count') == 1
+    assert find(root, 'weixinAgentOperation_example_add') is None
+    group = find(root, 'weixinAgentComponent_example')
+    point = group.mapToScene(QPointF(group.width()/2, group.height()/2))
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, QPoint(round(point.x()), round(point.y())))
+    QTest.qWait(40)
+    assert len(root.property('allowedDraft').toVariant()) == 2
+    expand = find(root, 'weixinAgentExpand_example')
+    expand.clicked.emit(); QTest.qWait(30)
+    assert find(root, 'weixinAgentOperation_example_add') is not None
+    expand.clicked.emit(); QTest.qWait(30)
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, QPoint(round(point.x()), round(point.y())))
+    QTest.qWait(40)
+    assert root.property('allowedDraft').toVariant() == []
     root.selectOperation('example','add',True)
     window.grabWindow().save('/tmp/polaris-weixin-agent-settings.png')
     window.resize(290,220); root.setWidth(290); QTest.qWait(100)

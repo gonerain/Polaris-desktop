@@ -13,6 +13,21 @@ Rectangle {
     property bool agentOpen: false
     property var agent: JSON.parse(weixinModel.agentJson || "{}")
     property var catalog: JSON.parse(weixinModel.catalogJson || "[]")
+    property string expandedComponent: ""
+    property var componentCatalog: {
+        var groups = []
+        for (var row of catalog) {
+            var group = groups.find(function(g) { return g.target === row.target })
+            if (!group) { group = {target: row.target, name: row.component, operations: []}; groups.push(group) }
+            group.operations.push(row)
+        }
+        return groups
+    }
+    function selectedCount(group) { return group.operations.filter(function(row) { return selected(row.target, row.operation) }).length }
+    function selectComponent(group, enabled) {
+        var remaining = allowedDraft.filter(function(row) { return row.target !== group.target })
+        allowedDraft = enabled ? remaining.concat(group.operations.map(function(row) { return {target: row.target, operation: row.operation} })) : remaining
+    }
     property var allowedDraft: []
     property bool allowedInitialized: false
     function selected(target, operation) {
@@ -48,16 +63,17 @@ Rectangle {
             Switch {
                 objectName: "weixinAgentToggle"
                 text: "自动回复"; font.pixelSize: 11; padding: 0; spacing: 3
-                enabled: root.online && root.agent.hasKey === true
-                checked: root.agent.enabled === true
+                enabled: root.agent.hasKey === true || root.agent.desiredEnabled === true
+                checked: root.agent.desiredEnabled === true
                 onClicked: {
-                    root.action("configure_agent", {enabled: !root.agent.enabled})
+                    root.action("configure_agent", {enabled: !root.agent.desiredEnabled})
                     // Controls toggle before clicked; restore the authoritative state after a denied write.
-                    checked = Qt.binding(function() { return root.agent.enabled === true })
+                    checked = Qt.binding(function() { return root.agent.desiredEnabled === true })
                 }
             }
             WeixinButton { objectName: "weixinAgentSettings"; text: "设置"; flat: true; implicitWidth: 36; implicitHeight: 28; font.pixelSize: 11; onClicked: root.agentOpen ? root.agentOpen = false : root.openAgent() }
             WeixinButton { objectName: "weixinLoginToggle"; text: root.setupOpen ? "收起" : (root.snapshot.hasAccount ? "登录信息" : "扫码登录"); flat: true; font.pixelSize: 11; implicitHeight: 28; onClicked: { root.agentOpen = false; root.setupOpen = !root.setupOpen; if (root.setupOpen && !root.snapshot.hasAccount && !root.snapshot.qrImage) root.action("login") } }
+            WeixinButton { objectName: "weixinConnect"; text: "连接"; visible: !!root.snapshot.hasAccount && root.snapshot.state === "offline"; implicitHeight: 28; onClicked: root.action("connect") }
             WeixinButton { objectName: "weixinOptions"; text: "⋯"; implicitWidth: 28; implicitHeight: 28; onClicked: options.open(); Menu {
                 id: options
                 MenuItem { text: "连接"; enabled: !!root.snapshot.hasAccount && !root.online; onTriggered: root.action("connect") }
@@ -73,28 +89,57 @@ Rectangle {
             Label { text: "使用 DeepSeek，将发送新收到的文字及工具结果"; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true; color: "#6c7479" }
             Label { objectName: "weixinAgentKeyNotice"; visible: !root.agent.hasKey; text: "缺少 DEEPSEEK_API_KEY，请配置后重启组件"; font.pixelSize: 10; color: "#88613e"; wrapMode: Text.Wrap; Layout.fillWidth: true }
             ListView {
-                objectName: "weixinAgentOperations"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                model: root.catalog
+                objectName: "weixinAgentOperations"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 5
+                model: root.componentCatalog
                 ScrollBar.vertical: ScrollBar {}
-                delegate: CheckBox {
+                delegate: Column {
+                    id: componentRow
                     required property var modelData
-                    width: ListView.view.width; height: 30; font.pixelSize: 11
-                    objectName: "weixinAgentOperation_" + modelData.target + "_" + modelData.operation
-                    text: modelData.component + " · " + modelData.operation + " · " + (modelData.access === "write" ? "写入" : "读取")
-                    checked: root.selected(modelData.target, modelData.operation)
-                    onClicked: root.selectOperation(modelData.target, modelData.operation, checked)
+                    width: ListView.view.width; spacing: 2
+                    property int selectedCount: root.selectedCount(modelData)
+                    RowLayout {
+                        width: parent.width; spacing: 4
+                        CheckBox {
+                            objectName: "weixinAgentComponent_" + componentRow.modelData.target
+                            Layout.fillWidth: true; implicitHeight: 38; font.pixelSize: 12
+                            text: componentRow.modelData.name
+                            palette.text: "#28312e"; palette.windowText: "#28312e"
+                            checkState: componentRow.selectedCount === 0 ? Qt.Unchecked : componentRow.selectedCount === componentRow.modelData.operations.length ? Qt.Checked : Qt.PartiallyChecked
+                            nextCheckState: function() { return checkState === Qt.Checked ? Qt.Unchecked : Qt.Checked }
+                            onClicked: root.selectComponent(componentRow.modelData, checkState === Qt.Checked)
+                        }
+                        Label { text: componentRow.selectedCount === componentRow.modelData.operations.length ? "全部允许" : componentRow.selectedCount ? "部分允许" : "未启用"; color: "#737e79"; font.pixelSize: 10 }
+                        WeixinButton { objectName: "weixinAgentExpand_" + componentRow.modelData.target; text: root.expandedComponent === componentRow.modelData.target ? "收起 ▴" : "自定义 ▾"; flat: true; implicitHeight: 28; onClicked: root.expandedComponent = root.expandedComponent === componentRow.modelData.target ? "" : componentRow.modelData.target }
+                    }
+                    Column {
+                        visible: root.expandedComponent === componentRow.modelData.target
+                        width: parent.width
+                        Repeater {
+                            model: parent.visible ? componentRow.modelData.operations : []
+                            CheckBox {
+                                required property var modelData
+                                width: componentRow.width; leftPadding: 22; implicitHeight: 30; font.pixelSize: 11
+                                palette.text: "#596268"; palette.windowText: "#596268"
+                                objectName: "weixinAgentOperation_" + modelData.target + "_" + modelData.operation
+                                text: modelData.operation + " · " + (modelData.access === "write" ? "操作" : "查看")
+                                checked: root.selected(modelData.target, modelData.operation)
+                                onClicked: root.selectOperation(modelData.target, modelData.operation, checked)
+                            }
+                        }
+                    }
                 }
-                Label { anchors.centerIn: parent; visible: root.catalog.length === 0; text: "暂无可选操作"; font.pixelSize: 11; color: "#92999c" }
+                Label { anchors.centerIn: parent; visible: root.componentCatalog.length === 0; text: "暂无可用组件"; font.pixelSize: 11; color: "#92999c" }
             }
             RowLayout {
                 Layout.fillWidth: true
                 WeixinButton { objectName: "weixinAgentNewConversation"; text: "新对话"; implicitHeight: 26; onClicked: root.action("new_conversation") }
                 Item { Layout.fillWidth: true }
-                WeixinButton { objectName: "weixinAgentSave"; text: "保存"; primary: true; implicitHeight: 26; onClicked: if(root.action("configure_agent", {enabled:root.agent.enabled === true, allowed:root.allowedDraft})) root.agentOpen = false }
+                WeixinButton { objectName: "weixinAgentSave"; text: "保存"; primary: true; implicitHeight: 26; onClicked: if(root.action("configure_agent", {enabled:root.agent.desiredEnabled === true, allowed:root.allowedDraft})) root.agentOpen = false }
                 WeixinButton { objectName: "weixinAgentClose"; text: "关闭"; implicitHeight: 26; onClicked: root.agentOpen = false }
             }
         }
         Label { objectName: "weixinAgentStatus"; visible: !!root.agent.busy || !!root.agent.error; text: root.agent.error || "自动回复中…"; Layout.fillWidth: true; font.pixelSize: 11; color: root.agent.error ? "#88613e" : "#258956"; maximumLineCount: 2; wrapMode: Text.Wrap; elide: Text.ElideRight }
+        Label { visible: root.agent.resumePending === true; text: root.online ? "正在恢复自动回复" : "自动回复已开启，连接后恢复"; Layout.fillWidth: true; font.pixelSize: 11; color: "#6c7479"; wrapMode: Text.Wrap }
         Rectangle {
             visible: root.confirmation !== ""
             Layout.fillWidth: true; implicitHeight: 38; color: "#ecefef"; radius: 7

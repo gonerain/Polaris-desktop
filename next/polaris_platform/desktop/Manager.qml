@@ -1,15 +1,36 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
-Rectangle {
+Pane {
     id: root
-    color: '#f3f5fa'
+    padding: 0
+    background: Rectangle { color: '#f3f5fa' }
+    palette.window: '#ffffff'; palette.base: '#ffffff'; palette.text: '#243450'; palette.windowText: '#243450'
+    palette.button: '#edf1f7'; palette.buttonText: '#40516a'; palette.highlight: '#dce7fb'; palette.highlightedText: '#243450'
+    property bool showSystemComponents: false
+    property var visibleRecords: records.filter(function(row) { return showSystemComponents || ['authorization','collaboration','runtime','window','canvas','pet','manager'].indexOf(row.id) < 0 })
     property var records: JSON.parse(manager ? manager.dataJson : '[]')
     property var decisions: JSON.parse(manager ? manager.permissionsJson : '[]')
+    property bool customPermissions: false
+    property string expandedCapability: ''
+    onSelectedIdChanged: { customPermissions = false; expandedCapability = '' }
     property string selectedId: ''
-    property string subjectId: 'manager'
-    property var current: records.find(item => item.id === selectedId) || records[0] || ({})
+    property string subjectId: 'canvas'
+    property var current: records.find(item => item.id === selectedId) || visibleRecords[0] || ({})
+    component SettingsButton: Button {
+        id: button
+        implicitHeight: 34; leftPadding: 14; rightPadding: 14
+        contentItem: Text { text: button.text; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; color: !button.enabled ? '#97a3b6' : button.checked ? '#254f91' : '#40516a' }
+        background: Rectangle { radius: 8; color: button.checked ? '#dfeafb' : button.down ? '#dce4f0' : button.hovered ? '#e6edf7' : button.flat ? 'transparent' : '#edf1f7'; opacity: button.enabled ? 1 : 0.6 }
+    }
+    function permissionMode() {
+        var capabilities = rows(current)
+        if (!capabilities.length || capabilities.every(function(row) { return !hasGrant(current, row, false) })) return 'none'
+        if (capabilities.every(function(row) { return hasGrant(current, row, false) })) return 'all'
+        if (capabilities.every(function(row) { return hasGrant(current, row, false) === (row.metadata.access !== 'write') })) return 'read'
+        return 'custom'
+    }
     function description(item) { return item.description || ({}) }
     function stateText(state) { return ({installed:'已安装', starting:'启动中', running:'运行中', stopping:'停止中', stopped:'已停止', failed:'异常'})[state] || state || '' }
     function rows(item) {
@@ -40,16 +61,42 @@ Rectangle {
         contentItem: ColumnLayout {
             spacing: 12
             Label { text: '授权使用者：' + (manager ? manager.planSubject : ''); font.pixelSize: 15 }
-            Label { text: '本机交互将使用以下操作'; color: '#61718b' }
-            Repeater { model: viewPlan.permissions
-                Label { required property var modelData; Layout.fillWidth: true; wrapMode: Text.Wrap
-                    text: modelData.title + ' · ' + modelData.name + '（' + (modelData.kind === 'event' ? '订阅' : (modelData.access === 'write' ? '写入' : '读取')) + '）' + (modelData.authorized ? '  已授权' : '  将授予')
-                    color: '#43536f'
+            Label { text: '将使用以下组件'; color: '#61718b' }
+            ScrollView {
+                Layout.fillWidth: true; Layout.preferredHeight: Math.min(permissionGroups.implicitHeight, 320); clip: true
+                Column {
+                    id: permissionGroups; width: parent.width; spacing: 8
+                    Repeater {
+                        model: {
+                            var groups = []
+                            for (var row of viewPlan.permissions) {
+                                var group = groups.find(function(g) { return g.target === row.target })
+                                if (!group) { group = {target: row.target, title: row.title, permissions: []}; groups.push(group) }
+                                group.permissions.push(row)
+                            }
+                            return groups
+                        }
+                        Column {
+                            id: permissionGroup; required property var modelData
+                            width: permissionGroups.width; property bool expanded: false; spacing: 4
+                            RowLayout {
+                                width: parent.width
+                                Label { text: permissionGroup.modelData.title; font.bold: true; color: '#243450'; Layout.fillWidth: true }
+                                Label { text: permissionGroup.modelData.permissions.some(function(p) { return p.access === 'write' }) ? '查看与操作' : '查看'; color: '#61718b' }
+                                SettingsButton { text: permissionGroup.expanded ? '收起 ▴' : '详情 ▾'; flat: true; onClicked: permissionGroup.expanded = !permissionGroup.expanded }
+                            }
+                            Repeater {
+                                model: permissionGroup.expanded ? permissionGroup.modelData.permissions : []
+                                Label { required property var modelData; width: permissionGroup.width; wrapMode: Text.Wrap; color: '#61718b'; font.pixelSize: 12
+                                    text: '  ' + modelData.name + (modelData.authorized ? ' · 已授权' : ' · 将授予') }
+                            }
+                        }
+                    }
                 }
             }
             RowLayout { Layout.alignment: Qt.AlignRight
-                Button { objectName: 'cancelPermission'; text: '取消'; onClicked: viewPlan.close() }
-                Button { objectName: 'confirmPermission'; text: '确认并执行'; enabled: manager && !manager.busy; onClicked: { manager.confirmView(); viewPlan.close() } }
+                SettingsButton { objectName: 'cancelPermission'; text: '取消'; onClicked: viewPlan.close() }
+                SettingsButton { objectName: 'confirmPermission'; text: '确认并执行'; enabled: manager && !manager.busy; onClicked: { manager.confirmView(); viewPlan.close() } }
             }
         }
     }
@@ -64,8 +111,8 @@ Rectangle {
         contentItem: ColumnLayout {
             Label { text: manager ? manager.installationPrompt : ''; wrapMode: Text.Wrap; Layout.fillWidth: true }
             RowLayout { Layout.alignment: Qt.AlignRight
-                Button { objectName: 'cancelInstallation'; text: '取消'; onClicked: manager.cancelInstallation() }
-                Button { objectName: 'confirmInstallation'; text: '确认'; onClicked: manager.confirmInstallation() }
+                SettingsButton { objectName: 'cancelInstallation'; text: '取消'; onClicked: manager.cancelInstallation() }
+                SettingsButton { objectName: 'confirmInstallation'; text: '确认'; onClicked: manager.confirmInstallation() }
             }
         }
     }
@@ -79,9 +126,9 @@ Rectangle {
             }
             Item { Layout.fillWidth: true }
             BusyIndicator { running: manager && manager.busy; implicitWidth: 32; implicitHeight: 32 }
-            Button { text: '刷新'; onClicked: manager.refresh() }
-            Button { text: '加载组件'; onClicked: folder.open() }
-            Button { text: '退出'; onClicked: manager.quit() }
+            SettingsButton { text: '刷新'; onClicked: manager.refresh() }
+            SettingsButton { text: '加载组件'; onClicked: folder.open() }
+            SettingsButton { text: '退出'; onClicked: manager.quit() }
         }
         RowLayout {
             Label { text: '权限使用者'; color: '#61718b' }
@@ -90,15 +137,15 @@ Rectangle {
                 currentIndex: root.records.findIndex(item => item.id === root.subjectId)
                 onActivated: root.subjectId = root.records[currentIndex].id
             }
-            Label { text: root.subjectId; color: '#8491a5'; font.pixelSize: 12 }
+
         }
         SplitView {
             Layout.fillWidth: true; Layout.fillHeight: true
             Rectangle {
                 SplitView.preferredWidth: 270; color: 'white'; radius: 14
                 ListView {
-                    anchors.fill: parent; anchors.margins: 12; spacing: 8; clip: true
-                    model: root.records
+                    anchors.fill: parent; anchors.margins: 12; anchors.bottomMargin: 58; spacing: 8; clip: true
+                    model: root.visibleRecords
                     delegate: Rectangle {
                         required property var modelData
                         width: ListView.view.width; height: 76; radius: 10
@@ -110,6 +157,7 @@ Rectangle {
                         MouseArea { anchors.fill: parent; onClicked: root.selectedId = modelData.id }
                     }
                 }
+                SettingsButton { anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.bottomMargin: 12; text: root.showSystemComponents ? '收起系统组件 ▴' : '系统组件 ▾'; flat: true; onClicked: { root.showSystemComponents = !root.showSystemComponents; root.selectedId = '' } }
             }
             ScrollView {
                 id: detailPane; SplitView.fillWidth: true; clip: true
@@ -119,46 +167,71 @@ Rectangle {
                         Layout.fillWidth: true; implicitHeight: header.implicitHeight + 40; color: 'white'; radius: 14
                         ColumnLayout { id: header; anchors.fill: parent; anchors.margins: 20; spacing: 10
                             Text { text: root.current.name || '选择组件'; font.pixelSize: 22; font.bold: true; color: '#243450' }
-                            Text { text: root.current.id || ''; color: '#738098'; font.pixelSize: 12 }
+                            Text { visible: root.customPermissions; text: root.current.id || ''; color: '#738098'; font.pixelSize: 12 }
                             Text { visible: !!root.description(root.current).view_state; text: root.description(root.current).view_state?.visible ? '视图已显示' : '视图已隐藏'; color: '#738098'; font.pixelSize: 12 }
                             RowLayout {
-                                Button { text: '启动'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'start') }
-                                Button { objectName: 'uninstallComponent'; text: '卸载'; enabled: !!root.current.id && root.current.manageable && manager && !manager.busy; onClicked: manager.prepareUninstall(root.current.id) }
-                                Button { text: '停止'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'stop') }
+                                SettingsButton { text: '启动'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'start') }
+                                SettingsButton { objectName: 'uninstallComponent'; text: '卸载'; enabled: !!root.current.id && root.current.manageable && manager && !manager.busy; onClicked: manager.prepareUninstall(root.current.id) }
+                                SettingsButton { text: '停止'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'stop') }
                                 Repeater { model: root.viewActions(root.current)
-                                    Button { required property var modelData; text: modelData.label; enabled: !!root.subjectId && manager && !manager.busy
+                                    SettingsButton { required property var modelData; text: modelData.label; enabled: !!root.subjectId && manager && !manager.busy
                                         onClicked: manager.prepareView(root.subjectId, root.current.id, modelData.operation) }
                                 }
                             }
                         }
                     }
-                    Label { text: '能力与权限'; font.pixelSize: 18; font.bold: true; color: '#243450' }
+                    Rectangle {
+                        Layout.fillWidth: true; implicitHeight: permissionSummary.implicitHeight + 32; color: 'white'; radius: 12
+                        ColumnLayout {
+                            id: permissionSummary; anchors.fill: parent; anchors.margins: 16; spacing: 8
+                            Label { text: '组件权限'; font.pixelSize: 17; font.bold: true; color: '#243450' }
+                            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: '#738098'; text: '设置当前使用者的本机访问范围，后台权限在自定义中调整。' }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Repeater { model: [{id:'none',title:'禁止'}, {id:'read',title:'只读'}, {id:'all',title:'允许全部'}]
+                                    SettingsButton { required property var modelData; objectName: 'componentPermission_' + modelData.id
+                                        text: modelData.title; checked: root.permissionMode() === modelData.id; enabled: !!root.subjectId && root.rows(root.current).length > 0 && manager && !manager.busy
+                                        onClicked: manager.componentPermission(root.subjectId, root.current.id, modelData.id) }
+                                }
+                                Item { Layout.fillWidth: true }
+                                SettingsButton { objectName: 'customPermissions'; text: root.customPermissions ? '收起 ▴' : '自定义 ▾'; flat: true; onClicked: root.customPermissions = !root.customPermissions }
+                            }
+                            Label { color: '#738098'; font.pixelSize: 12; text: {
+                                var rows = root.rows(root.current)
+                                var count = rows.filter(function(row) { return root.hasGrant(root.current, row, false) }).length
+                                return count === 0 ? '未授权' : count === rows.length ? '已允许全部当前能力' : '已自定义 · ' + count + ' / ' + rows.length + ' 项'
+                            } }
+                        }
+                    }
                     Repeater {
-                        model: root.rows(root.current)
+                        model: root.customPermissions ? root.rows(root.current) : []
                         Rectangle {
                             id: capabilityCard
                             required property var modelData
-                            Layout.fillWidth: true; implicitHeight: modelData.kind === 'operation' ? 205 : 155; radius: 12; color: 'white'
-                            ColumnLayout { anchors.fill: parent; anchors.margins: 16; spacing: 8
-                                RowLayout { Layout.fillWidth: true
-                                    Text { text: capabilityCard.modelData.name; font.bold: true; font.pixelSize: 16; color: '#243450' }
-                                    Text { text: capabilityCard.modelData.kind === 'event' ? '事件订阅' : (capabilityCard.modelData.metadata.access === 'write' ? '写入' : '读取'); color: '#738098' }
-                                }
-                                Repeater { model: [false, true]
-                                    RowLayout {
-                                        required property bool modelData
-                                        property bool granted: root.hasGrant(root.current, capabilityCard.modelData, modelData)
-                                        Layout.fillWidth: true
-                                        Label { text: modelData ? '后台任务' : '本机交互'; color: '#68768d'; Layout.preferredWidth: 90 }
-                                        Label { text: parent.granted ? '已授权' : '未授权'; color: parent.granted ? '#397c68' : '#8491a5'; Layout.fillWidth: true }
-                                        Button { text: parent.granted ? '撤销' : '授予此项'; enabled: !!root.subjectId && manager && !manager.busy
-                                            onClicked: manager.permission(root.subjectId, root.current.id, capabilityCard.modelData.name, capabilityCard.modelData.kind, parent.modelData, !parent.granted) }
-                                    }
+                            property string key: modelData.kind + ':' + modelData.name
+                            property bool expanded: root.expandedCapability === key
+                            Layout.fillWidth: true; implicitHeight: capabilityContent.implicitHeight + 24; radius: 10; color: 'white'
+                            ColumnLayout {
+                                id: capabilityContent; anchors.fill: parent; anchors.margins: 12; spacing: 6
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: capabilityCard.modelData.name; color: '#243450'; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    Label { text: capabilityCard.modelData.kind === 'event' ? '订阅' : capabilityCard.modelData.metadata.access === 'write' ? '操作' : '查看'; color: '#738098'; font.pixelSize: 12 }
+                                    Switch { objectName: 'capability_' + capabilityCard.modelData.name
+                                        checked: root.hasGrant(root.current, capabilityCard.modelData, false); enabled: !!root.subjectId && manager && !manager.busy
+                                        onClicked: manager.permission(root.subjectId, root.current.id, capabilityCard.modelData.name, capabilityCard.modelData.kind, false, checked) }
+                                    SettingsButton { text: capabilityCard.expanded ? '收起' : '高级'; flat: true; onClicked: root.expandedCapability = capabilityCard.expanded ? '' : capabilityCard.key }
                                 }
                                 RowLayout {
-                                    visible: capabilityCard.modelData.kind === 'operation'
-                                    TextField { id: args; text: '{}'; placeholderText: '参数 JSON'; Layout.fillWidth: true; selectByMouse: true }
-                                    Button { text: '调用'; enabled: !!root.subjectId && manager && !manager.busy
+                                    visible: capabilityCard.expanded; Layout.fillWidth: true
+                                    Label { text: '允许后台任务'; color: '#68768d'; Layout.fillWidth: true }
+                                    Switch { checked: root.hasGrant(root.current, capabilityCard.modelData, true); enabled: !!root.subjectId && manager && !manager.busy
+                                        onClicked: manager.permission(root.subjectId, root.current.id, capabilityCard.modelData.name, capabilityCard.modelData.kind, true, checked) }
+                                }
+                                RowLayout {
+                                    visible: capabilityCard.expanded && capabilityCard.modelData.kind === 'operation'
+                                    TextField { id: args; text: '{}'; placeholderText: '调试参数 JSON'; Layout.fillWidth: true; selectByMouse: true; color: '#243450' }
+                                    SettingsButton { text: '调试调用'; enabled: !!root.subjectId && manager && !manager.busy
                                         onClicked: manager.invoke(root.subjectId, root.current.id, capabilityCard.modelData.name, args.text) }
                                 }
                             }
@@ -169,7 +242,7 @@ Rectangle {
             }
         }
         Rectangle {
-            Layout.fillWidth: true; implicitHeight: 76; radius: 10; color: '#e8edf7'
+            visible: !!manager && manager.notice.length > 0; Layout.fillWidth: true; implicitHeight: 64; radius: 10; color: '#e8edf7'
             ScrollView { anchors.fill: parent; anchors.margins: 12; clip: true
                 TextArea { text: (manager ? manager.notice : '') || '就绪'; readOnly: true; wrapMode: Text.Wrap; color: '#43536f'; background: null; selectByMouse: true }
             }

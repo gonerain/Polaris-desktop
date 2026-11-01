@@ -28,19 +28,21 @@ Rectangle {
         Text { x: 66; y: 55; text: '⌣'; font.pixelSize: 30; color: '#182848' }
         Rectangle { x: -20; y: 65; width: 45; height: 25; radius: 12; rotation: -25; color: '#728be8' }
         Rectangle { x: 125; y: 65; width: 45; height: 25; radius: 12; rotation: 25; color: '#728be8' }
+    }
         MouseArea {
-            id: petHitArea; objectName: 'petHitArea'; anchors.fill: parent
+            id: petHitArea; objectName: 'petHitArea'; x: 45; y: 145; width: 190; height: 135
             acceptedButtons: Qt.LeftButton | Qt.RightButton
+            preventStealing: true
             property point pressGlobal
             property bool moved: false
             onPressed: function(mouse) {
-                pressGlobal = mapToGlobal(mouse.x, mouse.y)
+                pressGlobal = petActions.pointerPosition()
                 moved = false
                 if (mouse.button === Qt.LeftButton) petActions.beginDrag(pressGlobal.x, pressGlobal.y)
             }
             onPositionChanged: function(mouse) {
                 if (!pressed || !(pressedButtons & Qt.LeftButton)) return
-                let point = mapToGlobal(mouse.x, mouse.y)
+                let point = petActions.pointerPosition()
                 if (Math.abs(point.x - pressGlobal.x) + Math.abs(point.y - pressGlobal.y) > 7) moved = true
                 if (moved) petActions.dragTo(point.x, point.y)
             }
@@ -49,12 +51,16 @@ Rectangle {
                     let point = mapToItem(root, mouse.x, mouse.y)
                     petMenu.popup(point.x, point.y)
                 } else {
+                    if (moved) {
+                        let point = petActions.pointerPosition()
+                        petActions.dragTo(point.x, point.y)
+                    }
                     petActions.endDrag()
                     if (!moved) petActions.activate()
                 }
             }
+            onCanceled: petActions.endDrag()
         }
-    }
     Menu {
         id: petMenu; objectName: 'petMenu'
         MenuItem { objectName: 'managePetMenuItem'; text: '组件管理'; onTriggered: petActions.management() }

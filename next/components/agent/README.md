@@ -40,10 +40,12 @@ PYTHONPATH=next .venv/bin/python -m polaris_platform --gui --config next/config.
 
 插件请求：`{type:"request",requestId,operation,params}`，响应为 `{type:"response",requestId,result}` 或 `error`。操作为 `session.mark/unmark/list/status/reply/send/delivery`；params 使用 `mode`（发送时必填 `start` 或 `steer`）、`sessionId`（原生会话 ID）、`runId`、`text`、`deliveryId`。请求只能作用于该连接身份的会话。
 
-服务器发送 `{type:"command",command:"session.send",requestId,sessionId,text,mode}`。插件须核对当前宿主与原生会话，再回 `{type:"event",event:"command.result",requestId,status:"accepted|rejected|unknown",turnId?,detail?}`。不得猜测成功或自行重发。
+服务器发送 `{type:"command",command:"session.send",requestId,sessionId,text,mode}`。插件须核对当前宿主与原生会话，再回 `{type:"event",event:"command.result",requestId,status:"accepted|rejected|unknown",turnId?,runId?,detail?}`。不得猜测成功或自行重发。
 
 测试使用临时目录与临时 loopback 连接：
 
 ```bash
 PYTHONPATH=next python -m unittest discover -s next/components/agent/tests -v
 ```
+
+可选结果回传：`send` 接受 `on_complete={target, operation, params}`。调用方提供回传地址，组件不依赖任何具体接收方。宿主回执必须带与运行事件完全一致的 `runId`；仅当该投递已接收、该轮次确定完成/失败/停止时回传 `{...params, result:{deliveryId,sessionId,runId,title,status,reply,replyTruncated}}`。回传操作返回 `accepted:true` 表示已接管结果。未配置地址的任务行为不变，未知结果不触发结束回传。地址、处理进度和原请求的有限授权保存到本地；接收方暂不可用时等待恢复，不确定是否执行时不盲目重试。

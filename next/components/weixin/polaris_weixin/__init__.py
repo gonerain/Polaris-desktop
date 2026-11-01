@@ -7,6 +7,7 @@ from .client import Client
 from .credentials import CredentialStore
 from .storage import ChatStore
 from .controller import AgentController
+from .completion import CompletionAdapter
 
 WRITES = ('login', 'verify', 'connect', 'disconnect', 'logout', 'send', 'clear_messages')
 
@@ -25,6 +26,8 @@ class Weixin(Component):
         self.client = Client(credentials or CredentialStore(directory / 'credentials.bin'),
                              ChatStore(directory / 'chats'), transport, self._changed)
         self.agent = AgentController(self.client, directory / "agent.json", self._changed, directory_id, component_id, agent)
+        self.completions = CompletionAdapter(self.client, directory / 'agent-completions.json', component_id)
+        self.agent.completions = self.completions
         self.client.on_text = self.agent.receive
         self.client.on_invalidate = self.agent.invalidate
         self.client.on_account_changed = self.agent.reset_conversation
@@ -32,7 +35,7 @@ class Weixin(Component):
         self.views = [{'id': 'main', 'adapter': 'qt-quick-item', 'title': '微信',
                        'create': 'create_view', 'release': 'release_view',
                        'permissions': [{'name': name, 'access': 'read'} for name in ('get', 'agent_settings', 'agent_catalog')] +
-                                      [{'name': name, 'access': 'write'} for name in ('configure_agent', 'new_conversation')] +
+                                      [{'name': name, 'access': 'write'} for name in ('configure_agent', 'new_conversation', 'complete_agent_run')] +
                                       [{'target': directory_id, 'name': name, 'access': 'read'} for name in ('discover', 'describe')] +
                                       [{'name': name, 'access': 'write'} for name in WRITES]}]
         self.operation('get')(self.get)
@@ -40,6 +43,7 @@ class Weixin(Component):
         self.operation('agent_catalog')(self.agent_catalog)
         self.operation('configure_agent', access='write')(self.configure_agent)
         self.operation('new_conversation', access='write')(self.new_conversation)
+        self.operation('complete_agent_run', access='write')(self.complete_agent_run)
         for name in WRITES:
             self.operation(name, access='write')(self.logout if name == 'logout' else getattr(self.client, name))
         self.operation('create_view', access='write')(self.create_view)
@@ -48,7 +52,12 @@ class Weixin(Component):
     def start(self, port):
         # The platform assigns the installation's actual component identity.
         self.agent.bind_identity(port.id)
+        self.completions.identity = port.id
         super().start(port)
+        self.agent.bind_resume(lambda: self.resume_task('auto_reply'))
+        if self.client.account:
+            self.client.connect()
+            self.agent.resume()
 
     def logout(self):
         with self._lock:
@@ -76,8 +85,14 @@ class Weixin(Component):
     def new_conversation(self):
         return self.agent.new_conversation()
 
+    def complete_agent_run(self, notification_id, result, ctx):
+        source = getattr(getattr(ctx, 'context', None), 'caller', None)
+        return self.completions.receive(notification_id, result, source)
+
     def describe(self):
         result = super().describe()
+        result['operations']['complete_agent_run'].update(title='接收任务结果',
+            description='将本组件发起任务的确定结束结果直接通知绑定者，不调用模型；按任务去重。')
         for name in ('create_view', 'release_view'):
             result['operations'][name] = dict(result['operations'][name], profile='qt-native')
         return result
