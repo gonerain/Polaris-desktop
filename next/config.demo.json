@@ -1,0 +1,85 @@
+{
+  "roles": {
+    "authorization": "authorization",
+    "collaboration": "collaboration",
+    "runtime": "runtime"
+  },
+  "required": [
+    "authorization",
+    "collaboration",
+    "runtime"
+  ],
+  "start": [
+    "authorization",
+    "collaboration",
+    "runtime",
+    "org.example.notes",
+    "org.example.labeler"
+  ],
+  "components": [
+    {
+      "manifest": {
+        "id": "authorization",
+        "name": "Authorization",
+        "version": "0.1.0",
+        "platformApi": 1,
+        "entry": {
+          "mode": "inprocess",
+          "factory": "polaris_platform.builtins:create_authorization"
+        }
+      }
+    },
+    {
+      "manifest": {
+        "id": "collaboration",
+        "name": "Collaboration",
+        "version": "0.1.0",
+        "platformApi": 1,
+        "entry": {
+          "mode": "inprocess",
+          "factory": "polaris_platform.builtins:create_collaboration"
+        }
+      }
+    },
+    {
+      "manifest": {
+        "id": "runtime",
+        "name": "Runtime",
+        "version": "0.1.0",
+        "platformApi": 1,
+        "entry": {
+          "mode": "inprocess",
+          "factory": "polaris_platform.builtins:create_runtime"
+        }
+      }
+    },
+    {
+      "directory": "examples/notes"
+    },
+    {
+      "directory": "examples/labeler"
+    }
+  ],
+  "grants": [
+    {
+      "requester": "org.example.labeler",
+      "target": "org.example.notes",
+      "name": "create"
+    },
+    {
+      "requester": "org.example.labeler",
+      "target": "org.example.notes",
+      "name": "get"
+    },
+    {
+      "requester": "org.example.labeler",
+      "target": "org.example.labeler",
+      "name": "label"
+    },
+    {
+      "requester": "org.example.labeler",
+      "target": "org.example.labeler",
+      "name": "get"
+    }
+  ]
+}
