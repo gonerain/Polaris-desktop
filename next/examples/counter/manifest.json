@@ -1,0 +1,1 @@
+{"id":"org.example.counter","name":"计数器","version":"0.1.0","platformApi":1,"entry":{"mode":"inprocess","factory":"counter_plugin:create","defer":"desktop"}}

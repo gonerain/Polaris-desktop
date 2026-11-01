@@ -1,0 +1,398 @@
+"""Cooperative lifecycle manager and authenticated instance-bound ports."""
+import contextvars
+import hashlib
+import hmac
+import secrets
+import json
+from pathlib import Path
+from threading import RLock
+from uuid import uuid4
+from dataclasses import replace
+from .component import Component
+from .protocol import Context, PlatformError, capability, validate_description
+
+_active = contextvars.ContextVar("polaris_request", default=None)
+
+
+class Client:
+    def __init__(self, runtime, component_id, instance):
+        self.__runtime, self.id, self.instance = runtime, component_id, instance
+
+    def _context(self, context=None):
+        self.__runtime.validate_client(self)
+        active = _active.get()
+        if context is None:
+            if active is not None:
+                raise PlatformError("context_required", "Nested work must retain its request context")
+            raise PlatformError("context_required", "Use an explicitly granted background or user context")
+        self.__runtime.validate_context(context)
+        if active is not None and (context.origin != active.origin or context.source != active.source or context.request_id != active.request_id or not context.scope <= active.scope):
+            raise PlatformError("scope_escalation", "A nested request cannot replace its authority")
+        return self.__runtime.derive_context(context, caller=self.id)
+
+    def bind(self, target, operation):
+        self.__runtime.validate_client(self)
+        return self.__runtime.collaboration.bind(target, operation)
+
+    def call(self, target, operation, params=None, context=None):
+        return self.invoke(self.bind(target, operation), params, context)
+
+    def invoke(self, handle, params=None, context=None):
+        return self.__runtime.collaboration.invoke(handle, params or {}, self._context(context))
+
+    def subscribe(self, target, event, callback, context=None):
+        return self.__runtime.collaboration.subscribe(target, event, callback, self._context(context))
+
+    def unsubscribe(self, token):
+        self.__runtime.validate_client(self)
+        return self.__runtime.collaboration.unsubscribe(token, self.id)
+
+    def publish(self, event, payload, context=None):
+        return self.__runtime.collaboration.publish(self.id, event, payload, self._context(context))
+
+    def advertise(self):
+        self.__runtime.validate_client(self)
+        self.__runtime.refresh_all()
+
+    def background_context(self):
+        raise PlatformError("explicit_background_required", "Trusted user management must issue a background context for an explicit task")
+
+
+class Runtime(Component):
+    def __init__(self):
+        super().__init__()
+        self._lock = RLock()
+        self._records = {}
+        self._seal = secrets.token_bytes(32)
+        self.collaboration = self.authorization = None
+        self.roles = {}
+        self._authorization_records = []
+        self._storage = None
+        self._state_dir = None
+        self.operation("list")(lambda p, c: self.snapshot())
+        self.operation("start", access="write")(lambda p, c: self.start_component(p["id"]))
+        self.operation("stop", access="write")(lambda p, c: self.stop_component(p["id"]))
+        self.operation("dependencies")(lambda p, c: self.dependency_status(p["id"]))
+
+    def connect(self, collaboration, authorization):
+        self.collaboration, self.authorization = collaboration, authorization
+        collaboration.runtime = self
+        for identity, record in self._records.items():
+            authorization.bind_identity(identity, record["installation"])
+
+    def install(self, manifest, factory, installation_id=None, directory=None, autostart=False, trusted_bindings=False):
+        for key in ("id", "name", "version", "platformApi", "entry"):
+            if key not in manifest:
+                raise PlatformError("invalid_manifest", f"Missing {key}")
+        if manifest["platformApi"] != 1 or manifest["entry"].get("mode") not in ("process", "inprocess"):
+            raise PlatformError("invalid_manifest", "Unsupported platform API or entry mode")
+        component_id = manifest["id"]
+        with self._lock:
+            if component_id in self._records:
+                raise PlatformError("already_installed", component_id)
+            self._records[component_id] = dict(manifest=dict(manifest), factory=factory,
+                installation=installation_id or uuid4().hex, instance=None, state="installed", component=None, error=None, directory=str(Path(directory).resolve()) if directory else None, autostart=bool(autostart), trustedBindings=bool(trusted_bindings))
+        if self.authorization is not None:
+            self.authorization.bind_identity(component_id, self._records[component_id]["installation"])
+        self._persist()
+        return component_id
+
+    def export_installations(self):
+        """Public manager migration record; component-owned data is not included."""
+        with self._lock:
+            return [{"manifest": dict(r["manifest"]), "installationId": r["installation"],
+                     "directory": r["directory"], "autostart": r["autostart"], "trustedBindings": r["trustedBindings"]}
+                    for r in self._records.values()]
+
+    def import_installations(self, records, factory_resolver):
+        if _active.get() is not None:
+            raise PlatformError("permission_denied", "Import requires trusted user management")
+        return [self.install(item["manifest"], factory_resolver(item["manifest"]), item["installationId"], item.get("directory"), item.get("autostart", False), item.get("trustedBindings", False))
+                for item in records]
+
+    def replace_component(self, component_id, manifest, factory):
+        """Trusted update, retaining installation identity through a public control API."""
+        if _active.get() is not None:
+            raise PlatformError("permission_denied", "Replacement requires trusted user management")
+        if manifest.get("id") != component_id or manifest.get("platformApi") != 1:
+            raise PlatformError("invalid_manifest", "Replacement must preserve component ID and API")
+        if component_id == self.roles.get("runtime"):
+            raise PlatformError("restart_required", "Changing the management implementation requires a new bootstrap")
+        self.stop_component(component_id)
+        record = self._record(component_id)
+        record.update(manifest=dict(manifest), factory=factory, component=None)
+        return self.start_component(component_id)
+
+    def install_directory(self, path):
+        from .bootstrap import load_factory
+        directory = Path(path).resolve()
+        manifest = json.loads((directory / "manifest.json").read_text())
+        return self.install(manifest, load_factory(manifest, directory, self), directory=directory)
+
+    def _record(self, component_id):
+        try:
+            return self._records[component_id]
+        except KeyError:
+            raise PlatformError("not_installed", component_id) from None
+
+    def load_installations(self, path):
+        from .persistence import read_json
+        return read_json(path, [])
+
+    def configure_storage(self, state_dir):
+        self._state_dir = Path(state_dir).resolve()
+        self._storage = self._state_dir / "installations.json"
+        self._persist()
+        self.authorization.configure_storage(self._state_dir / "authorization.json")
+
+    def _persist(self):
+        if self._storage is not None:
+            from .persistence import write_json
+            with self._lock:
+                write_json(self._storage, self.export_installations())
+
+    def component_data_directory(self, component_id):
+        """Trusted assembly location; each component owns its data beneath it."""
+        record = self._record(component_id)
+        return self._state_dir / 'components' / record['installation'] if self._state_dir is not None else None
+
+    def component_instance(self, component_id):
+        return self._record(component_id)["component"]
+
+    def prepare(self, component_id):
+        record = self._record(component_id)
+        if record["component"] is None:
+            record["component"] = record["factory"]()
+        return record["component"]
+
+    def start_component(self, component_id):
+        with self._lock:
+            record = self._record(component_id)
+            if record["state"] == "running":
+                return self.status(component_id)
+            if record["state"] in ("starting", "stopping"):
+                raise PlatformError("busy", component_id)
+            record.update(state="starting", instance=uuid4().hex, error=None)
+        try:
+            component = self.prepare(component_id)
+            if component_id == self.roles.get("collaboration"):
+                self.connect(component, self.authorization)
+            elif component_id == self.roles.get("authorization"):
+                component.import_records(self._authorization_records)
+                if self._state_dir is not None:
+                    component.configure_storage(self._state_dir / "authorization.json")
+                self.connect(self.collaboration, component)
+            if hasattr(component, "set_failure_callback"):
+                instance = record["instance"]
+                component.set_failure_callback(lambda error=None: self.mark_failed(component_id, error, instance))
+            description = validate_description(component.describe())
+            for dependency in description.get("dependencies", []):
+                if dependency.get("kind") == "startup" and not self._dependency_available(dependency):
+                    raise PlatformError("dependency_unavailable", "Startup dependency missing", dependency)
+            component.start(Client(self, component_id, record["instance"]))
+            record["state"] = "running"
+            record["autostart"] = True
+            self._persist()
+            self.refresh_all()
+            return self.status(component_id)
+        except Exception as error:
+            component = record.get("component")
+            if component is not None:
+                try:
+                    component.stop()
+                except Exception:
+                    if hasattr(component, "force_stop"):
+                        try:
+                            component.force_stop()
+                        except Exception:
+                            pass
+            record.update(state="failed", error=str(error), component=None)
+            self.collaboration.withdraw(component_id)
+            self.refresh_all()
+            raise
+
+    def stop_component(self, component_id, force=False, persist=True):
+        record = self._record(component_id)
+        if record["state"] in ("installed", "stopped"):
+            return self.status(component_id)
+        with self._lock:
+            if persist:
+                record["autostart"] = False
+                self._persist()
+            record["state"] = "stopping"
+            self.collaboration.withdraw(component_id)
+        self.refresh_all()
+        try:
+            component = record["component"]
+            if component is not None and component_id == self.roles.get("authorization"):
+                self._authorization_records = component.export_records()
+            if component is not None:
+                if force and hasattr(component, "force_stop"):
+                    component.force_stop()
+                else:
+                    component.stop()
+            record["state"] = "stopped"
+            record["component"] = None
+        except PlatformError as error:
+            record["error"] = error.as_dict()
+            if error.code != "stopping":
+                record["state"] = "failed"
+            raise
+        except Exception as error:
+            record.update(state="failed", error=str(error))
+            raise
+        finally:
+            self.refresh_all()
+        return self.status(component_id)
+
+    def mark_failed(self, component_id, error=None, instance=None):
+        record = self._record(component_id)
+        if instance is not None and record["instance"] != instance:
+            return
+        record.update(state="failed", error=str(error) if error else "Process exited")
+        self.collaboration.withdraw(component_id)
+        self.refresh_all()
+
+    def client(self, component_id):
+        record = self._record(component_id)
+        return Client(self, component_id, record["instance"])
+
+    def validate_client(self, client):
+        record = self._record(client.id)
+        if record["instance"] != client.instance or record["state"] not in ("running", "starting"):
+            raise PlatformError("stale_instance", client.id)
+
+    def _signature(self, context):
+        value = [context.origin, context.origin_installation, context.caller, context.source,
+                 context.request_id, sorted(context.scope)]
+        return hmac.new(self._seal, json.dumps(value, sort_keys=True).encode(), hashlib.sha256).digest()
+
+    def _stamp(self, context):
+        return replace(context, _seal=self._signature(context))
+
+    def validate_context(self, context):
+        if not isinstance(context, Context) or not isinstance(context._seal, bytes):
+            raise PlatformError("invalid_context", "Context must originate at trusted bootstrap")
+        try:
+            valid = hmac.compare_digest(context._seal, self._signature(context))
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise PlatformError("invalid_context", "Context identity or scope was altered")
+
+    def derive_context(self, context, *, caller=None, scope=None):
+        self.validate_context(context)
+        if scope is not None and not frozenset(scope) <= context.scope:
+            raise PlatformError("scope_escalation", "Context derivation may only narrow scope")
+        return self._stamp(replace(context, caller=caller or context.caller,
+                                   scope=context.scope if scope is None else frozenset(scope)))
+
+    def user_context(self, requester, targets=None):
+        if _active.get() is not None:
+            raise PlatformError("scope_escalation", "User authority is unavailable inside request handlers")
+        self._record(requester)
+        scope = self.authorization.scope(requester)
+        if targets is not None:
+            scope = frozenset(k for k in scope if k[0] in targets)
+        return self._stamp(Context(requester, requester, "user", scope, origin_installation=self._record(requester)["installation"]))
+
+    def background_context(self, requester):
+        if _active.get() is not None:
+            raise PlatformError("scope_escalation", "Background authority is unavailable inside request handlers")
+        return self._stamp(Context(requester, requester, "background", self.authorization.scope(requester, True), origin_installation=self._record(requester)["installation"]))
+
+    def grant(self, requester, target, name, kind="operation", background=False):
+        if _active.get() is not None:
+            raise PlatformError("permission_denied", "Only trusted user management can grant authority")
+        self._record(requester)
+        record = self.collaboration.describe_target(target)
+        metadata = record["description"].get("operations" if kind == "operation" else "events", {}).get(name)
+        if metadata is None:
+            raise PlatformError("missing_capability", name)
+        self.authorization.grant(requester, capability(record["installation"], kind, name, metadata), background)
+
+    def revoke(self, requester, target, name, kind="operation", background=False):
+        if _active.get() is not None:
+            raise PlatformError("permission_denied", "Only trusted user management can revoke authority")
+        record = self._record(target)
+        for key in self.authorization.scope(requester, background):
+            if key[:3] == (record["installation"], kind, name):
+                self.authorization.revoke(requester, key, background)
+
+    def dispatch(self, handle, params, context):
+        self.validate_context(context)
+        record = self._record(handle.target)
+        if record["state"] != "running" or record["instance"] != handle.instance:
+            raise PlatformError("stale_handle", handle.target)
+        token = _active.set(context)
+        try:
+            result = record["component"].call(handle.operation, params, context)
+            return result
+        except PlatformError:
+            raise
+        except (TypeError, ValueError) as error:
+            raise PlatformError("invalid_data", str(error)) from error
+        except Exception as error:
+            raise PlatformError("component_error", str(error)) from error
+        finally:
+            _active.reset(token)
+
+    def derive_event_context(self, subscription, publisher):
+        self.validate_context(publisher)
+        return self.derive_context(publisher, caller=subscription.caller, scope=publisher.scope & subscription.scope & self.authorization.scope(subscription.origin, subscription.source == "background"))
+
+    def deliver(self, caller, callback, payload, context):
+        token = _active.set(context)
+        try:
+            return callback(payload, context)
+        finally:
+            _active.reset(token)
+
+    def _dependency_available(self, dependency):
+        target = dependency.get("target") or self.roles.get(dependency.get("role"))
+        record = self._records.get(target)
+        if not record or record["state"] != "running":
+            return False
+        desc = record["component"].describe()
+        interface = dependency.get("interface")
+        if interface:
+            return any(m.get("interface") == interface and m.get("major", 1) == dependency.get("major", 1)
+                       for m in desc.get("operations", {}).values())
+        return True
+
+    def dependency_status(self, component_id):
+        record = self._record(component_id)
+        description = record["component"].describe() if record["component"] else {}
+        return [dict(d, available=self._dependency_available(d)) for d in description.get("dependencies", [])]
+
+    def refresh(self, component_id):
+        with self._lock:
+            record = self._record(component_id)
+            if record["state"] != "running":
+                return
+            instance, component = record["instance"], record["component"]
+        from copy import deepcopy
+        description = deepcopy(validate_description(component.describe()))
+        for dependency in description.get("dependencies", []):
+            if dependency.get("kind") in ("startup", "capability") and not self._dependency_available(dependency):
+                for name in dependency.get("operations", list(description.get("operations", {}))):
+                    if name in description.get("operations", {}):
+                        description["operations"][name].update(available=False, reason=dependency)
+        with self._lock:
+            if record["state"] != "running" or record["instance"] != instance:
+                return
+            self.collaboration.advertise(dict(id=component_id, installation=record["installation"],
+                instance=instance, description=description, manifest=record["manifest"]))
+
+    def refresh_all(self):
+        for component_id in list(self._records):
+            self.refresh(component_id)
+
+    def status(self, component_id):
+        record = self._record(component_id)
+        return {"id": component_id, **{k: record[k] for k in ("installation", "instance", "state", "error", "manifest")},
+                "description": record["component"].describe() if record["component"] else {},
+                "dependencies": self.dependency_status(component_id)}
+
+    def snapshot(self):
+        return [self.status(component_id) for component_id in self._records]

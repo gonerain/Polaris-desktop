@@ -1,0 +1,11 @@
+{
+  "name": "polaris-agent",
+  "version": "0.1.0",
+  "description": "Report current sessions and explicitly mark chats for Polaris Agent.",
+  "hooks": "./codex/hooks.json",
+  "interface": {
+    "displayName": "Polaris Agent",
+    "shortDescription": "Current chat status, replies and explicit marking"
+  },
+  "skills": "./skills"
+}

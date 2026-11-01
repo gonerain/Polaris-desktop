@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polaris-platform"
+version = "0.1.0"
+description = "Independent component platform prototype"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+desktop = ["PySide6-Essentials>=6.5"]
+
+[project.scripts]
+polaris-platform = "polaris_platform.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["polaris_platform*"]
+
+[tool.setuptools.package-data]
+"polaris_platform.desktop" = ["*.qml"]
