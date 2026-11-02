@@ -1,3 +1,0 @@
-module Polaris
-depends QtQuick 6.0
-typeinfo plugins.qmltypes

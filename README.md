@@ -27,7 +27,7 @@ python -m venv .venv
 
 `python main.py --version` 显示软件版本。`--headless` 打印所选组件状态后退出。`--config PATH` 选择装配，`--state-dir PATH` 指定平台安装与授权数据目录。开发者也可运行 `PYTHONPATH=next python -m polaris_platform --gui`；模块入口不加 `--gui` 时只启动、检查并停止所选组件。
 
-平台与业务组件分别维护自己的数据，不将旧版 JSON 自动迁入正式平台。旧代码与文档保留供参考；升级前备份原数据，旧版的 OneDrive 同步、旧桥协议及固定 cell 画布不作为本版本能力。[平台兼容与数据目录](docs/platform-compatibility.md)。
+平台安装、授权与自启动设置保存在平台数据目录；桌宠位置和画布布局保存在各自组件目录。[平台运行与数据目录](docs/platform-compatibility.md)。
 
 ## 打包
 

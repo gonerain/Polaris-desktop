@@ -53,9 +53,9 @@ X11 GNOME 已验证工具窗类型、跳过任务栏/分页器和不接受焦点
 
 身体输入区域使用前述圆角矩形契约，须覆盖自身所有可见动作；气泡和菜单由桌宠主体追加。换肤后随皮肤更新，不回退到旧身体区域。加载失败或契约无效会显示错误并切换到矢量备用皮肤。`next/tests/fixtures/PetSkinOne.qml`、`PetSkinTwo.qml` 提供两个隔离测试皮肤；运行 `PYTHONPATH=next .venv/bin/python -m unittest next.tests.test_pet_skins -v` 可验证相同鼠标交互的不同动画映射、输入区域、缺槽回退与随机待机集合。
 
-默认鲸鱼娘使用 `polaris_platform.desktop` 包内的 `skins/dshpet/Skin.qml`，动画、片段定义和署名许可一并打包，安装后不依赖源码仓库的 `assets` 目录。源码中的 `assets/dsh-pet/Skin.qml` 仅保留为兼容预览入口，正式逻辑只有随包的一份。可运行 `.venv/bin/python tools/preview_pet_skin.py` 打开独立试用窗口，也可在命令末尾传入另一个 QML 皮肤路径。预览支持 hover、按压、拖放和右键退出；点击及管理项不执行业务操作，不保存正式桌宠配置。离屏截图示例：`.venv/bin/python tools/preview_pet_skin.py --offscreen --seconds 1 --screenshot /tmp/polaris-dsh-skin.png`。
+默认鲸鱼娘使用 `polaris_platform.desktop` 包内的 `skins/dshpet/Skin.qml`，动画、片段定义和署名许可一并打包。可运行 `.venv/bin/python tools/preview_pet_skin.py` 打开独立试用窗口，也可在命令末尾传入另一个 QML 皮肤路径。预览支持 hover、按压、拖放和右键退出；点击及管理项不执行业务操作，不保存正式桌宠配置。离屏截图示例：`.venv/bin/python tools/preview_pet_skin.py --offscreen --seconds 1 --screenshot /tmp/polaris-dsh-skin.png`。
 
-该皮肤使用 `wave` 回应进入，拖动播放 `drag`，常态播放 `idle`，随机待机选用伸懒腰、魔方、张望和哈欠，不迁移旧版睡眠状态机。已检查原仓库，没有专用离开或释放落地短片：离开、松开回常态，按压、提起、放下采用旧版轻微缩放和回弹，不冒充新增原生动画。WebP 单次动作在实际播放完整帧循环后结束；隐藏时停止播放。静态分层输入区域覆盖选定动画及变形包络，仍保留明显空白穿透。素材作者、非商业及相同方式共享要求见 [随包署名与许可](polaris_platform/desktop/skins/dshpet/ATTRIBUTION.md)。
+该皮肤使用 `wave` 回应进入，拖动播放 `drag`，常态播放 `idle`，随机待机选用伸懒腰、魔方、张望和哈欠。已检查原仓库，没有专用离开或释放落地短片：离开、松开回常态，按压、提起、放下采用轻微缩放和回弹，不冒充新增原生动画。WebP 单次动作在实际播放完整帧循环后结束；隐藏时停止播放。静态分层输入区域覆盖选定动画及变形包络，仍保留明显空白穿透。素材作者、非商业及相同方式共享要求见 [随包署名与许可](polaris_platform/desktop/skins/dshpet/ATTRIBUTION.md)。
 
 ## 插件源
 

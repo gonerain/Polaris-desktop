@@ -28,7 +28,7 @@ Ubuntu 精简环境可能需要 `python3-venv`、`fonts-noto-cjk`、`libegl1`、
 - **Windows / macOS**：当前版本未做完整实机验收。macOS 的应用级 Dock / Cmd+Tab 不会因为单个工具窗自动隐藏；工具窗失活仍显示依赖 Qt Cocoa 属性，需对应环境验证。
 - **离屏**：`QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software` 用于测试和截图，不能证明真实任务切换、穿透或多显示器行为。正常启动不强制这些变量。
 
-## 数据位置与升级
+## 数据位置
 
 图形入口默认将平台安装身份、组件目录、自启动设置和授权保存到：
 
@@ -37,12 +37,14 @@ Ubuntu 精简环境可能需要 `python3-venv`、`fonts-noto-cjk`、`libegl1`、
 | Windows | `%LOCALAPPDATA%/polaris-platform`；未设变量时按当前实现回退到用户主目录下 `.local/share/polaris-platform` |
 | Linux / macOS | `$XDG_DATA_HOME/polaris-platform`；未设变量时为 `~/.local/share/polaris-platform` |
 
-`--state-dir PATH` 只覆盖平台目录。业务组件自己决定其业务数据位置；日程、Agent、微信的默认目录分别为 `polaris-schedule`、`polaris-agent`、`polaris-weixin`，详见各组件 README。桌宠位置和画布布局保存在平台的对应组件数据目录。无界面入口默认仅用内存，显式指定 `--state-dir` 才持久化。
+`--state-dir PATH` 指定平台目录。桌宠位置和画布布局保存在平台的对应组件数据目录。无界面入口默认仅用内存，显式指定 `--state-dir` 才持久化。既有平台安装可继续使用同一目录；撤销授权和卸载记录跨重启保留。备份时退出应用并复制平台数据目录。
 
-既有组件平台安装可继续使用同一 `polaris-platform` 目录；撤销授权和卸载记录保留。旧版单体应用的 Qt 数据目录、日程文件和旧桥端点不自动迁入新平台。不要把旧版整个目录覆盖到平台目录，也不要让两进程同时编辑同一业务文件。迁移前退出应用并保留备份；本版本未提供旧数据自动迁移工具。
+## 验证
 
-## Agent 插件与验证口径
+验收分别记录单元测试、Qt 离屏测试、隔离 X11 测试、目标系统打包和真实桌面验证。测试使用内存或临时目录。
 
-微信、日程和 Agent 通过独立插件源安装，不随平台发布包分发。Codex/Pi 集成随 [Agent 仓库](https://github.com/gonerain/Polaris-agent)维护，安装方式和宿主限制见该仓库说明。Agent 自己提供认证的 loopback 桥，默认端点在其用户数据目录 `bridge/endpoint.json`；可用 `POLARIS_AGENT_ENDPOINT` 显式指定。旧 `--bridge-stdio`、Qt LocalSocket 和旧 relay 设置不属于本版本接入方式；跨 Windows / WSL 连接不能假设共享端点或直接可用。
-
-验收须分别记录单元测试、Qt 离屏测试、隔离 X11 测试、目标系统打包和真实宿主插件验证。旧版文档中的 Windows / WSL 实测记录不代表本次正式平台已完成同等验收。测试使用内存或临时目录，避免读写真实业务数据。
+```bash
+PYTHONPATH=next .venv/bin/python -m unittest discover -s next/tests -v
+.venv/bin/python main.py --version
+.venv/bin/python main.py --headless
+```

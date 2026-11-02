@@ -83,11 +83,11 @@ if __name__=='__main__' and sys.argv[-1]=='qt':
             alpha=bytes(image.constBits())[3::4]
             assert not any(alpha[i]>16 for i in outside), 'visible frame extends beyond the declared input envelope'
         for name in ('idle','wave','drag','stretch','puzzle','glance','drowsy'):
-            reader=QImageReader(str(ROOT/'assets/dsh-pet'/f'{name}.webp'))
+            reader=QImageReader(str(ROOT/'next/polaris_platform/desktop/skins/dshpet'/f'{name}.webp'))
             for _ in range(reader.imageCount()):
                 frame=reader.read();assert not frame.isNull()
                 covered(frame,.96 if name=='drag' else 1,-4 if name=='drag' else 0)
-        poster=QImage(str(ROOT/'assets/dsh-pet/poster.webp'))
+        poster=QImage(str(ROOT/'next/polaris_platform/desktop/skins/dshpet/poster.webp'))
         for scale in (.96,.98,1,1.06):covered(poster,scale)
         covered(poster,.96,-4)
     finally:
