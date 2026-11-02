@@ -1,8 +1,10 @@
 from pathlib import Path
 import threading
+import math
+import sys
 import uuid
-from PySide6.QtCore import QObject, Signal, Slot, QThread, QUrl, Qt, QRect
-from PySide6.QtGui import QGuiApplication, QCursor
+from PySide6.QtCore import QObject, Signal, Slot, QThread, QUrl, Qt, QRect, QRectF
+from PySide6.QtGui import QGuiApplication, QCursor, QPainterPath, QRegion
 from PySide6.QtQuick import QQuickView
 from ..component import Component
 from ..protocol import PlatformError
@@ -130,7 +132,14 @@ class WindowHost(Component):
             flags = view.flags()
             if profile.get('frameless'): flags |= Qt.FramelessWindowHint
             if profile.get('topmost'): flags |= Qt.WindowStaysOnTopHint
+            if profile.get('toolWindow'):
+                flags = (flags & ~Qt.WindowType_Mask) | Qt.Tool
+            if profile.get('acceptFocus') is False:
+                flags |= Qt.WindowDoesNotAcceptFocus
             view.setFlags(flags)
+            if sys.platform == 'darwin' and profile.get('toolWindow') and profile.get('keepToolVisible'):
+                # Qt 6 Cocoa uses this property for non-hiding utility panels.
+                view.setProperty('_q_macAlwaysShowToolWindow', True)
             if profile.get('transparent'):
                 surface = view.format()
                 surface.setAlphaBufferSize(8)
@@ -153,6 +162,14 @@ class WindowHost(Component):
             view.setPosition(*self._clamp(view, x, y))
             for key, value in (properties or {}).items():
                 view.rootObject().setProperty(key, value)
+            region_property = profile.get('inputRegionsProperty')
+            if region_property is not None:
+                try:
+                    self._configure_input_regions(view, region_property)
+                except Exception:
+                    import shiboken6
+                    shiboken6.delete(view)
+                    raise
             key = uuid.uuid4().hex
             self._views[key] = view
             view.show()
@@ -168,9 +185,67 @@ class WindowHost(Component):
                     'width': view.width(), 'height': view.height(), 'transparent': view.color().alpha() == 0,
                     'frameless': bool(view.flags() & Qt.FramelessWindowHint),
                     'topmost': bool(view.flags() & Qt.WindowStaysOnTopHint),
+                    'toolWindow': view.type() == Qt.Tool,
+                    'acceptFocus': not bool(view.flags() & Qt.WindowDoesNotAcceptFocus),
+                    'active': view.isActive(),
+                    'inputRegionConfigured': bool(getattr(view, '_input_regions_property', None)),
+                    'inputRegionError': getattr(view, '_input_region_error', ''),
                     'pointerInside': view.isVisible() and QRect(0, 0, view.width(), view.height()).contains(view.mapFromGlobal(QCursor.pos())),
                     'providerInstance': self.port.instance if self.port else None}
         return self.dispatcher.run(state)
+
+    @staticmethod
+    def _configure_input_regions(view, name):
+        """Optional root property: rounded rectangles in window-local logical pixels.
+
+        Unconfigured windows retain their normal rectangular input. An explicit
+        empty list accepts no input; QWindow's empty-mask reset is not used.
+        Masks can also clip visuals on some platforms, so providers must include
+        all visible content and its animation envelope.
+        """
+        root = view.rootObject()
+        if not isinstance(name, str) or root.metaObject().indexOfProperty(name) < 0:
+            raise PlatformError('invalid_input_region', '输入区域属性不存在')
+        signal = getattr(root, name + 'Changed', None)
+        if signal is None:
+            raise PlatformError('invalid_input_region', '输入区域属性须提供变化通知')
+        view._input_regions_property = name
+        def apply():
+            values = root.property(name)
+            if hasattr(values, 'toVariant'):
+                values = values.toVariant()
+            if not isinstance(values, list):
+                raise PlatformError('invalid_input_region', '输入区域须为矩形列表')
+            region = QRegion()
+            for value in values:
+                if not isinstance(value, dict):
+                    raise PlatformError('invalid_input_region', '输入区域须包含矩形坐标')
+                try:
+                    x, y, width, height, radius = [float(value.get(key, 0)) for key in ('x', 'y', 'width', 'height', 'radius')]
+                    if not all(math.isfinite(n) for n in (x, y, width, height, radius)):
+                        raise ValueError()
+                except (TypeError, ValueError):
+                    raise PlatformError('invalid_input_region', '输入区域坐标无效') from None
+                if width <= 0 or height <= 0:
+                    continue
+                path = QPainterPath()
+                radius = max(0, min(radius, width / 2, height / 2))
+                path.addRoundedRect(QRectF(x, y, width, height), radius, radius)
+                region |= QRegion(path.toFillPolygon().toPolygon())
+            region &= QRegion(QRect(0, 0, view.width(), view.height()))
+            # A nonempty region outside the window represents an empty input area.
+            view.setMask(region if not region.isEmpty() else QRegion(QRect(-2, -2, 1, 1)))
+            view._input_region_error = ''
+        apply()
+        def changed(*args):
+            try:
+                apply()
+            except PlatformError as error:
+                view._input_region_error = error.message
+                view.setMask(QRegion(QRect(-2, -2, 1, 1)))
+        signal.connect(changed)
+        view.widthChanged.connect(changed)
+        view.heightChanged.connect(changed)
 
     def _clamp(self, view, x, y):
         target = QRect(round(x), round(y), view.width(), view.height())

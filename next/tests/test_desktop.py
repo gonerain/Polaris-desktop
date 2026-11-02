@@ -42,6 +42,57 @@ if __name__ == '__main__':
         def call(self, target, operation, params=None):
             return self.runtime.client('user').call(target, operation, params or {}, context=self.context)
 
+        def test_window_creation_profiles_and_dynamic_input_regions(self):
+            import tempfile
+            from PySide6.QtCore import QPoint, QRect
+            from PySide6.QtGui import QRegion
+            with tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / 'Region.qml'
+                source.write_text("import QtQuick\nRectangle { color: 'transparent'; property bool followRight: false; property var manualRegions: [{x:20,y:20,width:60,height:60,radius:30}]; property var regions: followRight ? [{x:width-10,y:0,width:10,height:10}] : manualRegions }", encoding='utf8')
+                ordinary = self.call('window','create',{'source':str(source),'size':[100,100]})['handle']
+                state = self.call('window','status',{'handle':ordinary})
+                self.assertFalse(state['toolWindow'])
+                self.assertTrue(state['acceptFocus'])
+                self.assertFalse(state['inputRegionConfigured'])
+                self.assertTrue(self.host._views[ordinary].mask().isEmpty())
+                masked = self.call('window','create',{'source':str(source),'size':[100,100],
+                    'options':{'toolWindow':True,'acceptFocus':False,'inputRegionsProperty':'regions'}})['handle']
+                view = self.host._views[masked]
+                state = self.call('window','status',{'handle':masked})
+                self.assertTrue(state['toolWindow'])
+                self.assertFalse(state['acceptFocus'])
+                self.assertTrue(view.mask().contains(QPoint(50,50)))
+                self.assertFalse(view.mask().contains(QPoint(20,20)))
+                self.call('window','update',{'handle':masked,'properties':{'manualRegions':[]}})
+                self.assertFalse(view.mask().isEmpty(), 'empty input must not reset to a full window')
+                self.assertTrue(view.mask().intersected(QRegion(QRect(0,0,100,100))).isEmpty())
+                self.call('window','update',{'handle':masked,'properties':{'manualRegions':[{'x':0,'y':0,'width':10,'height':10}]}})
+                self.assertTrue(view.mask().contains(QPoint(5,5)))
+                self.assertFalse(view.mask().contains(QPoint(50,50)))
+                self.call('window','update',{'handle':masked,'properties':{'followRight':True}})
+                view.resize(120,100)
+                self.app.processEvents()
+                self.assertTrue(view.mask().contains(QPoint(115,5)))
+                self.assertFalse(view.mask().contains(QPoint(95,5)))
+                self.call('window','update',{'handle':masked,'properties':{'manualRegions':'bad','followRight':False}})
+                self.assertTrue(self.call('window','status',{'handle':masked})['inputRegionError'])
+                self.assertTrue(view.mask().intersected(QRegion(QRect(0,0,120,100))).isEmpty())
+                self.call('window','update',{'handle':masked,'properties':{'manualRegions':[{'x':0,'y':0,'width':10,'height':10}]}})
+                self.assertEqual(self.call('window','status',{'handle':masked})['inputRegionError'],'')
+                self.call('window','hide',{'handle':masked})
+                self.call('window','show',{'handle':masked})
+                self.assertTrue(self.call('window','status',{'handle':masked})['toolWindow'])
+                count = len(self.host._views)
+                with self.assertRaises(PlatformError):
+                    self.call('window','create',{'source':str(source),'options':{'inputRegionsProperty':'missing'}})
+                self.assertEqual(len(self.host._views),count)
+                with self.assertRaises(PlatformError):
+                    self.call('window','create',{'source':str(source),'properties':{'manualRegions':'invalid'},
+                        'options':{'inputRegionsProperty':'regions'}})
+                self.assertEqual(len(self.host._views),count)
+                self.call('window','release',{'handle':masked})
+                self.assertNotIn(masked,self.host._views)
+
         def test_real_windows_hide_stop_and_recovery(self):
             self.call('canvas', 'set_cards', {'cards': [{'title': 'Hello', 'text': 'A card'}]})
             self.assertTrue(self.call('canvas', 'show')['visible'])

@@ -20,4 +20,4 @@ where = ["."]
 include = ["polaris_platform*"]
 
 [tool.setuptools.package-data]
-"polaris_platform.desktop" = ["*.qml"]
+"polaris_platform.desktop" = ["*.qml", "skins/dshpet/*.qml", "skins/dshpet/*.js", "skins/dshpet/*.webp", "skins/dshpet/*.json", "skins/dshpet/*.md", "skins/dshpet/*.txt"]

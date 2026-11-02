@@ -176,11 +176,16 @@ class Pet(Presentation):
     source, title, size = 'Pet.qml', 'Polaris · 桌宠', (280, 320)
 
     def __init__(self, runtime=None, window_id='window', cleanup_port=None,
-                 canvas_id='canvas', manager_id='manager', user_access=None):
+                 canvas_id='canvas', manager_id='manager', user_access=None, skin_source=None):
         super().__init__(runtime, window_id, cleanup_port)
         self.canvas_id, self.manager_id = canvas_id, manager_id
+        if skin_source is not None:
+            from pathlib import Path
+            self.properties['skinSource'] = Path(skin_source).expanduser().resolve().as_uri()
         self.user_access = user_access or (DesktopUserAccess(runtime) if runtime is not None else None)
-        self.window_options = {'transparent': True, 'frameless': True, 'topmost': True}
+        self.window_options = {'transparent': True, 'frameless': True, 'topmost': True,
+                               'toolWindow': True, 'acceptFocus': False, 'keepToolVisible': True,
+                               'inputRegionsProperty': 'inputRegions'}
         self._gui = GuiDispatcher()
         self.bridge = PetBridge(self)
         self.qt_context = {'petActions': self.bridge}
@@ -258,7 +263,7 @@ class Pet(Presentation):
             raise PlatformError('invalid_params', '请输入不超过2000字的消息')
         self.properties['message'] = message
         self.show(context)
-        self._window('update', {'handle': self.handle, 'properties': self.properties}, context)
+        self._window('update', {'handle': self.handle, 'properties': {'message': message}}, context)
         return {'shown': True}
 
     def move(self, point, context, constrain=True):
@@ -355,5 +360,5 @@ class Pet(Presentation):
 
 
 def create_pet(runtime=None, window_id='window', cleanup_port=None,
-               canvas_id='canvas', manager_id='manager', user_access=None):
-    return Pet(runtime, window_id, cleanup_port, canvas_id, manager_id, user_access)
+               canvas_id='canvas', manager_id='manager', user_access=None, skin_source=None):
+    return Pet(runtime, window_id, cleanup_port, canvas_id, manager_id, user_access, skin_source)
