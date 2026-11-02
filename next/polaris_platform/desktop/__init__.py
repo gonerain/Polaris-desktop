@@ -101,7 +101,7 @@ def run(runtime):
                 management.report_notice(str(error))
     management.refresh()
     def stop_desktop():
-        for identity in ('manager', 'sources', 'pet', 'canvas', 'window'):
+        for identity in reversed(DESKTOP):
             try:
                 runtime.stop_component(identity, persist=False)
             except Exception:

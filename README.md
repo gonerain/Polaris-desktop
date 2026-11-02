@@ -6,10 +6,10 @@ Polaris v0.1.0.0 是基于 Python、PySide6 / Qt Quick 的本地组件工作台�
 
 - 默认鲸鱼娘皮肤复用现有透明动画，支持进入回应、按压、拖放和随机待机；右键打开组件管理或退出。工具窗不接受焦点，身体、气泡和菜单之外的透明区域可穿透输入，实际效果取决于窗口系统。
 - 画布挂载组件自己的原生视图，支持移动、缩放、折叠和布局保存。隐藏或移除视图保留业务数据，停止组件才结束其能力。
-- 微信、日程和 Agent 通过独立插件源安装；一个仓库可以提供多个插件。
+- 微信、日程和 Agent Bridge 通过独立插件源安装；一个仓库可以提供多个插件。
 - 公开能力按安装身份和具体操作授权；新增能力不自动授权，撤权约束已有视图和调用上下文。后台恢复不重新授予已撤销权限。
 
-首次打开桌面时，组件管理会在后台从官方仓库安装并启动微信、日程和 Agent。已安装或已卸载的组件保留用户选择。网络失败可在“组件管理 → 插件源”中重试。默认地址见[组件管理配置](next/components/manager/default-sources.json)。
+首次打开桌面时，组件管理会在后台从官方仓库安装并启动微信、日程和 Agent Bridge。已安装或已卸载的组件保留用户选择。网络失败可在“组件管理 → 插件源”中重试。默认地址见[组件管理配置](next/components/manager/default-sources.json)。
 
 ## 运行
 
@@ -44,9 +44,9 @@ python -m PyInstaller --noconfirm Polaris.spec
 
 ## 插件源
 
-主仓库的 [next/components](next/components) 按组件分别维护运行管理、协作、授权、窗口承载、画布、桌宠、插件源和组件管理的清单、实现与资源，随应用分发。其它 Git 或本地插件源可在组件管理中添加，再选择插件安装。仓库根目录使用 `polaris-source.json` 列出插件目录，每个插件维护自己的 `manifest.json`。标准见 [插件源契约](next/CONTRACT.md)。
+主仓库的 [next/components](next/components) 按组件分别维护运行管理、协作、授权、窗口承载、画布、桌宠、插件源、组件管理和 Polaris Agent 的清单、实现与资源，随应用分发。其它 Git 或本地插件源可在组件管理中添加，再选择插件安装。仓库根目录使用 `polaris-source.json` 列出插件目录，每个插件维护自己的 `manifest.json`。标准见 [插件源契约](next/CONTRACT.md)。
 
-[微信](https://github.com/gonerain/Polaris-weixin)、[日程](https://github.com/gonerain/Polaris-schedule)、[Agent](https://github.com/gonerain/Polaris-agent) 独立维护和发布。Codex/Pi 插件资源随 Agent 仓库提供，平台发布包只包含平台与桌面基础组件。插件依赖由各插件维护。
+[微信](https://github.com/gonerain/Polaris-weixin)、[日程](https://github.com/gonerain/Polaris-schedule)、[Agent Bridge](https://github.com/gonerain/Polaris-agent) 独立维护和发布。Codex/Pi 接入由 Agent Bridge 提供。随包的 [Polaris Agent](next/components/assistant/README.md) 提供模型对话与工具调用，可在画布独立使用，也可为微信自动回复。插件依赖由各插件维护。
 
 ## 组件设计原则
 

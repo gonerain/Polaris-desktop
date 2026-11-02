@@ -6,13 +6,13 @@ Polaris 把安装和启停放在组件层，把跨组件协作放在能力层。
 
 ```text
 桌面与插件管理    桌宠 · 画布 · 窗口承载 · 组件管理 · 插件源
-业务插件          微信 · 日程 · Agent（各自在独立仓库发布）
+对话与业务        Polaris Agent（随包）；微信 · 日程 · Agent Bridge（独立插件源）
                          │ 通过公开能力协作
 基础组件          运行管理（生命周期）· 协作（目录与路由）· 授权（访问检查）
 公共代码          启动装配 · 协议 · SDK · 进程通信
 ```
 
-8 个随包组件的实现位于 [next/components](../next/components)，公共代码位于 [next/polaris_platform](../next/polaris_platform)。**组件管理**是用户选择安装、授权和提供方的桌面入口；**运行管理**维护安装记录和运行实例，无界面时也能工作。
+9 个随包组件的实现位于 [next/components](../next/components)，公共代码位于 [next/polaris_platform](../next/polaris_platform)。**组件管理**是用户选择安装、授权和提供方的桌面入口；**运行管理**维护安装记录和运行实例，无界面时也能工作。
 
 ## 2. 从插件源到运行实例
 

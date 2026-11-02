@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FOUNDATION = ('authorization', 'collaboration', 'runtime')
-DESKTOP = ('window', 'canvas', 'pet', 'sources', 'manager')
+DESKTOP = ('window', 'canvas', 'pet', 'assistant', 'sources', 'manager')
 
 
 def manifest(name):
