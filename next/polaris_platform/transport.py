@@ -8,7 +8,7 @@ import sys
 import threading
 import uuid
 from pathlib import Path
-from .protocol import PlatformError
+from .protocol import PlatformError, _dispatched
 
 
 MAX_FRAME_BYTES = 1024 * 1024
@@ -225,10 +225,13 @@ class ProcessComponent:
             if self.call_failed:
                 raise PlatformError('unavailable', 'A previous process call timed out; stop this instance before restarting')
             token = uuid.uuid4().hex
+            declared = self.description.get('operations', {}).get(operation, {})
+            bindings = self.port.requirements(operation) if declared.get('requires') else None
             with self.token_lock:
-                self.tokens[token] = context
+                self.tokens[token] = (context, bindings)
             try:
-                return self.peer.request('call', {'operation': operation, 'params': params, 'token': token})
+                return self.peer.request('call', {'operation': operation, 'params': params, 'token': token,
+                                                  'expected': _dispatched.get()})
             except PlatformError as exc:
                 if exc.code == 'timeout':
                     self.call_failed = True
@@ -246,25 +249,37 @@ class ProcessComponent:
         if method == 'advertise':
             if self.port is None:
                 raise PlatformError('unavailable', 'Component is not started')
-            self.port.advertise()
+            previous = self.description
+            try:
+                self.port.advertise()
+            except Exception:
+                self.description = previous
+                raise
             return None
         with self.token_lock:
             token = params.get('token')
             if token not in self.tokens:
                 raise PlatformError('denied', 'Missing or expired request context')
-            context = self.tokens[token]
-        if method == 'subscribe':
+            context, bindings = self.tokens[token]
+        if method in ('subscribe_required', 'call_required') and bindings is None:
+            raise PlatformError('missing_requirement', params['alias'])
+        if method == 'call_required':
+            return bindings.call(params['alias'], params.get('params', {}), context)
+        if method in ('subscribe', 'subscribe_required'):
             subscription = uuid.uuid4().hex
             def deliver(payload, event_context):
                 token = uuid.uuid4().hex
                 with self.token_lock:
-                    self.tokens[token] = event_context
+                    self.tokens[token] = (event_context, bindings)
                 try:
                     return self.peer.request('event', {'subscription': subscription, 'payload': payload, 'token': token})
                 finally:
                     with self.token_lock:
                         self.tokens.pop(token, None)
-            host_token = self.port.subscribe(params['target'], params['event'], deliver, context=context)
+            if method == 'subscribe_required':
+                host_token = bindings.subscribe(params['alias'], deliver, context)
+            else:
+                host_token = self.port.subscribe(params['target'], params['event'], deliver, context=context)
             self.subscriptions[subscription] = host_token
             return subscription
         if method == 'publish':

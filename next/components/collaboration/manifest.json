@@ -1,0 +1,10 @@
+{
+  "id": "collaboration",
+  "name": "协作",
+  "version": "0.1.0",
+  "platformApi": 1,
+  "entry": {
+    "mode": "inprocess",
+    "factory": "components.collaboration:create_collaboration"
+  }
+}

@@ -16,40 +16,13 @@
   ],
   "components": [
     {
-      "manifest": {
-        "id": "authorization",
-        "name": "Authorization",
-        "version": "0.1.0",
-        "platformApi": 1,
-        "entry": {
-          "mode": "inprocess",
-          "factory": "polaris_platform.builtins:create_authorization"
-        }
-      }
+      "bundled": "authorization"
     },
     {
-      "manifest": {
-        "id": "collaboration",
-        "name": "Collaboration",
-        "version": "0.1.0",
-        "platformApi": 1,
-        "entry": {
-          "mode": "inprocess",
-          "factory": "polaris_platform.builtins:create_collaboration"
-        }
-      }
+      "bundled": "collaboration"
     },
     {
-      "manifest": {
-        "id": "runtime",
-        "name": "Runtime",
-        "version": "0.1.0",
-        "platformApi": 1,
-        "entry": {
-          "mode": "inprocess",
-          "factory": "polaris_platform.builtins:create_runtime"
-        }
-      }
+      "bundled": "runtime"
     }
   ]
 }

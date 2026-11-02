@@ -1,0 +1,10 @@
+{
+  "id": "runtime",
+  "name": "运行管理",
+  "version": "0.1.0",
+  "platformApi": 1,
+  "entry": {
+    "mode": "inprocess",
+    "factory": "components.runtime:create_runtime"
+  }
+}

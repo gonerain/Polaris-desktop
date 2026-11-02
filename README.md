@@ -9,7 +9,7 @@ Polaris v0.1.0.0 是基于 Python、PySide6 / Qt Quick 的本地组件工作台�
 - 微信、日程和 Agent 通过独立插件源安装；一个仓库可以提供多个插件。
 - 公开能力按安装身份和具体操作授权；新增能力不自动授权，撤权约束已有视图和调用上下文。后台恢复不重新授予已撤销权限。
 
-首次启动只启用平台和桌面基础组件，业务组件通过组件管理器添加插件源后选择安装，也可加载本地组件目录；已有安装按保存的自启动设置恢复。开发接口、皮肤动作槽、原生视图授权和验证方法见 [组件平台说明](next/README.md)。
+首次打开桌面时，组件管理会在后台从官方仓库安装并启动微信、日程和 Agent。已安装或已卸载的组件保留用户选择。网络失败可在“组件管理 → 插件源”中重试。默认地址见[组件管理配置](next/components/manager/default-sources.json)。
 
 ## 运行
 
@@ -44,13 +44,13 @@ python -m PyInstaller --noconfirm Polaris.spec
 
 ## 插件源
 
-在组件管理中点击“插件源”，添加 Git 仓库地址或本地仓库目录，再选择需要安装的插件。添加来源只发现插件；安装和更新均由用户明确选择。仓库根目录使用 `polaris-source.json` 列出插件目录，每个插件维护自己的 `manifest.json`。标准见 [插件源契约](next/CONTRACT.md)。
+主仓库的 [next/components](next/components) 按组件分别维护运行管理、协作、授权、窗口承载、画布、桌宠、插件源和组件管理的清单、实现与资源，随应用分发。其它 Git 或本地插件源可在组件管理中添加，再选择插件安装。仓库根目录使用 `polaris-source.json` 列出插件目录，每个插件维护自己的 `manifest.json`。标准见 [插件源契约](next/CONTRACT.md)。
 
 [微信](https://github.com/gonerain/Polaris-weixin)、[日程](https://github.com/gonerain/Polaris-schedule)、[Agent](https://github.com/gonerain/Polaris-agent) 独立维护和发布。Codex/Pi 插件资源随 Agent 仓库提供，平台发布包只包含平台与桌面基础组件。插件依赖由各插件维护。
 
 ## 组件设计原则
 
-以下是 Polaris 的组件设计约束与演进方向，当前实现仍需逐步对齐。
+组件分工、能力调用和故障恢复见[架构说明](docs/component-platform-design.md)。以下是 Polaris 的组件设计约束与演进方向。
 
 - **能力归组件所有。** 每个组件负责自身功能、数据、规则和状态，通过公开能力接口协作。使用接口承诺的返回字段属于正常依赖；组件不依赖对方内部实现。
 - **能力与展示分开。** 画布本身也是组件，负责呈现与组织。组件可以没有视图，隐藏视图与停止能力是不同操作。
@@ -73,4 +73,4 @@ python -m PyInstaller --noconfirm Polaris.spec
 
 软件版本为 **v0.1.0.0**；组件清单版本和协议版本独立维护。[更新记录](CHANGELOG.md)。
 
-代码采用 [MIT](LICENSE)。默认美术素材来自 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，角色原型作者为上善无形，女仆鲸鱼娘设计为 ZipZipPipe，并非 DeepSeek 官方形象。素材遵守 **CC BY-NC-SA 4.0：署名、非商业、相同方式共享**；代码与美术素材分别适用各自许可。完整署名、来源和许可随包保留于 [默认皮肤目录](next/polaris_platform/desktop/skins/dshpet/ATTRIBUTION.md)。
+代码采用 [MIT](LICENSE)。默认美术素材来自 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，角色原型作者为上善无形，女仆鲸鱼娘设计为 ZipZipPipe，并非 DeepSeek 官方形象。素材遵守 **CC BY-NC-SA 4.0：署名、非商业、相同方式共享**；代码与美术素材分别适用各自许可。完整署名、来源和许可随包保留于 [默认皮肤目录](next/components/pet/skins/dshpet/ATTRIBUTION.md)。

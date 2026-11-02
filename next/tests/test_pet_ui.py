@@ -52,29 +52,39 @@ def exercise():
   manager=runtime.component_instance('manager')
   assert not manager.status()['visible']
   wait(lambda: bool(pet.handle) and host.view_status(pet.handle).get('visible'))
+  window=host._views[pet.handle]
+  wait(lambda: window.isExposed() and window.rootObject().property('skinReady'))
+  QTest.qWait(40)
   if sys.argv[2]=='first':
-   window=host._views[pet.handle]; hit=find(window.rootObject(),'petHitArea')
+   hit=find(window.rootObject(),'petHitArea')
    point=hit.mapToScene(QPointF(hit.width()/2,hit.height()/2)); start=QPoint(round(point.x()),round(point.y()))
    _mousePress(window,Qt.LeftButton,Qt.NoModifier,start)
+   assert window.rootObject().property('pressActive'), f'press missed: {start}, size={window.size()}, mask={window.mask().contains(start)}, skin={window.rootObject().property("skinError")}'
    for distance in (20,40,65):
-    _mouseMove(window,start-QPoint(distance,20)); app.processEvents(); time.sleep(.03)
-   _mouseRelease(window,Qt.LeftButton,Qt.NoModifier,start-QPoint(65,20))
+    _mouseMove(window,start+QPoint(distance,20)); QTest.qWait(30)
+   assert window.rootObject().property('dragging'), f'drag did not start at {start}, cursor={QCursor.pos()}'
+   _mouseRelease(window,Qt.LeftButton,Qt.NoModifier,start+QPoint(65,20))
    wait(lambda: pet._data_path.exists() and tuple(json.loads(pet._data_path.read_text())[k] for k in ('x','y'))==pet.position)
   native=host.view_status(pet.handle)
   result.update(position=[native['x'],native['y']],installation=runtime.status('pet')['installation'],visible=native['visible'])
   if sys.argv[2]=='second':
    window=host._views[pet.handle]; hit=find(window.rootObject(),'petHitArea')
    point=hit.mapToScene(QPointF(hit.width()/2,hit.height()/2)); point=QPoint(round(point.x()),round(point.y()))
+   QCursor.setPos(window.mapToGlobal(point))
    QTest.mouseClick(window,Qt.RightButton,Qt.NoModifier,point)
    menu=window.rootObject().findChild(QObject,'petMenu')
    wait(lambda: menu.property('visible'))
    assert not manager.status()['visible']
    item=window.rootObject().findChild(QObject,'managePetMenuItem')
    point=item.mapToScene(QPointF(item.width()/2,item.height()/2))
-   QTest.mouseClick(item.window(),Qt.LeftButton,Qt.NoModifier,QPoint(round(point.x()),round(point.y())))
+   button_point=QPoint(round(point.x()),round(point.y()))
+   QCursor.setPos(item.window().mapToGlobal(button_point))
+   QTest.mouseClick(item.window(),Qt.LeftButton,Qt.NoModifier,button_point)
    wait(lambda: manager.status()['visible'])
    runtime.revoke('pet','pet','show')
- except Exception as error: result['error']=repr(error)
+ except Exception:
+  import traceback
+  result['error']=traceback.format_exc()
  finally: app.quit()
 def record_failure():
  pet=runtime.component_instance('pet'); host=runtime.component_instance('window')
@@ -85,6 +95,7 @@ def record_failure():
  if sys.argv[2]=='revoked': runtime.stop_component('pet')
 if sys.argv[2] in ('revoked','disabled'): app.aboutToQuit.connect(record_failure)
 else: QTimer.singleShot(40,exercise)
+runtime.manager_config['defaultSources'] = []
 result['exit']=run(runtime)
 print(json.dumps(result))
 '''

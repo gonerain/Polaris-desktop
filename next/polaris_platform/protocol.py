@@ -1,4 +1,5 @@
 """Portable protocol values; no business types."""
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,11 +30,23 @@ class Handle:
     instance: str
     operation: str
     semantic: tuple
+    contract: str | None = None
+    generation: int = 0
 
 
 def capability(installation, kind, name, metadata):
     return (installation, kind, name, int(metadata.get("major", 1)),
             metadata.get("access", "read"), int(metadata.get("revision", 1)))
+
+
+# Checked by the SDK at handler lookup, including across stdio. A concurrent
+# registration cannot replace an already-authorized read with a write.
+_dispatched = ContextVar('polaris_dispatched_capability', default=None)
+
+
+def handler_signature(metadata):
+    return (metadata.get('major', 1), metadata.get('access', 'read'), metadata.get('revision', 1),
+            metadata.get('provides'))
 
 
 def validate_description(description):
@@ -56,4 +69,6 @@ def validate_description(description):
     for group in ("views", "dependencies"):
         if not isinstance(description.get(group, []), list):
             raise PlatformError("invalid_description", f"{group} must be a list")
+    from .contracts import validate_contracts
+    validate_contracts(description)
     return description

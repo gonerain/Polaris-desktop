@@ -1,0 +1,16 @@
+{
+  "id": "manager",
+  "name": "组件管理",
+  "version": "0.1.0",
+  "platformApi": 1,
+  "entry": {
+    "mode": "inprocess",
+    "factory": "components.manager:create_manager",
+    "defer": "desktop",
+    "kwargs": {
+      "runtime": {
+        "runtime": true
+      }
+    }
+  }
+}

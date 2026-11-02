@@ -5,9 +5,9 @@ def create():
     component = Component()
     labels = {}
 
-    @component.operation('label', access='write')
-    def label_note(note_id, ctx, target='org.example.notes'):
-        note = ctx.call(target, 'get', {'id': note_id})
+    @component.operation('label', access='write', requires={'note': 'notes.read@1'})
+    def label_note(note_id, ctx):
+        note = ctx.call_required('note', {'id': note_id})
         words = (note['title'] + ' ' + note['body']).lower().split()
         tags = sorted(set(word.strip('.,!?') for word in words if len(word) >= 4))[:3]
         labels[note_id] = tags

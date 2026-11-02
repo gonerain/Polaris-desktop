@@ -1,6 +1,6 @@
 # Independent example software
 
-`notes` owns its notes. `labeler` reads a note through `ctx.call` and stores its own tags. Both use only `polaris_platform.sdk`; adding another business field requires no platform changes.
+The notes plugin provides `notes.read@1` through its local `get` operation. It accepts `{"id": "<note id>"}` and returns `{"id": "...", "title": "...", "body": "..."}` on success. The labeler's `label(note_id)` operation requires this contract as `note` and reads it with `ctx.call_required`. Its local tag lookup has no dependency. To supply a different notebook, register a read operation with the same contract, select it for the labeler and grant the request origin access to that installation.
 
 Each directory has a process manifest. `{python}` selects the host's current interpreter. The host runs the command from the manifest's directory. Install the `next` package in that interpreter, or set `PYTHONPATH` to the absolute `next` directory while developing. stdout is reserved for JSON-lines protocol; SDK redirects ordinary prints to stderr.
 
@@ -13,7 +13,7 @@ from examples.labeler.main import create as create_labeler
 
 Choose either the process adapter or these factories in the assembly configuration. The labeler's handler stays unchanged. Through the user management facade, grant the request origin `notes.create`, `notes.get` and `labeler.label` as needed. A request allowed to call `labeler.label` alone receives a denial when it attempts `notes.get`; the labeler's own standing grants cannot supply that missing request permission.
 
-Handlers use keyword arguments and may accept `ctx` for nested calls. Business validation belongs in handlers. Read/write descriptions do not authorize access. `component.port.advertise()` republishes current descriptions after a component changes its own declarations; newly published capabilities need explicit user grants. No process adapter grants permissions.
+Handlers use keyword arguments and may accept `ctx` for nested calls. Business validation belongs in handlers. SDK registration and withdrawal update the directory immediately. The existing directed-call API still works for explicitly addressed operations.
 
 A timed-out call has an unknown business result. Its token expires immediately and the adapter rejects further business calls on that instance until it is stopped and restarted. It does not replay the operation. A stop request that leaves the child alive reports `stopping`; management may explicitly force-stop it.
 

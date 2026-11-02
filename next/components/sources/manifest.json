@@ -1,0 +1,16 @@
+{
+  "id": "sources",
+  "name": "插件源",
+  "version": "0.1.0",
+  "platformApi": 1,
+  "entry": {
+    "mode": "inprocess",
+    "factory": "components.sources:create_sources",
+    "defer": "desktop",
+    "kwargs": {
+      "runtime": {
+        "runtime": true
+      }
+    }
+  }
+}

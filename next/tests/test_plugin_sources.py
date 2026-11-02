@@ -198,7 +198,15 @@ class SourceTests(unittest.TestCase):
     def test_local_symlink_escape_and_active_request_denied(self):
         plain = self.root / 'plain'
         plain.mkdir()
-        (plain / 'escape').symlink_to(self.repository)
+        link = plain / 'escape'
+        try:
+            link.symlink_to(self.repository, target_is_directory=True)
+        except OSError as error:
+            if getattr(error, 'winerror', None) != 1314:
+                raise
+            # Windows without symlink privileges still supports directory junctions.
+            import _winapi
+            _winapi.CreateJunction(str(self.repository), str(link))
         with self.assertRaises(PlatformError):
             self.control.add(str(plain))
         token = _active.set(object())

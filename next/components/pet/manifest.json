@@ -1,0 +1,17 @@
+{
+  "id": "pet",
+  "name": "桌宠",
+  "version": "0.1.0",
+  "platformApi": 1,
+  "entry": {
+    "mode": "inprocess",
+    "factory": "components.pet:create_pet",
+    "defer": "desktop",
+    "kwargs": {
+      "runtime": {
+        "runtime": true
+      },
+      "window_id": "window"
+    }
+  }
+}

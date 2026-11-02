@@ -10,14 +10,16 @@ root = Path(SPECPATH)
 sys.path.insert(0, str(root / 'next'))
 from polaris_platform.metadata import APP_NAME, VERSION, AUTHOR, PROJECT_URL
 
-datas = collect_data_files('polaris_platform')
+datas = collect_data_files('polaris_platform') + collect_data_files('components')
 datas += [(str(path), 'next') for path in sorted((root / 'next').glob('config.*.json'))]
 for filename in ('LICENSE', 'README.md', 'CHANGELOG.md'):
     if (root / filename).is_file():
         datas.append((str(root / filename), '.'))
 
 # Platform imports include the SDK and Qt adapters. External plugins own their dependencies.
-hiddenimports = set(collect_submodules('polaris_platform'))
+hiddenimports = set(collect_submodules('polaris_platform') + collect_submodules('components'))
+# The default Weixin plugin renders its login code locally with the SVG backend.
+hiddenimports.update(('qrcode', 'qrcode.image.svg'))
 # External Python plugins share the host's standard library. Collect this
 # general baseline independently of installed plugin code or third-party deps.
 stdlib = Path(sysconfig.get_path('stdlib'))

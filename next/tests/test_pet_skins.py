@@ -52,7 +52,7 @@ if __name__ == '__main__' and sys.argv[-1] == 'qt':
             self.host=WindowHost()
             self.host.start(SimpleNamespace(id='window',instance='test'))
             self.pet=Pet(skin_source=BASE/'fixtures/PetSkinOne.qml')
-            self.handle=self.host.create_view(Path(__file__).resolve().parents[1]/'polaris_platform/desktop/Pet.qml','fixture',
+            self.handle=self.host.create_view(Path(__file__).resolve().parents[1]/'components/pet/Pet.qml','fixture',
                 (280,320),self.pet.properties,{'petActions':self.actions},self.pet.window_options)
             self.window=self.host._views[self.handle]
             self.root=self.window.rootObject()

@@ -44,6 +44,7 @@ runtime.install({'id':'manager','name':'manager','version':'1','platformApi':1,'
 runtime.install({'id':'pet','name':'pet','version':'1','platformApi':1,'entry':{'mode':'inprocess'}}, Component)
 runtime.uninstall_component('pet')
 QTimer.singleShot(150,app.quit)
+runtime.manager_config['defaultSources'] = []
 result = run(runtime)
 assert result == 0 and manager.visible
 assert not hasattr(manager,'bridge') and not hasattr(manager,'show')
@@ -80,6 +81,7 @@ def exercise():
     finally:
         QTimer.singleShot(30, app.quit)
 QTimer.singleShot(100, exercise)
+runtime.manager_config['defaultSources'] = []
 result['exit'] = run(runtime)
 print(json.dumps(result))
 '''

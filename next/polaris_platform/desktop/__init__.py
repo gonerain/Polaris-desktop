@@ -1,8 +1,18 @@
 """Optional Qt Quick desktop components and trusted local management UI."""
-from .components import GuiDispatcher, WindowHost, Canvas, Pet, create_window, create_canvas, create_pet
-from .user_access import DesktopUserAccess
-from .manager import Manager, create_manager
-from ..sources import create_sources
+from importlib import import_module
+from components import DESKTOP, ROOT, manifest as bundled_manifest
+
+# Preserve public imports used by existing third-party plugins and saved manifests.
+def __getattr__(name):
+    if name in ('Manager', 'create_manager'):
+        return getattr(import_module('components.manager'), name)
+    if name == 'create_sources':
+        return import_module('components.sources').create_sources
+    if name == 'DesktopUserAccess':
+        return import_module('.user_access', __name__).DesktopUserAccess
+    if name in ('GuiDispatcher', 'WindowHost', 'Canvas', 'Pet', 'create_window', 'create_canvas', 'create_pet'):
+        return getattr(import_module('.components', __name__), name)
+    raise AttributeError(name)
 
 
 def run(runtime):
@@ -15,28 +25,19 @@ def run(runtime):
     app.setApplicationVersion(VERSION)
     app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
-    from pathlib import Path
     from PySide6.QtGui import QIcon
-    app.setWindowIcon(QIcon(str(Path(__file__).parent / 'skins/dshpet/poster.webp')))
+    app.setWindowIcon(QIcon(str(ROOT / 'pet/skins/dshpet/poster.webp')))
     from ..bootstrap import load_factory
-    definitions = [
-        ('window', '窗口承载', 'create_window', {'runtime': {'runtime': True}}),
-        ('canvas', '画布', 'create_canvas', {'runtime': {'runtime': True}, 'window_id': 'window'}),
-        ('pet', '桌宠', 'create_pet', {'runtime': {'runtime': True}, 'window_id': 'window'}),
-        ('sources', '插件源', 'create_sources', {'runtime': {'runtime': True}}),
-        ('manager', '组件管理', 'create_manager', {'runtime': {'runtime': True}}),
-    ]
     installed = {item['id']: item for item in runtime.snapshot()}
     saved = {item['manifest']['id']: item for item in runtime.export_installations()}
     removed = runtime.removed_installations()
-    for identity, name, factory, kwargs in definitions:
+    for identity in DESKTOP:
         if identity in removed:
             continue
         if identity not in installed:
-            manifest = {'id': identity, 'name': name, 'version': '0.1.0', 'platformApi': 1,
-                        'entry': {'mode': 'inprocess', 'factory': 'polaris_platform.desktop:' + factory,
-                                  'defer': 'desktop', 'kwargs': kwargs}}
-            runtime.install(manifest, load_factory(manifest, Path.cwd(), runtime, trusted_bindings=True), trusted_bindings=True)
+            manifest = bundled_manifest(identity)
+            runtime.install(manifest, load_factory(manifest, ROOT / identity, runtime, trusted_bindings=True),
+                            trusted_bindings=True)
         if identity not in installed or identity in ('window', 'manager') or saved[identity]['autostart']:
             runtime.start_component(identity)
     host = runtime.component_instance('window') if 'window' not in removed else None
@@ -74,7 +75,7 @@ def run(runtime):
             app.exit(1)
     QTimer.singleShot(0, display_pet)
     # Native adapters are ready. Respect explicit startup dependencies between restored views.
-    excluded = {item[0] for item in definitions}
+    excluded = set(DESKTOP)
     pending = {record['manifest']['id'] for record in runtime.export_installations()
                if record['manifest']['id'] not in excluded and record['autostart']
                and record['manifest']['entry'].get('defer') == 'desktop'}

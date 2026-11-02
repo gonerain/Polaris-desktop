@@ -106,21 +106,26 @@ def load_factory(manifest, directory, runtime, trusted_bindings=False):
 
 
 def build(config, base_dir=None, state_dir=None):
-    from .runtime import Runtime
+    from components import ROOT, manifest as bundled_manifest
     base_dir = Path(base_dir or ".").resolve()
     # The selected manager is the assembly object; alternative managers expose this same control API.
     reference = config.get("managerFactory", "polaris_platform.builtins:create_runtime")
     module, name = reference.split(":", 1)
     runtime = getattr(importlib.import_module(module), name)()
     runtime.roles = dict(config["roles"])
+    runtime.manager_config = dict(config.get('componentManager', {}))
     saved = runtime.load_installations(Path(state_dir) / "installations.json") if state_dir else []
     saved_by_id = {item["manifest"]["id"]: item for item in saved}
     components = []
     configured_ids = set()
     for item in config["components"]:
         item = dict(item)
-        directory = (base_dir / (item.get("directory") or ".")).resolve()
-        manifest = item.get("manifest") or json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        if 'bundled' in item:
+            manifest = bundled_manifest(item['bundled'])
+            directory = ROOT / item['bundled']
+        else:
+            directory = (base_dir / (item.get("directory") or ".")).resolve()
+            manifest = item.get("manifest") or json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         item.update(manifest=manifest, directory=str(directory))
         if manifest["id"] in runtime.removed_installations():
             continue
@@ -199,8 +204,7 @@ def from_file(path, state_dir=None):
 
 def default_config():
     """Minimal headless distribution assembly, also available after wheel installation."""
-    roles = {name: name for name in ("authorization", "collaboration", "runtime")}
+    from components import FOUNDATION, ROOT, manifest
+    roles = {name: name for name in FOUNDATION}
     return {"roles": roles, "required": list(roles), "start": list(roles),
-            "components": [{"manifest": {"id": name, "name": name.title(), "version": "0.1.0",
-                "platformApi": 1, "entry": {"mode": "inprocess", "factory": f"polaris_platform.builtins:create_{name}"}}}
-                for name in roles]}
+            "components": [{"manifest": manifest(name), "directory": str(ROOT / name)} for name in FOUNDATION]}

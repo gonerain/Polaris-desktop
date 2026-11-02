@@ -55,13 +55,13 @@ X11 GNOME 已验证工具窗类型、跳过任务栏/分页器和不接受焦点
 
 默认鲸鱼娘使用 `polaris_platform.desktop` 包内的 `skins/dshpet/Skin.qml`，动画、片段定义和署名许可一并打包。可运行 `.venv/bin/python tools/preview_pet_skin.py` 打开独立试用窗口，也可在命令末尾传入另一个 QML 皮肤路径。预览支持 hover、按压、拖放和右键退出；点击及管理项不执行业务操作，不保存正式桌宠配置。离屏截图示例：`.venv/bin/python tools/preview_pet_skin.py --offscreen --seconds 1 --screenshot /tmp/polaris-dsh-skin.png`。
 
-该皮肤使用 `wave` 回应进入，拖动播放 `drag`，常态播放 `idle`，随机待机选用伸懒腰、魔方、张望和哈欠。已检查原仓库，没有专用离开或释放落地短片：离开、松开回常态，按压、提起、放下采用轻微缩放和回弹，不冒充新增原生动画。WebP 单次动作在实际播放完整帧循环后结束；隐藏时停止播放。静态分层输入区域覆盖选定动画及变形包络，仍保留明显空白穿透。素材作者、非商业及相同方式共享要求见 [随包署名与许可](polaris_platform/desktop/skins/dshpet/ATTRIBUTION.md)。
+该皮肤使用 `wave` 回应进入，拖动播放 `drag`，常态播放 `idle`，随机待机选用伸懒腰、魔方、张望和哈欠。已检查原仓库，没有专用离开或释放落地短片：离开、松开回常态，按压、提起、放下采用轻微缩放和回弹，不冒充新增原生动画。WebP 单次动作在实际播放完整帧循环后结束；隐藏时停止播放。静态分层输入区域覆盖选定动画及变形包络，仍保留明显空白穿透。素材作者、非商业及相同方式共享要求见 [随包署名与许可](components/pet/skins/dshpet/ATTRIBUTION.md)。
 
 ## 插件源
 
 GUI 默认运行插件源管理组件，不另开窗口。组件管理中的“插件源”可添加 Git 地址或本地仓库目录、查看仓库中的插件，并逐个安装或更新。原有“加载组件”仍直接加载本地插件目录。来源标准见 [CONTRACT.md](CONTRACT.md)。
 
-添加来源不执行插件入口；同 ID 覆盖安装需确认，已有安装身份会在执行前复核。更新保留已有授权，新增能力仍需单独授权。微信、日程、Agent 及 Agent 的 Codex/Pi 集成在独立仓库维护，不再随平台打包。业务数据由插件自己保存；插件自身运行依赖由作者声明和提供。
+默认管理器从 [default-sources.json](components/manager/default-sources.json) 读取官方源，仅安装各条目指定的组件 ID。首次安装后启动，已有安装保留启停设置与授权；已移除的旧版内置业务组件目录会按原安装身份接入官方源。停用、卸载、自行从其他目录安装的选择均会保留。指定 `--config` 时可在顶层设置 `{"componentManager":{"defaultSources":[]}}` 禁用默认源，或提供自定义的 `name`、`component`、`location` 和可选 `ref`。无界面启动不进行默认下载。手工添加源只读取索引，更新仍由用户选择。
 
 ## 调用示例
 
@@ -87,7 +87,7 @@ finally:
             runtime.stop_component(row['id'])
 ```
 
-标签软件通过 `ctx.call` 读取便签，再维护自己的标签。把便签的配置入口改为 `{"mode":"inprocess","factory":"examples.notes.main:create"}`，并使 `next` 在 Python 导入路径中，标签处理器无需改动。示例数据仅保存在各自内存中，停止后丢失。
+标签操作用 `requires={'note': 'notes.read@1'}` 声明依赖，通过 `ctx.call_required('note', {'id': note_id})` 读取便签。其它插件可以用自己的本地操作名提供同一契约。查看已有标签不依赖便签。
 
 ## 本地软件接入
 
@@ -121,7 +121,7 @@ component.run()
 
 操作声明支持 `read`、`write`、接口主版本与授权修订号。SDK 接受普通函数；需要协作时添加 `ctx` 参数并使用 `ctx.call(target, operation, params)`。业务字段及规则由处理器校验。stdio 参数和结果须可表示为 JSON，stdout 专供协议，诊断写 stderr。同进程的本机接口可按自身公开契约使用 Python/Qt 对象。
 
-声明存放于 `component.describe()` 的 `operations/events/views/dependencies`。组件可以修改自己的声明，再通过 `component.port.advertise()` 发布；目录与授权选项随之变化。新增能力须单独授权。当前轻量帮助类没有声明编辑器，撤回时删除对应声明项后重新发布。
+操作和事件均可在启动前或运行中注册。使用 `@component.operation('get', provides='notes.read@1')` 发布操作，使用 `component.event(...)` 发布事件，使用 `withdraw_operation` / `withdraw_event` 撤回。SDK 会自动更新目录；手写描述仍可调用 `port.advertise()`。组件管理中的「能力依赖」显示当前提供方、缺项和候选项。选择按使用方能力保存，授权继续绑定具体安装和操作。参见 [能力契约](CONTRACT.md#registered-capability-contracts)。
 
 在线事件可声明于 `component.events`，在处理器中使用 `ctx.subscribe(target, event, callback)`、`ctx.publish(event, payload)`、`ctx.unsubscribe(token)`。回调签名为 `callback(payload, ctx)`。订阅须有目标事件的明确授权；事件触发的后续调用沿用发布者与订阅者权限范围的交集。退订或组件退出会清理订阅。事件不持久化，不重放，也不保证跨组件全局顺序。
 

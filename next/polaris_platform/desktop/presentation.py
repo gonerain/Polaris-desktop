@@ -2,11 +2,12 @@ from pathlib import Path
 import uuid
 from ..component import Component
 from ..protocol import PlatformError
-from .window import ResourceCleanupPort, NativeQtProfilePort
+from .qt_ports import ResourceCleanupPort, NativeQtProfilePort
 
 
 class Presentation(Component):
     source = ''
+    resource_dir = Path(__file__).parent
     title = ''
     size = (640, 480)
     def __init__(self, runtime=None, window_id='window', cleanup_port=None):
@@ -72,7 +73,7 @@ class Presentation(Component):
                 if self._qt_profile_port is None:
                     raise PlatformError('native_profile_unavailable', '组件未配置原生界面接入')
                 self._qt_profile_port.register(self.port, self.qt_context)
-            result = self._window('create', {'source': str(Path(__file__).parent / self.source), 'title': self.title,
+            result = self._window('create', {'source': str(self.resource_dir / self.source), 'title': self.title,
                     'size': list(self.size), 'properties': self.properties, 'options': self.window_options}, context)
             if not self.running or generation != self._presentation_generation:
                 if self._cleanup_host:

@@ -1,0 +1,5 @@
+[
+  {"name":"微信","component":"org.polaris.weixin","location":"https://github.com/gonerain/Polaris-weixin.git","legacyDirectory":"weixin","legacyFactory":"polaris_weixin:create"},
+  {"name":"日程","component":"org.polaris.schedule","location":"https://github.com/gonerain/Polaris-schedule.git","legacyDirectory":"schedule","legacyFactory":"polaris_schedule:create"},
+  {"name":"Agent","component":"org.polaris.agent","location":"https://github.com/gonerain/Polaris-agent.git","legacyDirectory":"agent","legacyFactory":"polaris_agent:create"}
+]

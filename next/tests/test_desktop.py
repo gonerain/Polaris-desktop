@@ -60,6 +60,81 @@ if __name__ == '__main__':
             self.assertTrue(operations()['open_canvas'].get('available', True))
             self.assertEqual(self.runtime.authorization.decisions(), grants)
 
+        def test_canvas_contract_group_pins_the_session_and_permission_preview(self):
+            rt = self.runtime
+            self.call('pet', 'show')
+            self.canvas.withdraw_event('dismissed')
+            with self.assertRaises(PlatformError) as caught:
+                self.pet.open_canvas(self.context)
+            self.assertEqual(caught.exception.details['contract'], 'polaris.canvas.dismissed@1')
+            self.assertTrue(self.pet.status()['visible'])
+            self.assertFalse(self.canvas.status()['visible'])
+            self.canvas.event('dismissed', provides='polaris.canvas.dismissed@1')
+
+            alternate = Component()
+            seen, state = [], {}
+            def show(params, ctx):
+                state.update(visible=True, sessionId=params['sessionId'])
+                seen.append('show')
+                return dict(state)
+            alternate.operation('present', 'write', provides='polaris.canvas.show@1')(show)
+            alternate.operation('inspect', provides='polaris.canvas.status@1')(lambda p, c: seen.append('status') or dict(state))
+            alternate.event('closed', provides='polaris.canvas.dismissed@1')
+            rt.install(dict(id='alternate', name='Alternate', version='1', platformApi=1, entry={'mode':'inprocess'}), lambda: alternate)
+            rt.start_component('alternate')
+            def choose(target):
+                rt.select_provider('pet', 'operation', 'open_canvas', 'show', rt.status(target)['installation'], rt.status('pet')['installation'])
+            try:
+                from PySide6.QtCore import Qt
+                from PySide6.QtTest import QTest
+                self.manager.show()
+                self.wait_bridge()
+                self.manager.bridge.refresh()
+                self.wait_bridge()
+                window = self.manager._view
+                root = window.rootObject()
+                root.setProperty('selectedId', 'pet')
+                def click(name):
+                    controls = []
+                    items = [root]
+                    while items:
+                        item = items.pop()
+                        if item.objectName().startswith(('dependencies_', 'provider_')):
+                            controls.append(item.objectName())
+                        if item.objectName() == name:
+                            pos = item.mapToScene(item.boundingRect().center()).toPoint()
+                            self.assertTrue(item.isVisible() and item.isEnabled(), (name, pos))
+                            QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, pos)
+                            QTest.qWait(25)
+                            self.wait_bridge()
+                            return
+                        items.extend(item.childItems())
+                    self.fail(f"Missing {name}, open={root.property('expandedCapability')}, controls={controls}")
+                click('dependencies_open_canvas')
+                click('provider_canvas_alternate')
+                preview = self.manager.bridge._make_plan('user', 'pet', 'open_canvas')
+                self.assertEqual({row['name'] for row in preview['permissions'] if row['target'] == 'alternate'},
+                                 {'present', 'inspect', 'closed'})
+                self.assertFalse(any(row['target'] == 'canvas' for row in preview['permissions']))
+                for name, kind in [('present', 'operation'), ('inspect', 'operation'), ('closed', 'event')]:
+                    rt.grant('user', 'alternate', name, kind)
+                rt.grant('user', 'canvas', 'dismissed', 'event')
+                self.context = rt.user_context('user')
+                self.call('pet', 'open_canvas')
+                old_id = self.pet.status()['activeSession']
+                choose('canvas')
+                self.pet.monitor_session()
+                self.assertEqual(seen, ['show', 'status'])
+                alternate.port.publish('closed', {'sessionId': old_id}, self.context)
+                self.assertTrue(self.pet.status()['visible'])
+                self.call('pet', 'open_canvas')
+                alternate.port.publish('closed', {'sessionId': old_id}, self.context)
+                self.assertTrue(self.canvas.status()['visible'])
+                self.assertNotEqual(self.pet.status()['activeSession'], old_id)
+                self.call('canvas', 'hide')
+            finally:
+                rt.stop_component('alternate')
+
         def test_management_control_is_optional_and_about_uses_metadata(self):
             import json
             from unittest.mock import patch
@@ -330,6 +405,7 @@ def exercise():
     finally:
         QTimer.singleShot(30, app.quit)
 QTimer.singleShot(60, exercise)
+runtime.manager_config['defaultSources'] = []
 result['exit'] = run(runtime)
 print(json.dumps(result))
 '''

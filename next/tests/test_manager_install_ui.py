@@ -49,7 +49,7 @@ def exercise():
     window = QQuickView()
     window.setResizeMode(QQuickView.SizeRootObjectToView)
     window.rootContext().setContextProperty('manager', bridge)
-    window.setSource(QUrl.fromLocalFile(str(Path(__file__).parents[1] / 'polaris_platform/desktop/Manager.qml')))
+    window.setSource(QUrl.fromLocalFile(str(Path(__file__).parents[1] / 'components/manager/Manager.qml')))
     assert not window.errors(), window.errors()
     window.resize(1040, 760)
     window.show()

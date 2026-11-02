@@ -34,7 +34,7 @@ if __name__=='__main__' and sys.argv[-1]=='qt':
     host=WindowHost();host.start(None)
     pet=Pet()
     actions=Actions()
-    handle=host.create_view(ROOT/'next/polaris_platform/desktop/Pet.qml','fixture',pet.size,
+    handle=host.create_view(ROOT/'next/components/pet/Pet.qml','fixture',pet.size,
         pet.properties,{'petActions':actions},pet.window_options)
     window=host._views[handle];root=window.rootObject()
     def wait(predicate,seconds=5):
@@ -83,11 +83,11 @@ if __name__=='__main__' and sys.argv[-1]=='qt':
             alpha=bytes(image.constBits())[3::4]
             assert not any(alpha[i]>16 for i in outside), 'visible frame extends beyond the declared input envelope'
         for name in ('idle','wave','drag','stretch','puzzle','glance','drowsy'):
-            reader=QImageReader(str(ROOT/'next/polaris_platform/desktop/skins/dshpet'/f'{name}.webp'))
+            reader=QImageReader(str(ROOT/'next/components/pet/skins/dshpet'/f'{name}.webp'))
             for _ in range(reader.imageCount()):
                 frame=reader.read();assert not frame.isNull()
                 covered(frame,.96 if name=='drag' else 1,-4 if name=='drag' else 0)
-        poster=QImage(str(ROOT/'next/polaris_platform/desktop/skins/dshpet/poster.webp'))
+        poster=QImage(str(ROOT/'next/components/pet/skins/dshpet/poster.webp'))
         for scale in (.96,.98,1,1.06):covered(poster,scale)
         covered(poster,.96,-4)
     finally:

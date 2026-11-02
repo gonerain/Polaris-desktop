@@ -4,13 +4,13 @@ import inspect
 import sys
 import threading
 from .component import Component as BaseComponent
-from .protocol import PlatformError
+from .protocol import PlatformError, _dispatched
 from .transport import _Peer
 
 
 class Component(BaseComponent):
     """Register plain keyword handlers; optional ``ctx`` carries request authority."""
-    def operation(self, name, access='read', major=1, revision=1, interface=None):
+    def operation(self, name, access='read', major=1, revision=1, interface=None, *, provides=None, requires=None):
         def register(function):
             signature = inspect.signature(function)
             def handler(params, context):
@@ -22,12 +22,16 @@ class Component(BaseComponent):
                 if 'ctx' in signature.parameters:
                     kwargs['ctx'] = context
                 return function(**kwargs)
-            super(Component, self).operation(name, access, major, revision, interface)(handler)
+            super(Component, self).operation(name, access, major, revision, interface,
+                                            provides=provides, requires=requires)(handler)
             return function
         return register
 
     def call(self, operation, params, context):
-        exposed = context if isinstance(context, _RemoteContext) else _LocalContext(self.port, context)
+        exposed = context
+        if not isinstance(context, _RemoteContext):
+            bindings = self.port.requirements(operation) if self._operations.get(operation, {}).get('requires') else None
+            exposed = _LocalContext(self.port, context, bindings)
         return super().call(operation, params, exposed)
 
     def run(self):
@@ -41,6 +45,12 @@ class Component(BaseComponent):
 class _RemoteContext:
     def __init__(self, peer, token):
         self._peer, self._token = peer, token
+
+    def call_required(self, alias, params=None):
+        return self._peer.request('call_required', {'alias': alias, 'params': params or {}, 'token': self._token})
+
+    def subscribe_required(self, alias, callback):
+        return self._peer.process_client._subscribe('subscribe_required', {'alias': alias}, callback, self)
 
     def subscribe(self, target, event, callback):
         return self._peer.process_client.subscribe(target, event, callback, context=self)
@@ -62,9 +72,12 @@ class _ProcessClient:
         self.callbacks = {}
 
     def subscribe(self, target, event, callback, context=None):
+        return self._subscribe('subscribe', {'target': target, 'event': event}, callback, context)
+
+    def _subscribe(self, method, params, callback, context):
         if not isinstance(context, _RemoteContext):
             raise PlatformError('denied', 'Explicit request context is required')
-        subscription = self.peer.request('subscribe', {'target': target, 'event': event, 'token': context._token})
+        subscription = self.peer.request(method, {**params, 'token': context._token})
         self.callbacks[subscription] = callback
         return subscription
 
@@ -87,13 +100,26 @@ class _ProcessClient:
 
 
 class _LocalContext:
-    def __init__(self, port, context):
-        self.port, self.context = port, context
+    def __init__(self, port, context, bindings=None):
+        self.port, self.context, self._bindings = port, context, bindings
+
+    def call_required(self, alias, params=None):
+        if self._bindings is None:
+            raise PlatformError('missing_requirement', alias)
+        return self._bindings.call(alias, params, self.context)
+
+    def subscribe_required(self, alias, callback):
+        if self._bindings is None:
+            raise PlatformError('missing_requirement', alias)
+        return self._bindings.subscribe(alias, self._delivery(callback), self.context)
+
+    def _delivery(self, callback):
+        def delivery(payload, context):
+            return callback(payload, _LocalContext(self.port, context, self._bindings))
+        return delivery
 
     def subscribe(self, target, event, callback):
-        def delivery(payload, context):
-            return callback(payload, _LocalContext(self.port, context))
-        return self.port.subscribe(target, event, delivery, context=self.context)
+        return self.port.subscribe(target, event, self._delivery(callback), context=self.context)
 
     def publish(self, event, payload):
         return self.port.publish(event, payload, context=self.context)
@@ -140,7 +166,12 @@ def serve(component):
             return callback(params.get('payload'), _RemoteContext(holder['peer'], params['token']))
         if method == 'call':
             context = _RemoteContext(holder['peer'], params['token'])
-            return component.call(params['operation'], params.get('params', {}), context)
+            expected = params.get('expected')
+            token = _dispatched.set(tuple(expected) if expected else None)
+            try:
+                return component.call(params['operation'], params.get('params', {}), context)
+            finally:
+                _dispatched.reset(token)
         if method == 'stop':
             component.stop()
             done.set()

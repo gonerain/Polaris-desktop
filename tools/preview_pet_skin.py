@@ -54,7 +54,7 @@ class PreviewActions(QObject):
     def quit(self): app.quit()
 actions = PreviewActions()
 pet = Pet(skin_source=args.skin)
-handle = host.create_view(ROOT/'next/polaris_platform/desktop/Pet.qml', 'Polaris · 皮肤预览', pet.size,
+handle = host.create_view(ROOT/'next/components/pet/Pet.qml', 'Polaris · 皮肤预览', pet.size,
     pet.properties, {'petActions':actions}, pet.window_options)
 if args.screenshot:
     def capture():

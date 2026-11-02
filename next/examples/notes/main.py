@@ -13,7 +13,7 @@ def create():
         notes[key] = {'id': key, 'title': title, 'body': body}
         return dict(notes[key])
 
-    @component.operation('get')
+    @component.operation('get', provides='notes.read@1')
     def get_note(id):
         return dict(notes[id])
 

@@ -17,17 +17,21 @@ Source = "https://github.com/gonerain/Polaris-desktop"
 Artwork = "https://github.com/PC2005-cloud/dsh-pet"
 
 [project.optional-dependencies]
-desktop = ["PySide6-Essentials>=6.5"]
+desktop = ["PySide6-Essentials>=6.5", "qrcode>=7.4"]
 
 [project.scripts]
 polaris-platform = "polaris_platform.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["polaris_platform*"]
+include = ["polaris_platform*", "components", "components.*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-"polaris_platform.desktop" = ["*.qml", "skins/dshpet/*.qml", "skins/dshpet/*.js", "skins/dshpet/*.webp", "skins/dshpet/*.json", "skins/dshpet/*.md", "skins/dshpet/*.txt"]
+"*" = ["manifest.json"]
+"components.canvas" = ["*.qml"]
+"components.manager" = ["*.qml", "default-sources.json"]
+"components.pet" = ["*.qml", "skins/dshpet/*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "polaris_platform.metadata.VERSION"}

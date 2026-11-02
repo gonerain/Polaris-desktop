@@ -30,7 +30,11 @@ class TransportTests(unittest.TestCase):
         provider = self.provider('labeler')
         context = object()
         class Port:
-            def call(inner, target, operation, params, context=None):
+            def requirements(inner, name):
+                self.assertEqual(name, 'label')
+                return inner
+            def call(inner, alias, params, context):
+                self.assertEqual(alias, 'note')
                 self.assertIs(context, expected)
                 raise PlatformError('denied', 'not granted')
         expected = context
@@ -48,7 +52,9 @@ class TransportTests(unittest.TestCase):
         provider = self.provider('labeler')
         context = object()
         class Port:
-            def call(inner, target, operation, params, context=None):
+            def requirements(inner, name):
+                return inner
+            def call(inner, alias, params, context):
                 return provider.call('label', {'note_id': '1'}, context)
         try:
             provider.start(Port())

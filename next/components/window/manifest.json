@@ -1,0 +1,16 @@
+{
+  "id": "window",
+  "name": "窗口承载",
+  "version": "0.1.0",
+  "platformApi": 1,
+  "entry": {
+    "mode": "inprocess",
+    "factory": "components.window:create_window",
+    "defer": "desktop",
+    "kwargs": {
+      "runtime": {
+        "runtime": true
+      }
+    }
+  }
+}

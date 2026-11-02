@@ -41,6 +41,24 @@ Pane {
         }
         return result
     }
+    function dependencyRows(row) {
+        let bindings = row.metadata.bindings || {}, result = [], groups = new Set()
+        for (let alias of Object.keys(bindings)) {
+            let b = bindings[alias]
+            if (b.group && groups.has(b.group)) continue
+            groups.add(b.group)
+            let members = b.group ? Object.values(bindings).filter(x => x.group === b.group) : [b]
+            let problem = members.find(x => x.issue)
+            let issue = problem ? problem.issue : null
+            let labels = {missing_contract:'缺少能力', incompatible_version:'契约版本不兼容', no_common_provider:'需要同一提供方', selection_required:'请选择提供方', selected_provider_unavailable:'已选提供方不可用', dependency_cycle:'存在循环依赖'}
+            let state = issue ? (labels[issue.code] || '依赖不可用') + (issue.contract ? ' · ' + issue.contract : '') : b.endpoint.target
+            if (issue?.path) state += ' · ' + issue.path.map(n => n[0] + '.' + n[2]).join(' → ')
+            if (issue?.offered) state += '（已提供 ' + issue.offered.join('、') + '）'
+            result.push({alias:alias, label:b.group || alias, title:(b.group || alias) + ' · ' + state, candidates:b.candidates,
+                         contracts:members.map(x => x.contract).join('、'), endpoint:b.endpoint})
+        }
+        return result
+    }
     function viewActions(item) {
         let result = []
         for (let view of description(item).views || [])
@@ -93,8 +111,12 @@ Pane {
                             id: sourceRow; required property var modelData; Layout.fillWidth: true
                             RowLayout {
                                 Label { text: sourceRow.modelData.name || sourceRow.modelData.location; Layout.fillWidth: true; elide: Text.ElideRight }
-                                SettingsButton { text: '检查更新'; enabled: manager && !manager.busy; onClicked: manager.refreshSource(sourceRow.modelData.id) }
+                                SettingsButton { text: sourceRow.modelData.pending ? '正在安装…' : sourceRow.modelData.defaultError ? '重试安装' : '检查更新'
+                                    enabled: manager && !manager.busy && !sourceRow.modelData.pending
+                                    onClicked: sourceRow.modelData.defaultError ? manager.retryDefault(sourceRow.modelData.id) : manager.refreshSource(sourceRow.modelData.id) }
                             }
+                            Label { text: sourceRow.modelData.location; Layout.fillWidth: true; elide: Text.ElideMiddle; color: '#61718b' }
+                            Label { visible: !!sourceRow.modelData.defaultError; text: sourceRow.modelData.defaultError || ''; Layout.fillWidth: true; wrapMode: Text.Wrap; color: '#a73a36' }
                             Repeater {
                                 model: sourceRow.modelData.components || []
                                 RowLayout {
@@ -263,6 +285,42 @@ Pane {
                                 var count = rows.filter(function(row) { return root.hasGrant(root.current, row, false) }).length
                                 return count === 0 ? '未授权' : count === rows.length ? '已允许全部当前能力' : '已自定义 · ' + count + ' / ' + rows.length + ' 项'
                             } }
+                        }
+                    }
+                    Repeater {
+                        model: root.rows(root.current).filter(row => row.metadata.requires && Object.keys(row.metadata.requires).length)
+                        ColumnLayout {
+                            id: dependencyCard
+                            required property var modelData
+                            property string key: 'deps:' + modelData.kind + ':' + modelData.name
+                            Layout.fillWidth: true
+                            SettingsButton {
+                                objectName: 'dependencies_' + dependencyCard.modelData.name
+                                text: dependencyCard.modelData.name + (dependencyCard.modelData.metadata.available === false ? ' · 依赖未就绪' : ' · 能力依赖') + (root.expandedCapability === dependencyCard.key ? ' ▴' : ' ▾')
+                                onClicked: root.expandedCapability = root.expandedCapability === dependencyCard.key ? '' : dependencyCard.key
+                            }
+                            Repeater {
+                                model: root.expandedCapability === dependencyCard.key ? root.dependencyRows(dependencyCard.modelData) : []
+                                ColumnLayout {
+                                    id: requirementRow
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    Label { text: requirementRow.modelData.title; color: '#243450' }
+                                    Label { text: requirementRow.modelData.contracts; wrapMode: Text.Wrap; Layout.fillWidth: true; color: '#61718b' }
+                                    Repeater {
+                                        model: requirementRow.modelData.candidates
+                                        SettingsButton {
+                                            required property var modelData
+                                            objectName: 'provider_' + requirementRow.modelData.label + '_' + modelData.target
+                                            text: root.records.find(r => r.id === modelData.target)?.name || modelData.target
+                                            checked: requirementRow.modelData.endpoint?.installation === modelData.installation
+                                            enabled: manager && !manager.busy
+                                            onClicked: manager.selectProvider(root.current.id, dependencyCard.modelData.kind, dependencyCard.modelData.name,
+                                                requirementRow.modelData.alias, modelData.installation, root.current.installation)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     Repeater {

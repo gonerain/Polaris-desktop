@@ -1,15 +1,4 @@
-from .runtime import Runtime
-from .authorization import Authorization
-from .collaboration import Collaboration
-
-
-def create_runtime():
-    return Runtime()
-
-
-def create_authorization():
-    return Authorization()
-
-
-def create_collaboration():
-    return Collaboration()
+"""Legacy factory paths used by saved installations."""
+from components.authorization import create_authorization
+from components.collaboration import create_collaboration
+from components.runtime import create_runtime
