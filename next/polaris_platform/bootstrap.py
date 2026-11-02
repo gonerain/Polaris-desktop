@@ -5,6 +5,16 @@ from pathlib import Path
 from .protocol import PlatformError
 
 
+def _module_locations(module):
+    source = getattr(module, '__file__', None)
+    if source:
+        return [Path(source).resolve()]
+    # A directory left behind with only __pycache__ imports as a namespace
+    # package. It has no __file__, but its import search locations identify it.
+    spec = getattr(module, '__spec__', None)
+    return [Path(path).resolve() for path in getattr(spec, 'submodule_search_locations', None) or ()]
+
+
 def invalidate_plugin_modules(manifest, directory, check_only=False, installations=()):
     """Invalidate only a plugin's own entry package, never neighboring plugins."""
     import sys
@@ -40,15 +50,18 @@ def invalidate_plugin_modules(manifest, directory, check_only=False, installatio
     # invalidate its modules or silently construct its factory instead.
     if not check_only:
         loaded = sys.modules.get(prefix)
-        source = getattr(loaded, "__file__", None)
-        if source and not Path(source).resolve().is_relative_to(root):
+        if any(not path.is_relative_to(root) for path in _module_locations(loaded)):
             raise PlatformError("restart_required", "Entry package is already owned by another plugin directory")
     if check_only:
         return
+    owned = []
     for name, loaded in list(sys.modules.items()):
-        source = getattr(loaded, "__file__", None)
-        if (name == prefix or name.startswith(prefix + ".")) and source and Path(source).resolve().is_relative_to(root):
-            del sys.modules[name]
+        if name == prefix or name.startswith(prefix + "."):
+            paths = _module_locations(loaded)
+            if paths and all(path.is_relative_to(root) for path in paths):
+                owned.append(name)
+    for name in owned:
+        sys.modules.pop(name, None)
     importlib.invalidate_caches()
 
 

@@ -1,6 +1,7 @@
 """Exercise the desktop's default installation policy without external network or account data."""
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import time
@@ -12,7 +13,7 @@ from PySide6.QtTest import QTest
 
 from components.manager.defaults import DefaultInstallations, configured_sources
 from components.sources import create_sources
-from polaris_platform.bootstrap import build, default_config
+from polaris_platform.bootstrap import build, default_config, load_factory
 from polaris_platform.component import Component
 
 
@@ -107,6 +108,27 @@ class DefaultInstallationTests(unittest.TestCase):
         self.assertEqual(self.rt.status('disabled')['state'], 'stopped')
         self.assertEqual(self.rt.client('runtime').call('enabled', 'value', {}, self.rt.user_context('runtime')), 'from official source')
         self.assertEqual(self.rt.client('runtime').call('custom', 'value', {}, self.rt.user_context('runtime')), 'legacy')
+
+    def test_failed_autostart_from_cache_only_directory_recovers_during_migration(self):
+        spec, manifest = self.plugin('cached')
+        module = spec['legacyFactory'].split(':')[0]
+        old = self.base/'next'/'components'/'cached'
+        (old/module/'__pycache__').mkdir(parents=True)
+        self.addCleanup(sys.modules.pop, module, None)
+        original_path = sys.path[:]
+        self.addCleanup(setattr, sys, 'path', original_path)
+        self.rt.install(manifest, load_factory(manifest, old, self.rt), directory=old, autostart=True)
+        with self.assertRaisesRegex(AttributeError, 'create'):
+            self.rt.start_component('cached')
+        self.assertIsNone(sys.modules[module].__file__)
+        identity = self.rt.status('cached')['installation']
+        self.installer.configure([spec])
+        self.settle()
+        self.assertFalse(self.installer.errors)
+        self.assertEqual(self.rt.status('cached')['installation'], identity)
+        self.rt.grant('runtime', 'cached', 'value')
+        self.assertEqual(self.rt.client('runtime').call('cached', 'value', {}, self.rt.user_context('runtime')),
+                         'from official source')
 
     def test_distribution_presets(self):
         self.assertEqual({s['component']:s['location'] for s in configured_sources({})},

@@ -253,6 +253,11 @@ Pane {
                             Text { text: root.current.name || '选择组件'; font.pixelSize: 22; font.bold: true; color: '#243450' }
                             Text { visible: root.customPermissions; text: root.current.id || ''; color: '#738098'; font.pixelSize: 12 }
                             Text { visible: !!root.description(root.current).view_state; text: root.description(root.current).view_state?.visible ? '视图已显示' : '视图已隐藏'; color: '#738098'; font.pixelSize: 12 }
+                            Label {
+                                Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: '#a73a36'
+                                visible: root.current.state === 'failed' && !!root.current.error
+                                text: visible ? '启动失败：' + (root.current.error.message || root.current.error) : ''
+                            }
                             RowLayout {
                                 SettingsButton { text: '启动'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'start') }
                                 SettingsButton { objectName: 'uninstallComponent'; text: '卸载'; enabled: !!root.current.id && root.current.manageable && manager && !manager.busy; onClicked: manager.prepareUninstall(root.current.id) }
