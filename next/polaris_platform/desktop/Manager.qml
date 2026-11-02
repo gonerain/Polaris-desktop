@@ -52,6 +52,28 @@ Pane {
         let key = [item.installation, capability.kind, capability.name, m.major || 1, m.access || 'read', m.revision || 1]
         return decisions.some(record => record.requesterInstallation === (records.find(item => item.id === subjectId)?.installation || '') && record.background === background && record.scope.some(scope => JSON.stringify(scope) === JSON.stringify(key)))
     }
+    Dialog {
+        id: aboutDialog; objectName: 'aboutDialog'; title: '关于'; modal: true
+        anchors.centerIn: parent; width: Math.min(520, root.width - 48)
+        standardButtons: Dialog.Close
+        onOpened: standardButton(Dialog.Close).text = '关闭'
+        property var info: JSON.parse(manager ? manager.aboutJson : '{}')
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label { text: aboutDialog.info.APP_NAME || ''; font.pixelSize: 20 }
+            Label { text: aboutDialog.info.DISPLAY_VERSION || '' }
+            Label { text: '作者：' + (aboutDialog.info.AUTHOR || ''); wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { text: aboutDialog.info.PROJECT_URL || ''; color: '#345f9c'; wrapMode: Text.Wrap; Layout.fillWidth: true
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.openUrlExternally(aboutDialog.info.PROJECT_URL) }
+            }
+            Label { text: '代码许可：' + (aboutDialog.info.CODE_LICENSE || ''); wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { text: '素材许可：' + (aboutDialog.info.ARTWORK_LICENSE || ''); wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { text: '素材作者：' + (aboutDialog.info.ARTWORK_CREDIT || ''); wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { text: aboutDialog.info.ARTWORK_URL || ''; color: '#345f9c'; wrapMode: Text.Wrap; Layout.fillWidth: true
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.openUrlExternally(aboutDialog.info.ARTWORK_URL) }
+            }
+        }
+    }
     FolderDialog { id: folder; title: '选择组件目录'; onAccepted: manager.loadDirectory(selectedFolder.toString()) }
     Connections { target: manager; function onPlanReady() { viewPlan.open() } function onPlanCancelled() { viewPlan.close() } }
     Dialog {
@@ -126,6 +148,7 @@ Pane {
             }
             Item { Layout.fillWidth: true }
             BusyIndicator { running: manager && manager.busy; implicitWidth: 32; implicitHeight: 32 }
+            SettingsButton { text: '关于'; objectName: 'aboutButton'; onClicked: aboutDialog.open() }
             SettingsButton { text: '刷新'; onClicked: manager.refresh() }
             SettingsButton { text: '加载组件'; onClicked: folder.open() }
             SettingsButton { text: '退出'; onClicked: manager.quit() }

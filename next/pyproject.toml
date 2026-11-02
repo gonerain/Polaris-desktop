@@ -4,10 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polaris-platform"
-version = "0.1.0"
-description = "Independent component platform prototype"
+dynamic = ["version"]
+description = "Polaris independent desktop component platform"
 requires-python = ">=3.10"
 dependencies = []
+authors = [{name = "gonerain and contributors"}]
+license = {text = "MIT (code); bundled artwork: CC BY-NC-SA 4.0 (non-commercial)"}
+
+[project.urls]
+Homepage = "https://github.com/gonerain/Polaris-desktop"
+Source = "https://github.com/gonerain/Polaris-desktop"
+Artwork = "https://github.com/PC2005-cloud/dsh-pet"
 
 [project.optional-dependencies]
 desktop = ["PySide6-Essentials>=6.5"]
@@ -21,3 +28,6 @@ include = ["polaris_platform*"]
 
 [tool.setuptools.package-data]
 "polaris_platform.desktop" = ["*.qml", "skins/dshpet/*.qml", "skins/dshpet/*.js", "skins/dshpet/*.webp", "skins/dshpet/*.json", "skins/dshpet/*.md", "skins/dshpet/*.txt"]
+
+[tool.setuptools.dynamic]
+version = {attr = "polaris_platform.metadata.VERSION"}

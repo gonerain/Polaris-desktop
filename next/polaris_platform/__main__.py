@@ -3,15 +3,32 @@ import json
 import os
 import sys
 from pathlib import Path
-from .bootstrap import from_file, build, default_config
+from .metadata import APP_NAME, DISPLAY_VERSION
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def main(argv=None, *, default_gui=False):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # A frozen executable is not a Python interpreter. Only this explicit worker
+    # entry executes process-component Python code, before any GUI setup.
+    if argv[:1] == ['--component-python']:
+        from .worker import run_python
+        return run_python(argv[1:])
+    if argv or not default_gui:
+        from .worker import restore_stdio
+        restore_stdio(attach_console=True)
+    parser = argparse.ArgumentParser(prog=APP_NAME if default_gui else 'polaris-platform')
+    parser.add_argument('--version', action='version', version=f'{APP_NAME} {DISPLAY_VERSION}')
     parser.add_argument("--config", help="JSON assembly configuration; defaults to the three headless foundation components")
-    parser.add_argument("--gui", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--gui', dest='gui', action='store_true', help='Open the Polaris desktop')
+    mode.add_argument('--headless', dest='gui', action='store_false', help='Print the component snapshot and exit')
+    parser.set_defaults(gui=default_gui)
+    parser.add_argument('--bridge-stdio', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument("--state-dir", help="Optional local installation and authorization record directory")
-    args = parser.parse_args()
+    if '--bridge-stdio' in argv:
+        parser.error('The legacy --bridge-stdio protocol is unavailable. Install the Polaris Agent plugin from next/integrations instead.')
+    args = parser.parse_args(argv)
+    from .bootstrap import from_file, build, default_config
     state_dir = args.state_dir
     if args.gui and state_dir is None:
         root = os.environ.get("LOCALAPPDATA") if sys.platform == "win32" else os.environ.get("XDG_DATA_HOME")

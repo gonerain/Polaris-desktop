@@ -9,8 +9,14 @@ def run(runtime):
     import sys
     from PySide6.QtGui import QGuiApplication
     app = QGuiApplication.instance() or QGuiApplication(sys.argv)
+    from ..metadata import APP_NAME, VERSION
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(VERSION)
+    app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
     from pathlib import Path
+    from PySide6.QtGui import QIcon
+    app.setWindowIcon(QIcon(str(Path(__file__).parent / 'skins/dshpet/poster.webp')))
     from ..bootstrap import load_factory
     definitions = [
         ('window', '窗口承载', 'create_window', {'runtime': {'runtime': True}}),
@@ -32,7 +38,8 @@ def run(runtime):
         if identity not in installed or identity in ('window', 'manager') or saved[identity]['autostart']:
             runtime.start_component(identity)
     host = runtime.component_instance('window') if 'window' not in removed else None
-    manager = runtime.component_instance('manager')
+    from .management_control import ManagementControlPort
+    management = ManagementControlPort(runtime)
     # These are the precise, installed capabilities of the default local interaction.
     # Existing installations retain every user revocation and never gain new items here.
     pet_is_new = 'pet' not in installed and 'pet' not in removed
@@ -51,7 +58,7 @@ def run(runtime):
         if 'pet' in removed or 'window' in removed:
             # Keep a trusted management entry available after removing or disabling
             # the usual desktop entry point, without reinstalling that component.
-            manager.show()
+            management.show()
             return
         if pet is None:
             print('桌宠启动失败：桌宠已停用，未启动。', file=sys.stderr)
@@ -74,22 +81,22 @@ def run(runtime):
             runtime.prepare(identity)
         except Exception as error:
             pending.remove(identity)
-            manager.bridge._notice = str(error)
+            management.report_notice(str(error))
     while pending:
         ready = [identity for identity in pending if not any(
             (dependency.get('target') or runtime.roles.get(dependency.get('role'))) in pending
             for dependency in runtime.status(identity)['description'].get('dependencies', [])
             if dependency.get('kind') == 'startup')]
         if not ready:
-            manager.bridge._notice = '组件启动依赖未就绪：' + '、'.join(sorted(pending))
+            management.report_notice('组件启动依赖未就绪：' + '、'.join(sorted(pending)))
             break
         for identity in ready:
             pending.remove(identity)
             try:
                 runtime.start_component(identity)
             except Exception as error:
-                manager.bridge._notice = str(error)
-    manager.bridge.changed.emit()
+                management.report_notice(str(error))
+    management.refresh()
     def stop_desktop():
         for identity in ('manager', 'pet', 'canvas', 'window'):
             try:
@@ -97,5 +104,5 @@ def run(runtime):
             except Exception:
                 pass
     app.aboutToQuit.connect(stop_desktop)
-    app._polaris_desktop = (host, manager, pet)
+    app._polaris_desktop = (host, pet)
     return app.exec()

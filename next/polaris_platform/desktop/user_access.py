@@ -35,9 +35,5 @@ class DesktopUserAccess:
     def prepare_mount(self, target, descriptor, on_finished=None):
         # A picker click opens the trusted approval UI; it never grants by itself.
         self.context()  # Verify this is the bound local GUI input entry.
-        manager_id = self._runtime.roles.get('desktop_management', 'manager')
-        manager = self._runtime.component_instance(manager_id)
-        if manager is None:
-            raise PlatformError('management_unavailable', '组件管理未运行')
-        manager.show()
-        return manager.bridge.request_mount(self._subject, target, descriptor['id'], on_finished)
+        from .management_control import ManagementControlPort
+        return ManagementControlPort(self._runtime).request_mount(self._subject, target, descriptor['id'], on_finished)

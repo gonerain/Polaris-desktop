@@ -167,7 +167,12 @@ class ProcessComponent:
         command = self.manifest['entry']['command']
         if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
             raise PlatformError('manifest', 'Process command must be a nonempty string array')
-        command = [sys.executable if part == '{python}' else part for part in command]
+        if getattr(sys, 'frozen', False) and '{python}' in command:
+            if command[0] != '{python}' or command.count('{python}') != 1:
+                raise PlatformError('manifest', 'Frozen Python process commands must begin with {python}')
+            command = [sys.executable, '--component-python', *command[1:]]
+        else:
+            command = [sys.executable if part == '{python}' else part for part in command]
         self.call_failed = False
         self.stopping = False
         environment = os.environ.copy()

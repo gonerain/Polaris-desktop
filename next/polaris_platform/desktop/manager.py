@@ -34,6 +34,13 @@ class ManagerBridge(QObject):
         from PySide6.QtGui import QGuiApplication
         self.moveToThread(QGuiApplication.instance().thread())
 
+    @Property(str, constant=True)
+    def aboutJson(self):
+        from .. import metadata
+        return json.dumps({name: getattr(metadata, name) for name in (
+            'APP_NAME', 'DISPLAY_VERSION', 'AUTHOR', 'PROJECT_URL', 'CODE_LICENSE', 'ARTWORK_LICENSE',
+            'ARTWORK_CREDIT', 'ARTWORK_URL')}, ensure_ascii=False)
+
     @Property(str, notify=changed)
     def dataJson(self): return self._data
     @Property(str, notify=changed)
@@ -381,6 +388,26 @@ class Manager(Presentation):
         if self.bridge:
             self._gui.run(self.bridge.timer.start)
             self.bridge.refresh()
+
+    def local_management_control(self):
+        return self if self.running else None
+
+    def request_mount(self, requester, target, view_id, on_finished=None):
+        if not self.running or self.bridge is None:
+            raise PlatformError('management_unavailable', '组件管理未运行')
+        self.show()
+        return self._gui.run(lambda: self.bridge.request_mount(requester, target, view_id, on_finished))
+
+    def report_notice(self, message):
+        def update():
+            if self.bridge is not None:
+                self.bridge._notice = str(message)
+                self.bridge.changed.emit()
+        self._gui.run(update)
+
+    def refresh(self):
+        if self.bridge is not None:
+            self._gui.run(self.bridge.refresh)
 
     def status(self, context=None):
         state = self._gui.run(lambda: {'available': self._view is not None,

@@ -207,7 +207,8 @@ class Pet(Presentation):
         ]
         self.operation('open_canvas', 'write')(lambda p, c: self.open_canvas(c))
         self.operation('say', 'write')(self.say)
-        self.dependencies[0]['operations'].append('say')
+        self.dependencies[0]['operations'] += ['say', 'open_canvas']
+        self.dependencies.append({'target': canvas_id, 'kind': 'capability', 'operations': ['open_canvas']})
 
     @property
     def position(self):

@@ -1,23 +1,54 @@
 # Polaris
 
-轻量桌宠式悬浮组件工作台，Python + PySide6 / Qt Quick。点击鲸鱼娘打开平铺画布，日程和 Agent 共用 cell 分配器，右键或托盘菜单退出。
+Polaris v0.1.0.0 是基于 Python、PySide6 / Qt Quick 的本地组件工作台。正式入口使用 `next/polaris_platform`：桌宠打开画布，组件管理负责安装、启动、授权和撤销，业务能力由各组件提供。
 
-- 当前使用 dsh-pet 女仆鲸鱼娘：呼吸待机、挥手、哈欠/睡眠、惊醒、悬空拖动、庆祝，以及伸懒腰、玩魔方、东张西望；右键可换个小动作、休息或减少动态，不加养成系统。
-- 通用 Agent 单格面板展示已接入的活跃会话和本轮结束提醒；Pi 通过薄插件接入，来源不限 Pi，断连不冒充完成。
-- 组件通过发现 → help → 调用提供自身能力；外部访问默认拒绝，按连接和组件授权，不自动上传日程或会话全文。
-- 日程画布默认“我的一天”，支持任务、时间、子任务、完成勾选，以及按需查看月历。
-- `↗` 打开任务工作台：我的一天、任务库、周/月计划和完成记录；紧凑任务行、按需详情、全局搜索和点选改期。
-- 收集箱可先记录、不选日期；我的一天支持重点星标和拖动排序，详情里按需写下一步笔记。
-- 日终整理逐项选择保留、明天或放回收集箱，不自动顺延；顺序、重点、笔记都保存在本地。
-- 参考 Super Productivity 的任务优先工作流：先收集，再主动选择今天的事；旧安排单独整理，不自动堆进今日清单。
-- 过期待办可以单项或全部移到今天，已完成任务默认收起。
-- 自动保存、上个版本备份、损坏保护、主任务删除撤销和单实例锁。
-- 组件支持画布态与独立完整态，以及连续展开 / 返回动画。
-- 默认 2×2 画布：日程申请两个 cell，Agent 和微信各申请一个；不加顶栏分页。
-- 微信 ClawBot 内置极简 DeepSeek Agent，默认以可配置的鲸鱼娘人设自动回复；通过独立读取授权与按请求的操作计划调用 Polaris 组件。仅新增任务和子任务的首份计划默认自动执行，其余计划通过本机或微信一次性审批。本机保存开关、最近聊天与有限上下文，Key 只读 `DEEPSEEK_API_KEY`，不依赖 OpenClaw。[微信组件说明](docs/weixin-component.md)。
-- 浅灰背景负责移动整个画布，边缘调整尺寸，右上角 `− / 百分比 / +` 整体缩放；100%默认窗口552×728。[画布操作说明](docs/canvas-controls.md)。
-- 抓组件最上方标题条沿横向或纵向短拖即实时换位；两格日程也可与一整行的单格组件交换，不自由漂移、不斜向移动、不越出画布。`−/+` 最小化/恢复，不释放 cell、不丢草稿。布局暂不跨重启保存。
-- 画布和弹层首次使用时创建；业务模型始终保留，已打开的界面也保留实例，不因收起丢失草稿。[资源测量说明](docs/performance.md)。
+## 能力与使用
+
+- 默认鲸鱼娘皮肤复用现有透明动画，支持进入回应、按压、拖放和随机待机；右键打开组件管理或退出。工具窗不接受焦点，身体、气泡和菜单之外的透明区域可穿透输入，实际效果取决于窗口系统。
+- 画布挂载组件自己的原生视图，支持移动、缩放、折叠和布局保存。隐藏或移除视图保留业务数据，停止组件才结束其能力。
+- 日程组件提供收集箱、我的一天、任务库、周/月计划、完成记录、搜索、子任务、重点、笔记、改期和删除撤销。[日程说明](next/components/schedule/README.md)。
+- Agent 组件管理明确标记的 Pi、Codex 会话，显示状态和最终回复，按宿主能力向会话发送新一轮或追加指导。[Agent 说明](next/components/agent/README.md)。
+- 微信组件提供扫码绑定、文字收发、可选的 DeepSeek 自动回复，以及明确选择的组件工具调用。密钥从 `DEEPSEEK_API_KEY` 读取。[微信说明](next/components/weixin/README.md)。
+- 公开能力按安装身份和具体操作授权；新增能力不自动授权，撤权约束已有视图和调用上下文。后台恢复不重新授予已撤销权限。
+
+首次启动只启用平台和桌面基础组件，业务组件通过组件管理器从 `next/components` 加载，也可选择配置装配；已有安装按保存的自启动设置恢复。开发接口、皮肤动作槽、原生视图授权和验证方法见 [组件平台说明](next/README.md)。
+
+## 运行
+
+Python 3.10+；在仓库根目录建立独立环境：
+
+```bash
+python -m venv .venv
+# Linux / macOS
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py
+# Windows
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe main.py
+```
+
+`python main.py --version` 显示软件版本。`--headless` 打印所选组件状态后退出。`--config PATH` 选择装配，`--state-dir PATH` 指定平台安装与授权数据目录。开发者也可运行 `PYTHONPATH=next python -m polaris_platform --gui --config next/config.schedule.json`；模块入口不加 `--gui` 时只启动、检查并停止所选组件。
+
+平台与业务组件分别维护自己的数据，不将旧版 JSON 自动迁入正式平台。旧代码与文档保留供参考；升级前备份原数据，旧版的 OneDrive 同步、旧桥协议及固定 cell 画布不作为本版本能力。[平台兼容与数据目录](docs/platform-compatibility.md)。
+
+## 打包
+
+在目标操作系统自己的虚拟环境中执行：
+
+```bash
+python -m pip install pyinstaller
+python -m PyInstaller --noconfirm Polaris.spec
+```
+
+输出为 `dist/Polaris/`；Windows 运行 `Polaris.exe`，Linux 运行 `Polaris`。分发时保留整个目录，不能只复制可执行文件。源码和包内默认皮肤均自带动画及许可，不依赖外部素材下载。Windows、macOS 的构建与真实桌面效果仍需分别验收，Linux 构建也不能代替其他系统构建。
+
+冻结包中组件命令的 `{python}` 使用随包解释器，只能使用已随包的 Python 依赖。需要额外依赖的插件应在自己的环境安装依赖，并在组件命令中指定该环境的解释器。
+
+## Agent 插件
+
+Agent 插件需要 Node.js 20+。正式插件位于源码的 `next/integrations`。Pi 使用 `pi install /绝对路径/Polaris/next/integrations`，已有会话执行 `/reload`；Codex 的本地 marketplace 安装和 hook 信任步骤见 [插件接入说明](next/integrations/README.md)。发布包插件目录为 `Polaris/_internal/next/integrations`，组件目录为 `Polaris/_internal/next/components`；安装时使用对应路径。
+
+先启动 Agent 组件，再明确标记会话。插件使用 Agent 自己的本机认证端点；不沿用旧版 `integrations` 插件或中继配置。连接和发送能力取决于宿主支持，未确认的结果显示未知，不重放不确定的发送。
 
 ## 组件设计原则
 
@@ -40,43 +71,8 @@
 这些原则借鉴 [KDE Plasma](https://api.kde.org/plasma-containment.html)、[OSGi](https://www.osgi.org/resources/architecture/)
 和 [Home Assistant](https://contributors.home-assistant.io/architecture/core/) 的组件与协作思想。
 
-## Pi 插件
+## 版本与许可
 
-先打开 Polaris，再运行 `pi install PATH_TO_POLARIS/integrations`；发布包的插件目录为 `Polaris/_internal/integrations`。已有 Pi 会话执行 `/reload`，新会话自动接入。通过 `/polaris` 检查连接，在 Agent 面板的 `↗` 完整视图中授权组件访问。
+软件版本为 **v0.1.0.0**；组件清单版本和协议版本独立维护。[更新记录](CHANGELOG.md)。
 
-提供 `polaris_components / polaris_help / polaris_call` 三个通用工具，不内置日程工具或 Codex 分支。安装、WSL 中继与其他 Agent 接入见 [接入说明](integrations/README.md) 和 [协议 v1](docs/agent-bridge.md)。
-
-## Codex 插件
-
-仓库带 `Polaris Local` 本地插件目录，安装 `polaris` 并审阅、信任 hooks 后，可通过生命周期事件自动接入；
-也提供相同的三个组件工具。`Stop` 可能被其他 hook 继续执行，因此这里只上报“结果未知”，不能保证最终结束。
-安装、Node 环境与验证范围见 [Codex 接入说明](integrations/README.md#codex-桌面本地插件)。
-
-## Windows 运行与打包
-
-```powershell
-py -3.13 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
-.\.venv\Scripts\python.exe main.py
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm Polaris.spec
-```
-
-成品为 `dist/Polaris/Polaris.exe`，分发需保留整个 `Polaris` 目录。数据与备份写入用户目录，不写入程序安装目录。
-
-## Linux / WSL
-
-同一份源码支持 Linux 环境，使用独立的 Linux 虚拟环境；不要复用 Windows `.venv`。Ubuntu / WSLg 的中文字体、Qt 系统库、运行及独立打包命令见 [平台兼容说明](docs/platform-compatibility.md)。Wayland 下由合成器控制窗口位置；无托盘时仍保留界面内提醒。
-
-Windows 与 WSL 的 Agent 接入通过显式 `--bridge-stdio` 本机中继连接，不假定两侧共享套接字，也不开放 TCP 端口。使用 `POLARIS_RELAY` 配置命令参数数组，见 [接入说明](integrations/README.md)。
-
-参见 [组件协议](docs/component-board.md) 和 [日程设计、存储恢复及已知边界](docs/schedule-design.md)。当前没有云同步、重复任务或程序关闭后的后台提醒。
-
-## 素材与非商业使用限制
-
-当前动画选自 **[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)**。上游动画素材允许开源使用、**禁止商用**，角色及本包转换后的素材遵守 **CC BY-NC-SA 4.0（署名、非商业、相同方式共享）**。角色原型作者为上善无形，女仆鲸鱼娘设计为 ZipZipPipe；不是 DeepSeek 官方形象。
-
-**不能将包含这套素材的发布包直接用于收费、广告变现等商业用途。** 商用前须更换为已获适当授权的素材，或另行取得完整授权。代码 MIT 不等于美术素材 MIT；素材限制不自动给整个代码库更换许可。
-
-署名、固定来源、修改记录及许可随发布包附于 [assets/dsh-pet/ATTRIBUTION.md](assets/dsh-pet/ATTRIBUTION.md)。[桌宠设计](docs/pet-design.md) 说明动作与性能边界；`tools/import_dsh_pet.py` 可从固定提交的原始透明视频重建素材，FFmpeg 仅构建时需要。
-
-此前 Er1c0v0 的素材与许可保留在 `assets/whale/`，当前不启用，也不随新发布包打包。
+代码采用 [MIT](LICENSE)。默认美术素材来自 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，角色原型作者为上善无形，女仆鲸鱼娘设计为 ZipZipPipe，并非 DeepSeek 官方形象。素材遵守 **CC BY-NC-SA 4.0：署名、非商业、相同方式共享**；代码与美术素材分别适用各自许可。完整署名、来源和许可随包保留于 [默认皮肤目录](next/polaris_platform/desktop/skins/dshpet/ATTRIBUTION.md)。

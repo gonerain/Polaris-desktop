@@ -42,6 +42,65 @@ if __name__ == '__main__':
         def call(self, target, operation, params=None):
             return self.runtime.client('user').call(target, operation, params or {}, context=self.context)
 
+        def test_pet_dependency_availability_does_not_change_grants(self):
+            grants = self.runtime.authorization.decisions()
+            def operations():
+                return self.runtime.collaboration.describe_target('pet')['description']['operations']
+            self.assertTrue(operations()['open_canvas'].get('available', True))
+            self.runtime.stop_component('canvas')
+            self.assertFalse(operations()['open_canvas'].get('available', True))
+            self.assertTrue(operations()['say'].get('available', True))
+            self.assertTrue(operations()['show'].get('available', True))
+            self.runtime.start_component('canvas')
+            self.assertTrue(operations()['open_canvas'].get('available', True))
+            self.runtime.stop_component('window')
+            self.assertFalse(operations()['open_canvas'].get('available', True))
+            self.assertTrue(operations()['status'].get('available', True))
+            self.runtime.start_component('window')
+            self.assertTrue(operations()['open_canvas'].get('available', True))
+            self.assertEqual(self.runtime.authorization.decisions(), grants)
+
+        def test_management_control_is_optional_and_about_uses_metadata(self):
+            import json
+            from unittest.mock import patch
+            from PySide6.QtCore import QObject
+            from polaris_platform.desktop.management_control import ManagementControlPort
+            from polaris_platform import metadata
+            control = ManagementControlPort(self.runtime)
+            control.report_notice('local notice')
+            self.assertEqual(self.manager.bridge.notice, 'local notice')
+            self.manager.show()
+            root = self.manager._view.rootObject()
+            from PySide6.QtCore import Qt
+            from PySide6.QtTest import QTest
+            button = root.findChild(QObject, 'aboutButton')
+            point = button.mapToScene(button.boundingRect().center()).toPoint()
+            QTest.mouseClick(self.manager._view, Qt.LeftButton, Qt.NoModifier, point)
+            self.app.processEvents()
+            self.assertTrue(root.findChild(QObject, 'aboutDialog').property('visible'))
+            info = json.loads(self.manager.bridge.aboutJson)
+            self.assertEqual(info['DISPLAY_VERSION'], metadata.DISPLAY_VERSION)
+            class AlternateManager(Component):
+                def __init__(self):
+                    super().__init__()
+                    self.visible = False
+                    self.operation('show')(self.display)
+                    self.operation('status')(lambda p, c: {'visible': self.visible})
+                    self.operation('hide')(lambda p, c: setattr(self, 'visible', False))
+                def display(self, p, c):
+                    self.visible = True
+                    return {'visible': True}
+            manifest = self.runtime.status('manager')['manifest']
+            self.runtime.replace_component('manager', manifest, AlternateManager)
+            self.assertTrue(control.show()['visible'])
+            control.refresh()
+            with patch('sys.stderr') as stderr:
+                control.report_notice('startup failed')
+                self.assertTrue(stderr.write.called)
+            with self.assertRaises(PlatformError) as error:
+                control.request_mount('canvas', 'example', 'main')
+            self.assertEqual(error.exception.code, 'management_unavailable')
+
         def test_window_creation_profiles_and_dynamic_input_regions(self):
             import tempfile
             from PySide6.QtCore import QPoint, QRect
