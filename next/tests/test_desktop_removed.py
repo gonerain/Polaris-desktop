@@ -67,12 +67,14 @@ result = {}
 def exercise():
     try:
         if sys.argv[3] == 'remove':
+            runtime.stop_component('sources')
             for identity in json.loads(sys.argv[4]):
                 runtime.uninstall_component(identity)
         result['ids'] = sorted(item['id'] for item in runtime.snapshot())
         result['removed'] = sorted(runtime.removed_installations())
         result['managerVisible'] = runtime.component_instance('manager').status()['visible']
         result['managerState'] = runtime.status('manager')['state']
+        result['sourcesState'] = runtime.status('sources')['state']
     except Exception as error:
         result['error'] = repr(error)
     finally:
@@ -96,4 +98,5 @@ print(json.dumps(result))
                     self.assertNotIn(identity, payload['ids'])
                 self.assertEqual(payload['removed'], sorted(removed))
                 self.assertEqual(payload['managerState'], 'running')
+                self.assertNotEqual(payload['sourcesState'], 'running')
                 self.assertEqual(payload['managerVisible'], phase != 'remove')

@@ -46,3 +46,34 @@ Pet initiates one canvas presentation session carrying its existing local user c
 Pet restores itself only for its own active session, using the retained authorization context. Canvas exit or window loss is observed as unavailable; a returning window instance may restore the pet without replaying business calls. Stopping the pet cancels its session/recovery and queued input, so later callbacks cannot revive it. Desktop startup grants only the exact configured initial capabilities for a new installation; existing installations retain user revocations. Pet owns its position file under its own component data directory.
 
 A native picker opens an explicit management approval scoped to the requesting installation and current instance. While this external dialog is pending, the initiating canvas session holds dismissal. Confirmation, cancellation, failure, or management closure resolves the token and releases the hold. Confirmation rechecks the requester instance and exact capability semantics before granting or invoking. Permission failures during status observation propagate as permission failures and do not manufacture a hidden-window state or finish a live session.
+
+## 插件源
+
+一个仓库可以提供多个插件。仓库根目录声明 `polaris-source.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "示例插件源",
+  "components": [{"path": "plugins/first"}, {"path": "plugins/second"}]
+}
+```
+
+每个目录提供现有格式的 `manifest.json`，其中 ID 在源内唯一，`platformApi` 为 `1`。组件路径必须在仓库内；越界路径、逃逸符号链接、重复 ID 和不支持的 API 均拒绝。索引只读取声明，不导入或执行组件代码。
+
+插件源组件 `sources` 通过公开只读操作 `sources`、`catalog` 提供源列表和组件目录。`catalog` 可传 `source_id`，返回行包含 `sourceId`、`revision`、`path`、`manifest`。添加源不自动安装组件。
+
+可信本机组件管理界面通过组件实例的 `local_source_control()` 调用：
+
+- `sources()`、`catalog(source_id=None)`：读取源和插件。
+- `add(location, ref=None)`：添加本地目录或 HTTPS / SSH Git 仓库。
+- `refresh(source_id, ref=None)`：读取新快照；Git 的 `ref` 可以是分支、标签或 commit。
+- `install(source_id, component_id, replace=False, expected_installation=None, expected_revision=None)`：安装选定插件。同 ID 默认拒绝；替换需明确选择，可携带确认时的安装身份和源 revision 防止选择变化。
+- `update(component_id)`：使用已记录来源的当前快照更新。
+- `rollback(component_id)`：切换到该安装保留的上一份代码。
+
+写操作只能由可信本机控制接口发起，不能通过普通组件操作调用。`create_sources(runtime, state_dir=None)` 使用只暴露安装所需生命周期方法的控制对象；默认数据目录由运行管理分配给 `sources`。安装来源、精确 revision 和旧代码路径持久化在插件源组件的数据目录。
+
+Git 仓库固定 commit 后复制成独立快照；本地目录也先复制快照，再安装。获取时不执行 hooks、不递归 submodules、不执行依赖安装脚本。组件启动时若缺少运行依赖，应明确报告缺失依赖。选择仓库并不保证其依赖已在宿主或组件自己的运行环境中安装。
+
+更新保持现有安装身份、授权及自启动设置；正在运行的组件切换后恢复运行。失败时恢复旧代码和运行状态，回退失败明确报告错误。组件自己的业务数据和格式迁移仍由组件负责，代码回退不回退业务数据。

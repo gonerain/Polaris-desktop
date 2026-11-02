@@ -26,7 +26,7 @@ def main(argv=None, *, default_gui=False):
     parser.add_argument('--bridge-stdio', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument("--state-dir", help="Optional local installation and authorization record directory")
     if '--bridge-stdio' in argv:
-        parser.error('The legacy --bridge-stdio protocol is unavailable. Install the Polaris Agent plugin from next/integrations instead.')
+        parser.error('The legacy --bridge-stdio protocol is unavailable. Install the Polaris Agent plugin from its independent repository instead.')
     args = parser.parse_args(argv)
     from .bootstrap import from_file, build, default_config
     state_dir = args.state_dir

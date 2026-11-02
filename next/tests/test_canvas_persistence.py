@@ -148,6 +148,7 @@ else:
                     if found is not None:
                         return found
             hit = find(window.rootObject())
+            self.wait(lambda: hit.width() > 0 and hit.height() > 0 and window.rootObject().property('skinReady'))
             point = hit.mapToScene(QPointF(hit.width() / 2, hit.height() / 2)).toPoint()
             QCursor.setPos(window.mapToGlobal(point))
             QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
@@ -196,6 +197,7 @@ else:
                 if found is not None:
                     return found
         hit = find(window.rootObject(), 'petHitArea')
+        wait(lambda: hit.width() > 0 and hit.height() > 0 and window.rootObject().property('skinReady'))
         point = hit.mapToScene(QPointF(hit.width() / 2, hit.height() / 2)).toPoint()
         QCursor.setPos(window.mapToGlobal(point))
         QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)

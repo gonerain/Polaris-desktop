@@ -21,6 +21,8 @@ class ManagerBridge(QObject):
         self.runtime = runtime
         self._data, self._permissions, self._plan_json = '[]', '[]', '[]'
         self._notice = ''
+        self._sources_json = '[]'
+        self._gui = GuiDispatcher()
         self._installation_plan = None
         self._busy, self._closed = False, False
         self._worker, self._pending_plan = None, None
@@ -40,6 +42,40 @@ class ManagerBridge(QObject):
         return json.dumps({name: getattr(metadata, name) for name in (
             'APP_NAME', 'DISPLAY_VERSION', 'AUTHOR', 'PROJECT_URL', 'CODE_LICENSE', 'ARTWORK_LICENSE',
             'ARTWORK_CREDIT', 'ARTWORK_URL')}, ensure_ascii=False)
+
+    @Property(str, notify=changed)
+    def sourcesJson(self): return self._sources_json
+
+    def _source_control(self):
+        if self.runtime.status('sources')['state'] != 'running':
+            raise ValueError('插件源管理未运行')
+        provider = self.runtime.component_instance('sources')
+        factory = getattr(provider, 'local_source_control', None)
+        control = factory() if callable(factory) else None
+        if control is None: raise ValueError('插件源管理未运行')
+        return control
+
+    @Slot(str)
+    def addSource(self, location):
+        def add():
+            self._source_control().add(location.strip())
+            return {'_notice': '已添加插件源，请选择需要安装的插件'}
+        self.submit(add, user_input=True)
+
+    @Slot(str)
+    def refreshSource(self, source_id):
+        self.submit(lambda: (self._source_control().refresh(source_id), {'_notice': '插件源已刷新'})[1], user_input=True)
+
+    @Slot(str, str)
+    def installSource(self, source_id, component_id):
+        def install():
+            existing = self._installation_record(component_id)
+            if existing:
+                revision = next(row['revision'] for row in self._source_control().sources() if row['id'] == source_id)
+                return self._installation_confirmation(existing, 'replace', sourceId=source_id, sourceRevision=revision)
+            self._gui.run(lambda: self._source_control().install(source_id, component_id))
+            return {'_notice': '插件已安装'}
+        self.submit(install, user_input=True)
 
     @Property(str, notify=changed)
     def dataJson(self): return self._data
@@ -73,16 +109,21 @@ class ManagerBridge(QObject):
                 snapshot = self.runtime.snapshot()
                 decisions = self.runtime.authorization.decisions()
                 if not self._closed:
-                    self.completed.emit((snapshot, decisions, result, None))
+                    try:
+                        sources = self._source_control().sources()
+                    except (PlatformError, AttributeError, ValueError):
+                        sources = []
+                    self.completed.emit((snapshot, decisions, result, None, sources))
             except Exception as exc:
                 if not self._closed:
-                    self.completed.emit((None, None, None, str(exc)))
+                    self.completed.emit((None, None, None, str(exc), None))
         self._worker = threading.Thread(target=work, daemon=True, name='desktop-manager')
         self._worker.start()
 
     @Slot(object)
     def _complete(self, result):
-        snapshot, decisions, value, error = result
+        snapshot, decisions, value, error, sources = result
+        if sources is not None: self._sources_json = json.dumps(sources, ensure_ascii=False, default=str)
         if isinstance(value, dict) and '_view_plan' in value:
             token = value['_view_plan'].get('approvalToken')
             if token and token not in self._approvals: value = None
@@ -184,6 +225,9 @@ class ManagerBridge(QObject):
                     or current.get('directory') != plan['directory']):
                 raise ValueError('安装信息已变化，请重新选择')
             self._check_manageable(plan['target'], 'replace' if plan['action'] == 'replace' else 'uninstall')
+            if plan['action'] == 'replace' and 'sourceId' in plan:
+                self._gui.run(lambda: self._source_control().install(plan['sourceId'], plan['target'], replace=True, expected_installation=plan['identity'], expected_revision=plan['sourceRevision']))
+                return {'_notice': '插件已更新'}
             if plan['action'] == 'replace':
                 from pathlib import Path
                 manifest = json.loads((Path(plan['path']) / 'manifest.json').read_text(encoding="utf-8"))

@@ -12,6 +12,7 @@ from .component import Component
 from .protocol import Context, PlatformError, capability, validate_description
 
 _active = contextvars.ContextVar("polaris_request", default=None)
+_native_view = contextvars.ContextVar("polaris_native_view", default=None)
 
 
 class Client:
@@ -53,6 +54,20 @@ class Client:
     def advertise(self):
         self.__runtime.validate_client(self)
         self.__runtime.refresh_all()
+
+    def local_view_input(self, parent):
+        self.__runtime.validate_client(self)
+        native = _native_view.get()
+        if native is None or native[:3] != (self.__runtime, self.id, self.instance) or native[3] is not parent:
+            raise PlatformError('permission_denied', 'Local input is only available while creating this native view')
+        from .desktop.native_input import NativeViewInput
+        return NativeViewInput(self.__runtime, self, parent)
+
+    def require_permissions(self, operations, context):
+        context = self._context(context)
+        for target, operation in operations:
+            handle = self.bind(target, operation)
+            self.__runtime.authorization.check(context, handle.semantic)
 
     def background_context(self):
         raise PlatformError("explicit_background_required", "Trusted user management must issue a background context for an explicit task")
@@ -267,13 +282,27 @@ class Runtime(Component):
         scope = [list(cap) for cap in context.scope
                  if cap[1] == 'operation' and (cap[0], cap[2]) in selected]
         with self._lock:
+            previous = self._tasks.get(key)
             self._tasks[key] = dict(origin=context.origin, originInstallation=context.origin_installation, scope=scope)
-            self._persist_tasks()
+            try:
+                self._persist_tasks()
+            except Exception:
+                if previous is None:
+                    self._tasks.pop(key, None)
+                else:
+                    self._tasks[key] = previous
+                raise
 
     def forget_task(self, client, name):
         with self._lock:
-            self._tasks.pop(self._task_key(client, name), None)
-            self._persist_tasks()
+            key = self._task_key(client, name)
+            previous = self._tasks.pop(key, None)
+            try:
+                self._persist_tasks()
+            except Exception:
+                if previous is not None:
+                    self._tasks[key] = previous
+                raise
 
     def resume_task(self, client, name):
         from .protocol import Context
@@ -473,7 +502,15 @@ class Runtime(Component):
         record = self._record(handle.target)
         if record["state"] != "running" or record["instance"] != handle.instance:
             raise PlatformError("stale_handle", handle.target)
+        description = self.collaboration.describe_target(handle.target)['description']
+        metadata = description['operations'][handle.operation]
+        native_create = context.source == 'user' and metadata.get('profile') == 'qt-native' and 'parent' in params and any(
+            view.get('adapter') == 'qt-quick-item' and view.get('id') == params.get('view')
+            and view.get('create', 'create_view') == handle.operation
+            for view in description.get('views', []))
         token = _active.set(context)
+        native_token = _native_view.set((self, handle.target, handle.instance, params['parent'])
+            if native_create else None)
         try:
             result = record["component"].call(handle.operation, params, context)
             return result
@@ -484,6 +521,7 @@ class Runtime(Component):
         except Exception as error:
             raise PlatformError("component_error", str(error)) from error
         finally:
+            _native_view.reset(native_token)
             _active.reset(token)
 
     def derive_event_context(self, subscription, publisher):

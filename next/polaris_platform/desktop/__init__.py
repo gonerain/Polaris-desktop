@@ -2,6 +2,7 @@
 from .components import GuiDispatcher, WindowHost, Canvas, Pet, create_window, create_canvas, create_pet
 from .user_access import DesktopUserAccess
 from .manager import Manager, create_manager
+from ..sources import create_sources
 
 
 def run(runtime):
@@ -22,6 +23,7 @@ def run(runtime):
         ('window', '窗口承载', 'create_window', {'runtime': {'runtime': True}}),
         ('canvas', '画布', 'create_canvas', {'runtime': {'runtime': True}, 'window_id': 'window'}),
         ('pet', '桌宠', 'create_pet', {'runtime': {'runtime': True}, 'window_id': 'window'}),
+        ('sources', '插件源', 'create_sources', {'runtime': {'runtime': True}}),
         ('manager', '组件管理', 'create_manager', {'runtime': {'runtime': True}}),
     ]
     installed = {item['id']: item for item in runtime.snapshot()}
@@ -98,7 +100,7 @@ def run(runtime):
                 management.report_notice(str(error))
     management.refresh()
     def stop_desktop():
-        for identity in ('manager', 'pet', 'canvas', 'window'):
+        for identity in ('manager', 'sources', 'pet', 'canvas', 'window'):
             try:
                 runtime.stop_component(identity, persist=False)
             except Exception:

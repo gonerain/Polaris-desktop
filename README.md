@@ -6,12 +6,10 @@ Polaris v0.1.0.0 是基于 Python、PySide6 / Qt Quick 的本地组件工作台�
 
 - 默认鲸鱼娘皮肤复用现有透明动画，支持进入回应、按压、拖放和随机待机；右键打开组件管理或退出。工具窗不接受焦点，身体、气泡和菜单之外的透明区域可穿透输入，实际效果取决于窗口系统。
 - 画布挂载组件自己的原生视图，支持移动、缩放、折叠和布局保存。隐藏或移除视图保留业务数据，停止组件才结束其能力。
-- 日程组件提供收集箱、我的一天、任务库、周/月计划、完成记录、搜索、子任务、重点、笔记、改期和删除撤销。[日程说明](next/components/schedule/README.md)。
-- Agent 组件管理明确标记的 Pi、Codex 会话，显示状态和最终回复，按宿主能力向会话发送新一轮或追加指导。[Agent 说明](next/components/agent/README.md)。
-- 微信组件提供扫码绑定、文字收发、可选的 DeepSeek 自动回复，以及明确选择的组件工具调用。密钥从 `DEEPSEEK_API_KEY` 读取。[微信说明](next/components/weixin/README.md)。
+- 微信、日程和 Agent 通过独立插件源安装；一个仓库可以提供多个插件。
 - 公开能力按安装身份和具体操作授权；新增能力不自动授权，撤权约束已有视图和调用上下文。后台恢复不重新授予已撤销权限。
 
-首次启动只启用平台和桌面基础组件，业务组件通过组件管理器从 `next/components` 加载，也可选择配置装配；已有安装按保存的自启动设置恢复。开发接口、皮肤动作槽、原生视图授权和验证方法见 [组件平台说明](next/README.md)。
+首次启动只启用平台和桌面基础组件，业务组件通过组件管理器添加插件源后选择安装，也可加载本地组件目录；已有安装按保存的自启动设置恢复。开发接口、皮肤动作槽、原生视图授权和验证方法见 [组件平台说明](next/README.md)。
 
 ## 运行
 
@@ -27,7 +25,7 @@ python -m venv .venv
 .venv\Scripts\python.exe main.py
 ```
 
-`python main.py --version` 显示软件版本。`--headless` 打印所选组件状态后退出。`--config PATH` 选择装配，`--state-dir PATH` 指定平台安装与授权数据目录。开发者也可运行 `PYTHONPATH=next python -m polaris_platform --gui --config next/config.schedule.json`；模块入口不加 `--gui` 时只启动、检查并停止所选组件。
+`python main.py --version` 显示软件版本。`--headless` 打印所选组件状态后退出。`--config PATH` 选择装配，`--state-dir PATH` 指定平台安装与授权数据目录。开发者也可运行 `PYTHONPATH=next python -m polaris_platform --gui`；模块入口不加 `--gui` 时只启动、检查并停止所选组件。
 
 平台与业务组件分别维护自己的数据，不将旧版 JSON 自动迁入正式平台。旧代码与文档保留供参考；升级前备份原数据，旧版的 OneDrive 同步、旧桥协议及固定 cell 画布不作为本版本能力。[平台兼容与数据目录](docs/platform-compatibility.md)。
 
@@ -42,13 +40,13 @@ python -m PyInstaller --noconfirm Polaris.spec
 
 输出为 `dist/Polaris/`；Windows 运行 `Polaris.exe`，Linux 运行 `Polaris`。分发时保留整个目录，不能只复制可执行文件。源码和包内默认皮肤均自带动画及许可，不依赖外部素材下载。Windows、macOS 的构建与真实桌面效果仍需分别验收，Linux 构建也不能代替其他系统构建。
 
-冻结包中组件命令的 `{python}` 使用随包解释器，只能使用已随包的 Python 依赖。需要额外依赖的插件应在自己的环境安装依赖，并在组件命令中指定该环境的解释器。
+冻结包中组件命令的 `{python}` 使用随包解释器，提供 Python 标准库基线（不含 Tk/IDLE 和标准库测试资源）及平台 Qt/SDK；第三方依赖须由插件自行提供。需要额外依赖的插件应在自己的环境安装依赖，并在组件命令中指定该环境的解释器。
 
-## Agent 插件
+## 插件源
 
-Agent 插件需要 Node.js 20+。正式插件位于源码的 `next/integrations`。Pi 使用 `pi install /绝对路径/Polaris/next/integrations`，已有会话执行 `/reload`；Codex 的本地 marketplace 安装和 hook 信任步骤见 [插件接入说明](next/integrations/README.md)。发布包插件目录为 `Polaris/_internal/next/integrations`，组件目录为 `Polaris/_internal/next/components`；安装时使用对应路径。
+在组件管理中点击“插件源”，添加 Git 仓库地址或本地仓库目录，再选择需要安装的插件。添加来源只发现插件；安装和更新均由用户明确选择。仓库根目录使用 `polaris-source.json` 列出插件目录，每个插件维护自己的 `manifest.json`。标准见 [插件源契约](next/CONTRACT.md)。
 
-先启动 Agent 组件，再明确标记会话。插件使用 Agent 自己的本机认证端点；不沿用旧版 `integrations` 插件或中继配置。连接和发送能力取决于宿主支持，未确认的结果显示未知，不重放不确定的发送。
+[微信](https://github.com/gonerain/Polaris-weixin)、[日程](https://github.com/gonerain/Polaris-schedule)、[Agent](https://github.com/gonerain/Polaris-agent) 独立维护和发布。Codex/Pi 插件资源随 Agent 仓库提供，平台发布包只包含平台与桌面基础组件。插件依赖由各插件维护。
 
 ## 组件设计原则
 

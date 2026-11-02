@@ -104,6 +104,12 @@ class _LocalContext:
     def call(self, target, operation, params=None):
         return self.port.call(target, operation, params, context=self.context)
 
+    def local_view_input(self, parent):
+        return self.port.local_view_input(parent)
+
+    def require_permissions(self, operations):
+        self.port.require_permissions(operations, self.context)
+
     def remember_task(self, name, operations):
         self.port.remember_task(name, operations, self.context)
 

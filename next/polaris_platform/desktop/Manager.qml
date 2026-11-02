@@ -9,7 +9,7 @@ Pane {
     palette.window: '#ffffff'; palette.base: '#ffffff'; palette.text: '#243450'; palette.windowText: '#243450'
     palette.button: '#edf1f7'; palette.buttonText: '#40516a'; palette.highlight: '#dce7fb'; palette.highlightedText: '#243450'
     property bool showSystemComponents: false
-    property var visibleRecords: records.filter(function(row) { return showSystemComponents || ['authorization','collaboration','runtime','window','canvas','pet','manager'].indexOf(row.id) < 0 })
+    property var visibleRecords: records.filter(function(row) { return showSystemComponents || ['authorization','collaboration','runtime','window','canvas','pet','manager','sources'].indexOf(row.id) < 0 })
     property var records: JSON.parse(manager ? manager.dataJson : '[]')
     property var decisions: JSON.parse(manager ? manager.permissionsJson : '[]')
     property bool customPermissions: false
@@ -72,6 +72,44 @@ Pane {
             Label { text: aboutDialog.info.ARTWORK_URL || ''; color: '#345f9c'; wrapMode: Text.Wrap; Layout.fillWidth: true
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.openUrlExternally(aboutDialog.info.ARTWORK_URL) }
             }
+        }
+    }
+    Dialog {
+        id: sourceDialog; objectName: 'sourceDialog'; title: '插件源'; modal: true
+        anchors.centerIn: parent; width: Math.min(760, root.width - 48); height: Math.min(570, root.height - 48)
+        contentItem: ColumnLayout {
+            RowLayout {
+                TextField { id: sourceLocation; objectName: 'sourceLocation'; placeholderText: 'Git 仓库地址或本地仓库目录'; Layout.fillWidth: true; enabled: manager && !manager.busy }
+                SettingsButton { objectName: 'addSource'; text: '添加'; enabled: manager && !manager.busy && sourceLocation.text.trim().length > 0; onClicked: manager.addSource(sourceLocation.text) }
+            }
+            Label { text: manager && manager.busy ? '处理中…' : '选择插件安装；已有同 ID 插件需确认更新。'; color: '#61718b' }
+            ScrollView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                ColumnLayout {
+                    width: sourceDialog.availableWidth
+                    Repeater {
+                        model: JSON.parse(manager ? manager.sourcesJson : '[]')
+                        ColumnLayout {
+                            id: sourceRow; required property var modelData; Layout.fillWidth: true
+                            RowLayout {
+                                Label { text: sourceRow.modelData.name || sourceRow.modelData.location; Layout.fillWidth: true; elide: Text.ElideRight }
+                                SettingsButton { text: '检查更新'; enabled: manager && !manager.busy; onClicked: manager.refreshSource(sourceRow.modelData.id) }
+                            }
+                            Repeater {
+                                model: sourceRow.modelData.components || []
+                                RowLayout {
+                                    required property var modelData; Layout.fillWidth: true
+                                    Label { text: modelData.manifest.name + ' · ' + modelData.manifest.version; Layout.fillWidth: true }
+                                    SettingsButton { objectName: 'installSource_' + modelData.manifest.id; text: root.records.some(row => row.id === modelData.manifest.id) ? '更新 / 替换' : '安装'; enabled: manager && !manager.busy
+                                        onClicked: manager.installSource(sourceRow.modelData.id, modelData.manifest.id) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Label { text: manager ? manager.notice : ''; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            SettingsButton { text: '关闭'; Layout.alignment: Qt.AlignRight; onClicked: sourceDialog.close() }
         }
     }
     FolderDialog { id: folder; title: '选择组件目录'; onAccepted: manager.loadDirectory(selectedFolder.toString()) }
@@ -150,6 +188,7 @@ Pane {
             BusyIndicator { running: manager && manager.busy; implicitWidth: 32; implicitHeight: 32 }
             SettingsButton { text: '关于'; objectName: 'aboutButton'; onClicked: aboutDialog.open() }
             SettingsButton { text: '刷新'; onClicked: manager.refresh() }
+            SettingsButton { objectName: 'sourceButton'; text: '插件源'; enabled: manager && !manager.busy; onClicked: sourceDialog.open() }
             SettingsButton { text: '加载组件'; onClicked: folder.open() }
             SettingsButton { text: '退出'; onClicked: manager.quit() }
         }

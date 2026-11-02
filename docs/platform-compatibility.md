@@ -43,6 +43,6 @@ Ubuntu 精简环境可能需要 `python3-venv`、`fonts-noto-cjk`、`libegl1`、
 
 ## Agent 插件与验证口径
 
-新版插件使用源码 `next/integrations`，发布包为 `Polaris/_internal/next/integrations`；业务组件目录对应 `Polaris/_internal/next/components`。安装方式和宿主限制见 [新版插件说明](../next/integrations/README.md)。Agent 自己提供认证的 loopback 桥，默认端点在其用户数据目录 `bridge/endpoint.json`；可用 `POLARIS_AGENT_ENDPOINT` 显式指定。旧 `--bridge-stdio`、Qt LocalSocket 和旧 relay 设置不属于本版本接入方式；跨 Windows / WSL 连接不能假设共享端点或直接可用。
+微信、日程和 Agent 通过独立插件源安装，不随平台发布包分发。Codex/Pi 集成随 [Agent 仓库](https://github.com/gonerain/Polaris-agent)维护，安装方式和宿主限制见该仓库说明。Agent 自己提供认证的 loopback 桥，默认端点在其用户数据目录 `bridge/endpoint.json`；可用 `POLARIS_AGENT_ENDPOINT` 显式指定。旧 `--bridge-stdio`、Qt LocalSocket 和旧 relay 设置不属于本版本接入方式；跨 Windows / WSL 连接不能假设共享端点或直接可用。
 
 验收须分别记录单元测试、Qt 离屏测试、隔离 X11 测试、目标系统打包和真实宿主插件验证。旧版文档中的 Windows / WSL 实测记录不代表本次正式平台已完成同等验收。测试使用内存或临时目录，避免读写真实业务数据。

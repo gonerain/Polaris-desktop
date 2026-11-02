@@ -46,7 +46,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         self.assertEqual({r['id'] for r in json.loads(result.stdout)}, {'authorization', 'collaboration', 'runtime'})
         rejected = subprocess.run([sys.executable, str(ROOT / 'main.py'), '--bridge-stdio', '--endpoint', '/tmp/old-endpoint'], capture_output=True, text=True)
         self.assertEqual(rejected.returncode, 2)
-        self.assertIn('next/integrations', rejected.stderr)
+        self.assertIn('independent repository', rejected.stderr)
 
     def test_default_main_selects_gui_without_constructing_application(self):
         import importlib.util
@@ -83,11 +83,24 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             finally:
                 component.force_stop()
 
+    def test_frozen_plugin_standard_library_baseline(self):
+        import sysconfig
+        source = (ROOT / 'Polaris.spec').read_text()
+        baseline = source[source.index('# Platform imports'):source.index('# Generate the Windows')]
+        namespace = dict(Path=Path, os=os, sys=sys, sysconfig=sysconfig,
+                         collect_submodules=lambda name: [])
+        exec(compile(baseline, 'Polaris.spec', 'exec'), namespace)
+        imports = namespace['hiddenimports']
+        for module in ('sqlite3', 'sqlite3.dbapi2', 'ctypes.wintypes', 'http.server', 'urllib.request'):
+            self.assertIn(module, imports)
+        self.assertNotIn('_tkinter', imports)
+        self.assertFalse(any(name.startswith(('site-packages.', 'tkinter.', 'idlelib.', 'test.')) for name in imports))
+
     def test_spec_collects_only_new_default_application(self):
         source = (ROOT / 'Polaris.spec').read_text()
         ast.parse(source)
-        self.assertIn("root / 'next' / 'integrations'", source)
-        self.assertIn("root / 'next' / 'components'", source)
+        self.assertNotIn("root / 'next' / 'integrations'", source)
+        self.assertNotIn("root / 'next' / 'components'", source)
         self.assertIn('filevers=parts, prodvers=parts', source)
         self.assertNotIn('legacy_main.py', source)
         self.assertNotIn("('qml', 'qml')", source)
