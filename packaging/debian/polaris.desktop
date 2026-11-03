@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Polaris
+Comment=Desktop component workspace
+Comment[zh_CN]=桌面组件工作台
+Exec=polaris
+Icon=polaris
+Terminal=false
+Categories=Utility;
+Actions=Updates;
+
+[Desktop Action Updates]
+Name=Check for updates
+Name[zh_CN]=检查更新
+Exec=polaris --updates

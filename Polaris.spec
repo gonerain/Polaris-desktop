@@ -10,7 +10,9 @@ root = Path(SPECPATH)
 sys.path.insert(0, str(root / 'next'))
 from polaris_platform.metadata import APP_NAME, VERSION, AUTHOR, PROJECT_URL
 
-datas = collect_data_files('polaris_platform') + collect_data_files('components')
+# Component entry packages are reloaded by the source loader at lifecycle start.
+# Frozen bytecode alone cannot satisfy that loader's filesystem reads.
+datas = collect_data_files('polaris_platform', include_py_files=True) + collect_data_files('components', include_py_files=True)
 datas += [(str(path), 'next') for path in sorted((root / 'next').glob('config.*.json'))]
 for filename in ('LICENSE', 'README.md', 'CHANGELOG.md'):
     if (root / filename).is_file():

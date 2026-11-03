@@ -57,6 +57,11 @@ def run(runtime):
             runtime.grant('pet', target, name, kind=kind)
     pet = runtime.component_instance('pet') if 'pet' not in removed else None
     from PySide6.QtCore import QTimer
+    # Application distribution updates belong to the host, outside component permissions.
+    if sys.platform == 'linux' and getattr(sys, 'frozen', False):
+        from .updates import UpdateController
+        app._polaris_updates = UpdateController(app)
+        QTimer.singleShot(5000, app._polaris_updates.check_on_startup)
     def display_pet():
         if 'pet' in removed or 'window' in removed:
             # Keep a trusted management entry available after removing or disabling

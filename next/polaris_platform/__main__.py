@@ -18,6 +18,7 @@ def main(argv=None, *, default_gui=False):
         restore_stdio(attach_console=True)
     parser = argparse.ArgumentParser(prog=APP_NAME if default_gui else 'polaris-platform')
     parser.add_argument('--version', action='version', version=f'{APP_NAME} {DISPLAY_VERSION}')
+    parser.add_argument('--updates', action='store_true', help='Open the GitHub Release update window')
     parser.add_argument("--config", help="JSON assembly configuration; defaults to the three headless foundation components")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--gui', dest='gui', action='store_true', help='Open the Polaris desktop')
@@ -28,6 +29,16 @@ def main(argv=None, *, default_gui=False):
     if '--bridge-stdio' in argv:
         parser.error('The legacy --bridge-stdio protocol is unavailable. Install the Polaris Agent plugin from its independent repository instead.')
     args = parser.parse_args(argv)
+    if args.updates:
+        from PySide6.QtGui import QGuiApplication
+        from .desktop.updates import UpdateController
+        app = QGuiApplication.instance() or QGuiApplication(sys.argv)
+        app.setApplicationName(APP_NAME)
+        app.setQuitOnLastWindowClosed(True)
+        updates = UpdateController(app)
+        updates.show()
+        updates.check()
+        return app.exec()
     from .bootstrap import from_file, build, default_config
     state_dir = args.state_dir
     if args.gui and state_dir is None:

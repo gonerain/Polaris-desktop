@@ -29,6 +29,7 @@ namespaces = false
 
 [tool.setuptools.package-data]
 "*" = ["manifest.json"]
+"polaris_platform.desktop" = ["*.qml"]
 "components.assistant" = ["*.qml"]
 "components.canvas" = ["*.qml"]
 "components.manager" = ["*.qml", "default-sources.json"]

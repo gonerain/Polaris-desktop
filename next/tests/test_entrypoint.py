@@ -19,7 +19,7 @@ from polaris_platform.transport import ProcessComponent
 
 class EntrypointTests(unittest.TestCase):
     def test_version_single_source_without_qt(self):
-        self.assertEqual(__version__, '0.1.0.0')
+        self.assertEqual(__version__, VERSION)
         script = '''
 import importlib.abc, runpy, sys
 class NoQt(importlib.abc.MetaPathFinder):

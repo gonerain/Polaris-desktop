@@ -1,6 +1,6 @@
 """Application identity shared by the launcher, desktop and distribution."""
 APP_NAME = 'Polaris'
-VERSION = '0.1.0.0'
+VERSION = '0.1.0.2'
 DISPLAY_VERSION = 'v' + VERSION
 AUTHOR = 'gonerain and contributors'
 PROJECT_URL = 'https://github.com/gonerain/Polaris-desktop'

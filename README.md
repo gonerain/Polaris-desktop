@@ -1,6 +1,6 @@
 # Polaris
 
-Polaris v0.1.0.0 是基于 Python、PySide6 / Qt Quick 的本地组件工作台。正式入口使用 `next/polaris_platform`：桌宠打开画布，组件管理负责安装、启动、授权和撤销，业务能力由各组件提供。
+Polaris v0.1.0.2 是基于 Python、PySide6 / Qt Quick 的本地组件工作台。正式入口使用 `next/polaris_platform`：桌宠打开画布，组件管理负责安装、启动、授权和撤销，业务能力由各组件提供。
 
 ## 能力与使用
 
@@ -40,6 +40,22 @@ python -m PyInstaller --noconfirm Polaris.spec
 
 输出为 `dist/Polaris/`；Windows 运行 `Polaris.exe`，Linux 运行 `Polaris`。分发时保留整个目录，不能只复制可执行文件。源码和包内默认皮肤均自带动画及许可，不依赖外部素材下载。Windows、macOS 的构建与真实桌面效果仍需分别验收，Linux 构建也不能代替其他系统构建。
 
+### Debian / Ubuntu 安装包与更新
+
+在 Ubuntu 22.04 或相同 glibc 基线的 Linux 环境中构建（架构与构建机一致）：
+
+```bash
+.venv/bin/python -m pip install pyinstaller==6.16.0
+.venv/bin/python tools/build_deb.py
+sudo apt install ./dist/polaris_0.1.0.2_amd64.deb
+```
+
+输出包含 deb 和 SHA-256 文件；系统菜单只显示 Polaris 图标。可在 Polaris 启动图标的右键操作中选择“检查更新”，也可运行 `polaris --updates`。Linux 分发包启动后会在后台检查正式 GitHub Release，发现新版本时显示更新窗口；失败时可手动重试。
+
+更新窗口下载当前架构的 deb，校验 GitHub 提供的 SHA-256 与文件大小后才允许打开系统安装器。安装需要系统授权；完成后退出并重新启动 Polaris。没有关联 deb 安装器时，窗口提供 `sudo apt install` 命令。用户数据仍保存在 `~/.local/share/polaris-platform`（或 `$XDG_DATA_HOME/polaris-platform`），覆盖安装保留这些数据。
+
+发布更新时，提升 `next/polaris_platform/metadata.py` 的版本，重新构建，并在本项目 GitHub 中发布同名正式标签（如 `v0.1.0.2`）。将 `polaris_0.1.0.2_amd64.deb` 和对应 `.sha256` 上传为 Release 资源；arm64 需在 arm64 环境单独构建。更新器读取 GitHub Release API 的资源 `digest`，缺少校验值或匹配架构资源时会明确报错。预发布和草稿不会作为更新。
+
 冻结包中组件命令的 `{python}` 使用随包解释器，提供 Python 标准库基线（不含 Tk/IDLE 和标准库测试资源）及平台 Qt/SDK；第三方依赖须由插件自行提供。需要额外依赖的插件应在自己的环境安装依赖，并在组件命令中指定该环境的解释器。
 
 ## 插件源
@@ -71,6 +87,6 @@ python -m PyInstaller --noconfirm Polaris.spec
 
 ## 版本与许可
 
-软件版本为 **v0.1.0.0**；组件清单版本和协议版本独立维护。[更新记录](CHANGELOG.md)。
+软件版本为 **v0.1.0.2**；组件清单版本和协议版本独立维护。[更新记录](CHANGELOG.md)。
 
 代码采用 [MIT](LICENSE)。默认美术素材来自 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，角色原型作者为上善无形，女仆鲸鱼娘设计为 ZipZipPipe，并非 DeepSeek 官方形象。素材遵守 **CC BY-NC-SA 4.0：署名、非商业、相同方式共享**；代码与美术素材分别适用各自许可。完整署名、来源和许可随包保留于 [默认皮肤目录](next/components/pet/skins/dshpet/ATTRIBUTION.md)。
