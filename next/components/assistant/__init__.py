@@ -1,13 +1,15 @@
 """Polaris Agent: conversational model and authorized tool execution."""
 from collections import OrderedDict
 import json
+import os
+from pathlib import Path
 import threading
 import uuid
 
 from polaris_platform.protocol import PlatformError, capability
 from polaris_platform.sdk import Component
 from .loop import AgentLoop, AgentResult
-from .model import DeepSeek, ModelError
+from .model import configured_model, selected_provider, PROFILES, ModelError
 from .tools import ToolExecutor, operations
 
 
@@ -35,9 +37,11 @@ class _Turn:
 
 
 class Assistant(Component):
-    def __init__(self, engine=None, directory_id='collaboration'):
+    def __init__(self, engine=None, directory_id='collaboration', data_dir=None):
         super().__init__()
         self.engine, self.directory_id = engine, directory_id
+        base = Path(os.environ.get('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local') if os.name == 'nt' else Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share')
+        self.data_dir = Path(data_dir) if data_dir is not None else base / 'polaris-assistant'
         self._lock = threading.RLock()
         self._stopped = threading.Event()
         self._conversations = OrderedDict()
@@ -94,10 +98,11 @@ class Assistant(Component):
         with self._lock:
             if self.engine is None:
                 try:
-                    self.engine = AgentLoop(DeepSeek())
+                    self.engine = AgentLoop(configured_model(self.data_dir))
                 except ModelError as error:
-                    return dict(ready=False, model='deepseek-flash', detail=str(error))
-            return dict(ready=True, model='deepseek-flash', detail='')
+                    return dict(ready=False, model='', detail=str(error))
+            model = getattr(self.engine, 'model', None)
+            return dict(ready=True, model=getattr(model, 'model_id', 'injected'), detail='')
 
     def _authorized_tools(self, ctx):
         records = ctx.call(self.directory_id, 'discover', {}).get('components', [])
@@ -176,5 +181,5 @@ class Assistant(Component):
                 self._busy.discard(key)
 
 
-def create():
-    return Assistant()
+def create(data_dir=None):
+    return Assistant(data_dir=data_dir)

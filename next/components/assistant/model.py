@@ -1,12 +1,14 @@
-"""Small, bounded DeepSeek transport, independent of the UI."""
+"""Small, bounded chat-completion transport, independent of the UI."""
 import json
 import os
+from pathlib import Path
 import socket
 import threading
 import time
 import urllib.request
 import urllib.error
-from .instructions import REVIEW_SYSTEM
+import uuid
+from .usage import UsageLog, token_usage
 
 
 MODEL_TIMEOUT = 180
@@ -22,51 +24,105 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-class DeepSeek:
-    def __init__(self, api_key=None, opener=None):
-        self._key = os.environ.get('DEEPSEEK_API_KEY', '') if api_key is None else api_key
+PROFILES = {
+    'deepseek': ('DeepSeek', 'deepseek-flash', 'DEEPSEEK_API_KEY', 'https://api.deepseek.com/chat/completions'),
+    'bigmodel': ('GLM', 'glm-5.3-flash', 'ZHIPUAI_API_KEY', 'https://open.bigmodel.cn/api/paas/v4/chat/completions'),
+    'zai': ('GLM', 'glm-5.3-flash', 'ZAI_API_KEY', 'https://api.z.ai/api/paas/v4/chat/completions'),
+}
+
+
+def _settings(directory):
+    if directory is not None:
+        path = Path(directory) / 'model.json'
+        if path.exists():
+            try:
+                if path.stat().st_size > 4096:
+                    raise ValueError()
+                data = json.loads(path.read_text('utf8'))
+                if not isinstance(data, dict) or data.get('version') != 1 or 'provider' not in data:
+                    raise ValueError()
+                return data
+            except (OSError, ValueError, KeyError, TypeError):
+                raise ModelError('模型服务设置无法读取，请检查 model.json') from None
+    return {}
+
+
+def selected_provider(directory=None):
+    provider = os.environ.get('POLARIS_AGENT_MODEL_PROVIDER', '').strip().lower()
+    if not provider:
+        provider = _settings(directory).get('provider')
+    provider = provider or 'deepseek'
+    if not isinstance(provider, str) or provider not in PROFILES:
+        raise ModelError('模型服务必须为 deepseek、bigmodel 或 zai')
+    return provider
+
+
+def configured_model(directory=None):
+    provider = selected_provider(directory)
+    effort = _settings(directory).get('reasoning_effort')
+    key = None
+    if directory is not None and not os.environ.get(PROFILES[provider][2], '').strip():
+        path = Path(directory) / (provider + '-api-key')
+        if path.exists():
+            try:
+                if path.stat().st_size > 4096:
+                    raise ValueError()
+                key = path.read_text('utf8').strip()
+            except (OSError, ValueError):
+                raise ModelError('模型密钥文件无法读取') from None
+    return ChatModel(key, provider=provider, reasoning_effort=effort,
+                     usage_path=Path(directory) / 'model-usage.jsonl' if directory is not None else None)
+
+
+class ChatModel:
+    def __init__(self, api_key=None, opener=None, *, provider='deepseek', usage_path=None, reasoning_effort=None):
+        if provider not in PROFILES:
+            raise ModelError('模型服务配置无效')
+        self.accounting = UsageLog(usage_path)
+        self.local = threading.local()
+        self.provider = provider
+        self.reasoning_effort = reasoning_effort if reasoning_effort is not None else ('max' if provider == 'deepseek' else 'low')
+        if self.reasoning_effort not in ('low', 'high', 'max'):
+            raise ModelError('reasoning_effort 必须为 low、high 或 max')
+        self.label, self.model_id, self.key_env, self.endpoint = PROFILES[provider]
+        self._key = os.environ.get(self.key_env, '') if api_key is None else api_key
         if isinstance(self._key, str):
             self._key = self._key.strip()
         if (not isinstance(self._key, str) or not 8 <= len(self._key) <= 4096
                 or any(not 33 <= ord(char) <= 126 for char in self._key)):
-            raise ModelError('请配置有效的 DEEPSEEK_API_KEY')
+            raise ModelError('请配置有效的 ' + self.key_env)
         self._opener = opener or urllib.request.build_opener(_NoRedirect())
+
+    def begin_run(self):
+        self.local.run_id = uuid.uuid4().hex
+        self.local.sequence = 0
 
     def redact(self, value):
         return str(value).replace(self._key, '[已隐藏密钥]')
 
-    def review(self, request, draft, evidence, cancel, timeout=MODEL_TIMEOUT):
-        schema = {'type': 'function', 'function': {'name': 'review_reply',
-            'description': '核对回复是否有本轮实际工具结果支持。',
-            'parameters': {'type': 'object', 'properties': {
-                'needs_tools': {'type': 'boolean'}, 'reply': {'type': 'string'}, 'reason': {'type': 'string'}},
-                'required': ['needs_tools', 'reply', 'reason'], 'additionalProperties': False}}}
-        messages = [{'role': 'system', 'content': REVIEW_SYSTEM + '\n必须调用 review_reply 工具返回核查结果，不要直接输出正文。'},
-            {'role': 'user', 'content': json.dumps({'request': request, 'draft': draft, 'evidence': evidence}, ensure_ascii=False)}]
-        response = self.complete(messages, [schema], cancel, timeout)
-        try:
-            calls = response['tool_calls']
-            if len(calls) != 1 or calls[0]['function']['name'] != 'review_reply':
-                raise ValueError()
-            result = json.loads(calls[0]['function']['arguments'])
-            if (type(result['needs_tools']) is not bool or not isinstance(result['reply'], str)
-                    or not isinstance(result['reason'], str) or not result['needs_tools'] and not result['reply'].strip()):
-                raise ValueError()
-            return result
-        except (KeyError, TypeError, ValueError):
-            raise ModelError('回复结果核对失败') from None
-
     def complete(self, messages, tools, cancel, timeout=MODEL_TIMEOUT, tool_choice=None):
         if cancel.is_set():
             raise ModelError('请求已取消')
-        payload = {'model': 'deepseek-flash', 'messages': messages,
-                   'thinking': {'type': 'enabled'}, 'reasoning_effort': 'max', 'stream': False}
+        payload = {'model': self.model_id, 'messages': messages,
+                   'thinking': {'type': 'enabled'}, 'reasoning_effort': self.reasoning_effort, 'stream': False, 'max_tokens': 4096}
+        if self.provider != 'deepseek':
+            payload['thinking']['clear_thinking'] = False
         if tools:
             payload['tools'] = tools
         if tool_choice is not None:
             payload['tool_choice'] = tool_choice
-        request = urllib.request.Request('https://api.deepseek.com/chat/completions',
-            data=json.dumps(payload, ensure_ascii=False).encode(),
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        if not getattr(self.local, 'run_id', None):
+            self.begin_run()
+        self.local.sequence += 1
+        audit = dict(runId=self.local.run_id, sequence=self.local.sequence, phase=getattr(self.local, 'phase', 'generate'),
+                     provider=self.provider, requestedModel=self.model_id, reasoningEffort=payload['reasoning_effort'],
+                     requestBytes=len(body), messageCount=len(messages),
+                     toolResultChars=sum(len(m.get('content', '')) for m in messages if m.get('role') == 'tool' and isinstance(m.get('content'), str)),
+                     status='error')
+        audit_started = time.monotonic()
+        request = urllib.request.Request(self.endpoint,
+            data=body,
             headers={'Authorization': 'Bearer ' + self._key, 'Content-Type': 'application/json'})
         deadline = time.monotonic() + timeout
         response = None
@@ -93,7 +149,15 @@ class DeepSeek:
                     raise ModelError('模型响应过大')
             if cancel.is_set() or time.monotonic() >= deadline:
                 raise ModelError('请求已取消或超时')
-            message = json.loads(data)['choices'][0]['message']
+            decoded = json.loads(data)
+            actual_model = decoded.get('model')
+            audit.update(status='ok', usage=token_usage(decoded), responseBytes=len(data))
+            if isinstance(actual_model, str):
+                audit['responseModel'] = self.redact(actual_model)[:128]
+            response_id = decoded.get('id')
+            if isinstance(response_id, str):
+                audit['responseId'] = self.redact(response_id)[:128]
+            message = decoded['choices'][0]['message']
             if not isinstance(message, dict):
                 raise ValueError()
             content = message.get('content')
@@ -102,6 +166,7 @@ class DeepSeek:
             reasoning = message.get('reasoning_content')
             if reasoning is not None and not isinstance(reasoning, str):
                 raise ModelError('模型思考格式无效')
+            audit.update(reasoningChars=len(reasoning or ''), replyChars=len(content or ''))
             calls = message.get('tool_calls', [])
             if calls is None:
                 calls = []
@@ -127,19 +192,27 @@ class DeepSeek:
         except ModelError:
             raise
         except urllib.error.HTTPError as exc:
-            raise ModelError(f'DeepSeek 请求失败（HTTP {exc.code}）') from None
+            audit['httpStatus'] = exc.code
+            raise ModelError(f'{self.label} 请求失败（HTTP {exc.code}）') from None
         except (TimeoutError, socket.timeout):
-            raise ModelError('DeepSeek 请求超时') from None
+            raise ModelError(self.label + ' 请求超时') from None
         except urllib.error.URLError as exc:
             if isinstance(exc.reason, (TimeoutError, socket.timeout)):
-                raise ModelError('DeepSeek 请求超时') from None
-            raise ModelError('DeepSeek 请求失败，请检查网络或配置') from None
+                raise ModelError(self.label + ' 请求超时') from None
+            raise ModelError(self.label + ' 请求失败，请检查网络或配置') from None
         except Exception:
             if cancel.is_set() or time.monotonic() >= deadline:
                 raise ModelError('请求已取消或超时') from None
             # Network exceptions can contain headers or response bodies; never expose them.
-            raise ModelError('DeepSeek 请求失败，请检查网络或配置') from None
+            raise ModelError(self.label + ' 请求失败，请检查网络或配置') from None
         finally:
+            audit['durationSeconds'] = round(time.monotonic() - audit_started, 3)
+            self.accounting.append(audit)
             finished.set()
             if response is not None:
                 response.close()
+
+
+class DeepSeek(ChatModel):
+    """Explicit DeepSeek transport for existing callers."""
+    pass

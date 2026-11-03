@@ -5,7 +5,7 @@ from polaris_platform.protocol import PlatformError
 
 def operations(record):
     return {name: meta for name, meta in record.get('description', {}).get('operations', {}).items()
-            if isinstance(meta, dict) and meta.get('available', True) and meta.get('profile') != 'qt-native'}
+            if isinstance(meta, dict) and meta.get('available', True) and meta.get('profile') != 'qt-native' and not meta.get('humanOnly') and meta.get('modelCallable') is not False}
 
 
 class ToolExecutor:
@@ -49,10 +49,19 @@ class ToolExecutor:
             records = self.ctx.call(self.directory_id, 'discover', {}).get('components', [])
             self._records = records
             filtered = [self.filtered(r) for r in records if any(t == r.get('id') for t, _ in self.allowed)]
-            return {'components': [r for r in filtered if r['description']['operations']]}
+            return {'components': [dict(id=r['id'], name=r['name'], operations=[
+                dict(name=n, title=m.get('title', n), access=m.get('access', 'read'))
+                for n, m in r['description']['operations'].items()])
+                for r in filtered if r['description']['operations']]}
         target = self.resolve_component(args.get('component'))
         if name == 'help':
             record = self.filtered(self.ctx.call(self.directory_id, 'describe', {'target': target}))
+            operation = args.get('operation')
+            if operation is not None:
+                entries = record['description']['operations']
+                if operation not in entries:
+                    raise PlatformError('denied', '本次委托未启用此操作')
+                record['description']['operations'] = {operation: entries[operation]}
             self.explained.update({(target, op): deepcopy(meta) for op, meta in record['description']['operations'].items()})
             return record
         if name != 'call':
@@ -85,6 +94,32 @@ class ToolExecutor:
         result = self.ctx.call(target, operation, arguments)
         self.writes[key] = (deepcopy(result), False)
         return result
+
+    def catalog(self):
+        """Provide bounded, authorized schemas before the first model request."""
+        records = self.ctx.call(self.directory_id, 'discover', {}).get('components', [])
+        self._records = records
+        entries, size = [], 0
+        for record in records:
+            target = record.get('id')
+            if target in self.excluded:
+                continue
+            for name, metadata in self.filtered(record)['description']['operations'].items():
+                base = dict(component=target, operation=name, title=metadata.get('title', name),
+                            access=metadata.get('access', 'read'))
+                full = dict(base, description=metadata.get('description', ''), parameters=metadata.get('parameters'))
+                length = len(json.dumps(full, ensure_ascii=False).encode())
+                if metadata.get('parameters') is not None and length <= 4000 and size + length <= 10000:
+                    entries.append(full)
+                    self.explained[(target, name)] = deepcopy(metadata)
+                    size += length
+                else:
+                    length = len(json.dumps(base, ensure_ascii=False).encode())
+                    if size + length > 12000:
+                        return dict(operations=entries, more=True, notice='其余操作使用 components 和 help 查询')
+                    entries.append(base)
+                    size += length
+        return dict(operations=entries, more=False)
 
     def filtered(self, record):
         return {'id': record.get('id'),

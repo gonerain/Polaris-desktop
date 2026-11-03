@@ -1,463 +1,182 @@
 import json
-from pathlib import Path
-import sys
 import threading
 import unittest
-import urllib.error
-
 from components.assistant.loop import AgentLoop
-from components.assistant.model import DeepSeek, ModelError
+from components.assistant.model import ModelError
+from components.assistant.context import Results
+from components.assistant.tools import ToolExecutor
+from polaris_platform.protocol import PlatformError
 
 
-class FakeModel:
-    def __init__(self, replies):
-        self.replies = iter(replies)
-    def complete(self, *args, **kwargs):
-        return next(self.replies)
+def tool(name, args, identity='c1'):
+    return {'id': identity, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}
 
 
-def tool(name, args):
-    return {'id': name, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}
+class Model:
+    def __init__(self, replies): self.replies, self.requests = iter(replies), []
+    def complete(self, messages, tools, cancel, timeout=30):
+        self.requests.append((messages, tools))
+        value = next(self.replies)
+        return value(messages) if callable(value) else value
+    def review(self, *args): raise AssertionError('No compulsory second model pass')
 
 
 class Executor:
-    def __init__(self):
-        self.calls = []
+    allowed = True
+    def __init__(self, value=None): self.value, self.calls = value, []
     def execute(self, name, args, cancel):
         self.calls.append((name, args))
-        return {'ok': True}
+        return self.value if self.value is not None else {'status': 'accepted'}
 
 
 class CoreTests(unittest.TestCase):
-    def test_large_tool_results_reach_generation_and_review_with_redaction(self):
-        key = 'sk-full-result-test-secret'
-        payload = {'rows': [{'id': index, 'text': '正文' * 800 + str(index)}
-                            for index in range(25)], 'secret': key}
-        expected = {**payload, 'secret': '[已隐藏密钥]'}
+    def test_batch_selection_filters_full_result_without_reexecuting(self):
+        payload = {'a/b': [{'id': str(i), 'marked': i % 2 == 0, 'reply': 'x' * 10000} for i in range(10)]}
+        def select(messages):
+            ref = json.loads(messages[-1]['content'])['result_ref']
+            return {'tool_calls': [tool('select_result', dict(result_ref=ref, path='/a~1b',
+                where={'marked': True}, fields=['id'], offset=1, limit=2), 'c2')]}
+        def finish(messages):
+            result = json.loads(messages[-1]['content'])
+            self.assertEqual(result, dict(items=[{'id': '2'}, {'id': '4'}], matched=5, offset=1, more=True))
+            return {'content': '已找到'}
+        model = Model([{'tool_calls': [tool('components', {})]}, select, finish]);executor = Executor(payload)
+        AgentLoop(model).run('筛选', [], executor, threading.Event())
+        self.assertEqual(len(executor.calls), 1)
 
-        class RecordingModel(FakeModel):
-            def redact(self, value):
-                return DeepSeek.redact(self, value)
-            def complete(self, messages, *args, **kwargs):
-                self.messages = list(messages)
-                return super().complete(messages, *args, **kwargs)
-            def review(self, request, draft, evidence, cancel, timeout=30):
-                self.evidence = evidence
-                return {'needs_tools': False, 'reply': draft, 'reason': ''}
+    def test_selection_distinguishes_missing_null_and_boolean_from_number(self):
+        results = Results();results.add('c1', [{'x': True}, {'x': 1}, {'x': None}, {}])
+        self.assertEqual(results.select('r1', where={'x': 1})['items'], [{'x': 1}])
+        self.assertEqual(results.select('r1', where={'x': True})['items'], [{'x': True}])
+        self.assertEqual(results.select('r1', where={'x': None})['items'], [{'x': None}])
+        with self.assertRaises(ValueError): results.select('r1', limit=100000)
+        with self.assertRaises(ValueError): results.select('r1', where={'x': {'$eq': True}})
+        with self.assertRaises(ValueError): results.select('unknown')
 
-        class LargeResult(Executor):
-            def execute(self, name, args, cancel):
-                return payload
+    def test_initial_catalog_allows_direct_calls_but_rechecks_live_metadata(self):
+        record = {'id': 'toy', 'description': {'operations': {
+            'get': {'access': 'read', 'parameters': {'type': 'object'}},
+            'hidden': {'access': 'write', 'parameters': {'type': 'object'}}}}}
+        class Context:
+            def call(self, target, op, params):
+                if op == 'discover': return {'components': [record]}
+                if op == 'describe': return record
+                return {'reply': 'exact-answer'}
+        executor = ToolExecutor(Context(), [{'target': 'toy', 'operation': 'get'}], 'collaboration')
+        def first(messages):
+            self.assertIn('parameters', messages[0]['content'])
+            self.assertNotIn('hidden', messages[0]['content'])
+            return {'tool_calls': [tool('call', dict(component='toy', operation='get', arguments={}))]}
+        model = Model([first, {'content': 'exact-answer'}])
+        self.assertEqual(AgentLoop(model).run('查询', [], executor, threading.Event()).text, 'exact-answer')
+        record['description']['operations']['get']['parameters']['required'] = ['new']
+        with self.assertRaisesRegex(PlatformError, '操作说明已改变'):
+            executor.execute('call', dict(component='toy', operation='get'), threading.Event())
 
-        model = RecordingModel([{'tool_calls': [tool('components', {})]},
-                                {'content': '已查询'}])
-        model._key = key
-        AgentLoop(model).run('查询', [], LargeResult(), threading.Event())
-        content = next(row['content'] for row in model.messages if row.get('role') == 'tool')
-        self.assertGreater(len(content), 12000)
-        self.assertEqual(json.loads(content), expected)
-        self.assertEqual(model.evidence[0]['result'], expected)
-        self.assertNotIn(key, content)
-        self.assertNotIn(key, json.dumps(model.evidence))
+    def test_plain_chat_is_one_request_and_keeps_conversation(self):
+        model = Model([{'content': '你好'}])
+        result = AgentLoop(model).run('好久不见', [{'role': 'user', 'content': 'old'}], Executor(), threading.Event())
+        self.assertEqual(result.text, '你好')
+        self.assertEqual(len(model.requests), 1)
+        self.assertEqual(model.requests[0][0][1]['content'], 'old')
+        self.assertEqual(result.history[-1]['content'], '你好')
 
-    def test_review_keeps_original_context_after_tool_rounds(self):
-        class Reviewed(FakeModel):
-            def review(self, request, draft, evidence, cancel, timeout=30):
-                self.request = json.loads(request)
-                return {'needs_tools':False,'reply':draft,'reason':''}
-        history=[{'role':'user','content':'请把上一段转发给目标'},
-                 {'role':'assistant','content':'请提供正文和发送模式'}]
-        model=Reviewed([{'tool_calls':[tool('components',{})]}]*6+[{'content':'已处理'}])
-        AgentLoop(model).run('start，待转发的正文',history,Executor(),threading.Event())
-        self.assertEqual(model.request['recent_messages'][:2],history)
-        self.assertEqual(model.request['current'],'start，待转发的正文')
+    def test_large_result_is_bounded_and_can_be_read_by_reference(self):
+        payload = {'sessions': [{'id': 'chosen', 'reply': '秘密正文' * 15000}], 'status': 'ok'}
+        def second(messages):
+            encoded = json.loads(messages[-1]['content'])
+            self.assertLess(len(messages[-1]['content']), 3000)
+            self.assertEqual(encoded['result_ref'], 'r1')
+            return {'tool_calls': [tool('read_result', {'result_ref': 'r1', 'path': '/sessions/0/id'}, 'c2')]}
+        def third(messages):
+            self.assertEqual(json.loads(messages[-1]['content'])['value'], 'chosen')
+            return {'content': '找到了'}
+        model = Model([{'tool_calls': [tool('call', {'component': 'toy', 'operation': 'get', 'arguments': {}})]}, second, third])
+        executor = Executor(payload)
+        self.assertEqual(AgentLoop(model).run('查询', [], executor, threading.Event()).text, '找到了')
+        self.assertEqual(len(executor.calls), 1)
+        self.assertLess(sum(len(json.dumps(m, ensure_ascii=False)) for m, _ in model.requests), 16000)
 
-    def test_unexecuted_success_draft_is_checked_before_sending(self):
-        class ReviewedModel(FakeModel):
-            def review(self, request, draft, evidence, cancel, timeout=30):
-                if not evidence:
-                    self.asserted_empty_evidence = True
-                    return {'needs_tools': True, 'reply': '', 'reason': '没有实际取消标记'}
-                return {'needs_tools': False, 'reply': draft, 'reason': ''}
-        model = ReviewedModel([{'role': 'assistant', 'content': '已取消标记'},
-            {'tool_calls': [tool('help', {'component': 'x'})]},
-            {'tool_calls': [tool('call', {'component': 'x', 'operation': 'unmark', 'arguments': {}})]},
-            {'content': '已核实取消标记'}])
+    def test_full_result_is_preserved_and_refs_do_not_cross_runs(self):
+        results = Results(); value = {'huge': 'ab' * 10000, 'a/b': [7]}
+        results.add('c', value)
+        self.assertEqual(results.read('r1', '/a~1b/0')['value'], 7)
+        first = results.read('r1', '/huge', limit=4000)
+        self.assertTrue(first['more'])
+        self.assertEqual(first['total_chars'], 20002)
+        self.assertEqual(results.values['r1'], value)
+        with self.assertRaises(ValueError): Results().read('r1')
+
+    def test_error_result_reaches_model_with_exact_platform_code(self):
+        class Denied(Executor):
+            def execute(self, *args): raise PlatformError('permission_required', '没有权限')
+        def finish(messages):
+            self.assertEqual(json.loads(messages[-1]['content'])['code'], 'permission_required')
+            return {'content': '需要授权'}
+        model = Model([{'tool_calls': [tool('call', {'component': 'toy', 'operation': 'write', 'arguments': {}})]}, finish])
+        self.assertEqual(AgentLoop(model).run('写入', [], Denied(), threading.Event()).text, '需要授权')
+
+    def test_final_budget_reserves_reply_and_does_not_resubmit_tools(self):
+        model = Model([{'tool_calls': [tool('call', {'component': 'toy', 'operation': 'write', 'arguments': {}})]}, {'content': '已接收，尚未完成'}])
         executor = Executor()
-        result = AgentLoop(model).run('取消标记', [], executor, threading.Event())
-        self.assertTrue(model.asserted_empty_evidence)
-        self.assertEqual(result.text, '已核实取消标记')
-        self.assertEqual([name for name, _ in executor.calls], ['help', 'call'])
+        result = AgentLoop(model, max_calls=2).run('写入', [], executor, threading.Event())
+        self.assertEqual(model.requests[-1][1], [])
+        self.assertEqual(len(executor.calls), 1)
+        self.assertIn('尚未完成', result.text)
 
-    def test_catalog_reply_review_receives_directory_evidence(self):
-        class Reviewed(FakeModel):
-            def review(self, request, draft, evidence, cancel, timeout=30):
-                self.evidence = evidence
-                return {'needs_tools': False, 'reply': draft, 'reason': ''}
-        model = Reviewed([{'tool_calls': [tool('components', {})]}, {'content': '可用组件'}])
-        result = AgentLoop(model).run('你能做什么', [], Executor(), threading.Event())
-        self.assertEqual(result.text, '可用组件')
-        self.assertEqual(model.evidence[0]['tool'], 'components')
+    def test_cancel_during_batch_prevents_remaining_actions(self):
+        cancel = threading.Event()
+        class Cancelling(Executor):
+            def execute(self, *args): self.calls.append(1); cancel.set(); return {'ok': True}
+        model = Model([{'tool_calls': [tool('components', {}, 'a'), tool('components', {}, 'b')]}]); executor = Cancelling()
+        with self.assertRaisesRegex(ModelError, '取消'): AgentLoop(model).run('查询', [], executor, cancel)
+        self.assertEqual(len(executor.calls), 1)
 
-    def test_repeated_unsupported_claims_fail_instead_of_being_sent(self):
-        class Unsupported(FakeModel):
-            def review(self, *args, **kwargs):
-                return {'needs_tools': True, 'reply': '', 'reason': '没有执行证据'}
-        model = Unsupported([{'role': 'assistant', 'content': '已完成'}] * 3)
-        with self.assertRaisesRegex(ModelError, '未能确认操作结果'):
-            AgentLoop(model).run('执行', [], Executor(), threading.Event())
+    def test_no_tool_permission_means_empty_toolset(self):
+        executor = Executor(); executor.allowed = []
+        model = Model([{'content': '普通对话'}])
+        AgentLoop(model).run('你好', [], executor, threading.Event())
+        self.assertEqual(model.requests[0][1], [])
 
-    def test_two_tool_corrections_still_review_final_evidence_without_resubmitting(self):
-        from components.assistant.tools import ToolExecutor
+    def test_invalid_batch_is_rejected_before_any_action(self):
+        executor = Executor(); model = Model([{'tool_calls': [tool('components', {}, 'a'), tool('components', {}, 'a')]}])
+        with self.assertRaises(ModelError): AgentLoop(model).run('查询', [], executor, threading.Event())
+        self.assertEqual(executor.calls, [])
+
+    def test_oversized_thinking_stops_before_another_network_request(self):
+        model = Model([{'reasoning_content': '想' * 40000, 'tool_calls': [tool('components', {})]}])
+        with self.assertRaisesRegex(ModelError, '上下文超过预算'):
+            AgentLoop(model).run('查询', [], Executor(), threading.Event())
+        self.assertEqual(len(model.requests), 1)
+
+    def test_reused_tool_id_across_rounds_cannot_alias_a_previous_result(self):
+        model = Model([{'tool_calls': [tool('components', {})]}, {'tool_calls': [tool('components', {})]}])
+        executor = Executor()
+        with self.assertRaisesRegex(ModelError, '标识重复'):
+            AgentLoop(model).run('查询', [], executor, threading.Event())
+        self.assertEqual(len(executor.calls), 1)
+
+    def test_tool_catalog_is_compact_and_human_only_is_not_model_callable(self):
+        record = {'id': 'toy', 'manifest': {'name': '测试'}, 'description': {'operations': {
+            'get': {'parameters': {'description': 'x' * 20000}}, 'respond': {'humanOnly': True}}}}
+        class Context:
+            def call(self, target, op, params): return {'components': [record]} if op == 'discover' else record
+        executor = ToolExecutor(Context(), [{'target': 'toy', 'operation': 'get'}, {'target': 'toy', 'operation': 'respond'}], 'collaboration')
+        catalog = executor.execute('components', {}, threading.Event())
+        self.assertLess(len(json.dumps(catalog)), 500)
+        self.assertEqual(catalog['components'][0]['operations'][0]['name'], 'get')
+        self.assertNotIn('respond', executor.filtered(record)['description']['operations'])
+
+    def test_writes_are_deduplicated_and_unknown_writes_are_not_retried(self):
         class Context:
             writes = 0
-            queries = 0
-            def call(self, target, operation, arguments):
-                if operation == 'describe':
-                    return {'id':'queue','description':{'operations':{
-                        'submit':{'access':'write'},'receipt':{'access':'read'}}}}
-                if operation == 'submit':
-                    self.writes += 1
-                    return {'status':'pending','id':'receipt'}
-                if operation == 'receipt':
-                    self.queries += 1
-                    return {'status':'pending' if self.queries == 1 else 'accepted'}
-                raise AssertionError(operation)
-        class Reviewed(FakeModel):
-            reviews = 0
-            def review(self, request, draft, evidence, cancel, timeout=30):
-                self.reviews += 1
-                if self.reviews <= 2:
-                    return {'needs_tools':True,'reply':'','reason':'还需查询回执'}
-                self.final_request = json.loads(request)
-                assert evidence[-1]['result']['status'] == 'accepted'
-                return {'needs_tools':False,'reply':'已接收，运行结果尚未确认。','reason':''}
-        submit = tool('call',{'component':'queue','operation':'submit','arguments':{'text':'one'}})
-        query = tool('call',{'component':'queue','operation':'receipt','arguments':{'id':'receipt'}})
-        model = Reviewed([
-            {'tool_calls':[tool('help',{'component':'queue'})]},
-            {'tool_calls':[submit]}, {'content':'已提交。'},
-            {'tool_calls':[query]}, {'content':'仍在等待。'},
-            {'tool_calls':[submit,query]}, {'content':'已接收，运行结果尚未确认。'}])
-        context = Context()
-        executor = ToolExecutor(context,[{'target':'queue','operation':op} for op in ('submit','receipt')],'directory')
-        result = AgentLoop(model).run('发送并确认接收',[],executor,threading.Event())
-        self.assertEqual(result.text,'已接收，运行结果尚未确认。')
-        self.assertEqual(model.reviews,3)
-        self.assertFalse(model.final_request['can_use_tools'])
-        self.assertEqual(context.writes,1)
-        self.assertEqual(context.queries,2)
-
-    def test_final_tool_budget_cannot_request_impossible_extra_tools(self):
-        class Reviewed(FakeModel):
-            reviews = 0
-            completions = 0
-            def complete(self,*args,**kwargs):
-                self.completions += 1
-                return super().complete(*args,**kwargs)
-            def review(self,request,*args,**kwargs):
-                self.reviews += 1
-                assert json.loads(request)['can_use_tools'] is False
-                return {'needs_tools':True,'reply':'','reason':'还需查询'}
-        model = Reviewed([{'tool_calls':[tool('components',{})]}]*6+[{'content':'尚未确认。'}])
-        with self.assertRaisesRegex(ModelError,'未能确认操作结果'):
-            AgentLoop(model).run('查询',[],Executor(),threading.Event())
-        self.assertEqual(model.completions,7)
-        self.assertEqual(model.reviews,1)
-
-    def test_final_budget_review_can_return_honest_pending_acknowledgement(self):
-        class Pending(Executor):
-            def execute(self,name,args,cancel):
-                super().execute(name,args,cancel)
-                return {'status':'pending','id':'receipt'} if name == 'call' else {'ok':True}
-        class Reviewed(FakeModel):
-            def review(self,request,draft,evidence,*args,**kwargs):
-                assert json.loads(request)['can_use_tools'] is False
-                assert evidence[-1]['result']['status'] == 'pending'
-                return {'needs_tools':False,'reply':'已提交，尚未确认接收。','reason':''}
-        replies = [{'tool_calls':[tool('help',{'component':'queue'})]}]
-        replies += [{'tool_calls':[tool('components',{})]}]*4
-        replies += [{'tool_calls':[tool('call',{'component':'queue','operation':'submit','arguments':{'text':'one'}})]},
-                    {'content':'已完成。'}]
-        executor = Pending()
-        result = AgentLoop(Reviewed(replies)).run('执行',[],executor,threading.Event())
-        self.assertEqual(result.text,'已提交，尚未确认接收。')
-        self.assertEqual(sum(name == 'call' for name,_ in executor.calls),1)
-
-    def test_cancel_during_review_never_returns_answer(self):
-        cancel = threading.Event()
-        class CancelReview(FakeModel):
-            def review(self, *args, **kwargs):
-                cancel.set()
-                return {'needs_tools': False, 'reply': '迟到的回复', 'reason': ''}
-        with self.assertRaises(ModelError):
-            AgentLoop(CancelReview([{'content': '完成'}])).run('查询', [], Executor(), cancel)
-
-    def test_review_transport_uses_auto_selection_and_rejects_invalid_reply(self):
-        class Response:
-            def __init__(self, message): self.data = json.dumps({'choices': [{'message': message}]}).encode()
-            def read(self, size):
-                result, self.data = self.data, b''
-                return result
-            def close(self): pass
-        class Opener:
-            message = {'tool_calls': [tool('review_reply', {'needs_tools': True, 'reply': '', 'reason': '缺少实际标记'})]}
-            def open(self, request, timeout):
-                self.payload = json.loads(request.data)
-                return Response(self.message)
-        opener = Opener()
-        model = DeepSeek('fake-key12345', opener)
-        result = model.review('标记会话', '已标记', [], threading.Event())
-        self.assertTrue(result['needs_tools'])
-        self.assertNotIn('tool_choice', opener.payload)
-        self.assertIn('必须调用 review_reply', opener.payload['messages'][0]['content'])
-        opener.message = {'content': '已完成'}
-        with self.assertRaisesRegex(ModelError, '核对失败'):
-            model.review('标记会话', '已标记', [], threading.Event())
-
-    def test_thinking_generation_and_review_do_not_force_tool_choice(self):
-        class Response:
-            def __init__(self, message):
-                self.data = json.dumps({'choices': [{'message': message}]}).encode()
-            def read(self, size):
-                result, self.data = self.data, b''
-                return result
-            def close(self): pass
-        class Opener:
-            def __init__(self): self.payloads = []
-            def open(self, request, timeout):
-                payload = json.loads(request.data)
-                self.payloads.append(payload)
-                if 'tool_choice' in payload:
-                    raise urllib.error.HTTPError(request.full_url, 400, 'unsupported', {}, None)
-                message = ({'content': '生成回复', 'reasoning_content': '生成思考'}
-                           if len(self.payloads) == 1 else
-                           {'tool_calls': [tool('review_reply', {
-                               'needs_tools': False, 'reply': '核查通过', 'reason': ''})],
-                            'reasoning_content': '核查思考'})
-                return Response(message)
-        opener = Opener()
-        result = AgentLoop(DeepSeek('fake-key12345', opener)).run(
-            '你好', [], Executor(), threading.Event())
-        self.assertEqual(result.text, '核查通过')
-        self.assertEqual(len(opener.payloads), 2)
-        for payload in opener.payloads:
-            self.assertEqual(payload['thinking'], {'type': 'enabled'})
-            self.assertEqual(payload['reasoning_effort'], 'max')
-            self.assertNotIn('tool_choice', payload)
-        self.assertNotIn('思考', json.dumps(result.history, ensure_ascii=False))
-
-    def test_transport_errors_report_safe_status_and_timeout(self):
-        secret = 'fake-key-private123'
-        errors = [
-            (urllib.error.HTTPError('https://example.test/' + secret, 400,
-                                   secret, {'Secret': secret}, None), 'DeepSeek 请求失败（HTTP 400）'),
-            (TimeoutError(secret), 'DeepSeek 请求超时'),
-            (urllib.error.URLError(TimeoutError(secret)), 'DeepSeek 请求超时'),
-            (urllib.error.URLError(secret), 'DeepSeek 请求失败，请检查网络或配置'),
-        ]
-        for error, expected in errors:
-            class Opener:
-                def open(self, *args, **kwargs): raise error
-            with self.subTest(error=type(error).__name__), self.assertRaises(ModelError) as caught:
-                DeepSeek(secret, Opener()).complete([], [], threading.Event())
-            self.assertEqual(str(caught.exception), expected)
-            self.assertNotIn(secret, str(caught.exception))
-
-    def test_platform_denial_keeps_code_and_exact_missing_permission(self):
-        from polaris_platform.protocol import PlatformError
-        class Denied:
-            def execute(self, *args):
-                raise PlatformError('permission_required', 'Explicit permission required',
-                                    {'requester': 'canvas', 'capability': ['installation', 'operation', 'sessions', 1, 'read', 1]})
-        class RecordingModel(FakeModel):
-            def complete(self, messages, *args, **kwargs):
-                self.messages = list(messages)
-                return super().complete(messages, *args, **kwargs)
-        model = RecordingModel([{'tool_calls': [tool('help', {'component': 'org.polaris.agent'})]}, {'content': '缺少 sessions 读取权限'}])
-        AgentLoop(model).run('查看会话', [], Denied(), threading.Event())
-        error = json.loads(next(row['content'] for row in model.messages if row.get('role') == 'tool'))
-        self.assertEqual(error['code'], 'permission_required')
-        self.assertEqual(error['requester'], 'canvas')
-        self.assertEqual(error['operation'], 'sessions')
-        self.assertIn('不是调用参数错误', error['error'])
-
-    def test_help_gate_and_order(self):
-        model = FakeModel([
-            {'role': 'assistant', 'tool_calls': [tool('call', {'component': 'x'})]},
-            {'role': 'assistant', 'tool_calls': [tool('help', {'component': 'x'}),
-                tool('call', {'component': 'x', 'operation': 'get', 'arguments': {}})]},
-            {'role': 'assistant', 'content': '完成'}])
-        executor = Executor()
-        result = AgentLoop(model).run('查询', [], executor, threading.Event())
-        self.assertEqual([x[0] for x in executor.calls], ['help', 'call'])
-        self.assertEqual(result.text, '完成')
-        self.assertEqual([x['role'] for x in result.history], ['user', 'assistant'])
-
-    def test_unknown_tool_and_nonobject(self):
-        model = FakeModel([{'tool_calls': [tool('__class__', {}), tool('components', [])]}, {'content': '好'}])
-        executor = Executor()
-        self.assertEqual(AgentLoop(model).run('a', [], executor, threading.Event()).text, '好')
-        self.assertEqual(executor.calls, [])
-
-    def test_cancel_does_not_call(self):
-        cancel = threading.Event(); cancel.set()
-        executor = Executor()
-        with self.assertRaises(ModelError):
-            AgentLoop(FakeModel([])).run('a', [], executor, cancel)
-        self.assertEqual(executor.calls, [])
-
-    def test_channel_independent_answer(self):
-        result = AgentLoop(FakeModel([{'content': '字' * 5000}])).run('a', [], Executor(), threading.Event())
-        self.assertEqual(result.text, '字' * 5000)
-
-    def test_fake_transport_and_redaction(self):
-        key = 'sk-fakekey123456'
-        class Response:
-            def __init__(self):
-                self.done = False
-            def read(self, size):
-                if self.done: return b''
-                self.done = True
-                return json.dumps({'choices': [{'message': {'content': key, 'reasoning_content': 'hidden'}}]}).encode()
-            def close(self): pass
-        class Opener:
-            def open(self, request, timeout):
-                self.payload = json.loads(request.data)
-                return Response()
-        opener = Opener()
-        result = DeepSeek(key, opener).complete([], [], threading.Event())
-        self.assertNotIn(key, str(result))
-        self.assertEqual(result['reasoning_content'], 'hidden')
-        self.assertEqual(opener.payload['thinking'], {'type': 'enabled'})
-        self.assertEqual(opener.payload['reasoning_effort'], 'max')
-        self.assertNotIn('max_tokens', opener.payload)
-        self.assertEqual(opener.payload['model'], 'deepseek-flash')
-        self.assertFalse(opener.payload['stream'])
-
-    def test_thinking_tool_context_is_returned_without_leaking_to_history(self):
-        key = 'sk-thinking-secret123'
-        thought = '私有思考 ' + key + '想' * 300000
-        replies = iter([
-            {'content': None, 'reasoning_content': thought,
-             'tool_calls': [tool('components', {})]},
-            {'content': '完成', 'reasoning_content': '最终私有思考'},
-        ])
-
-        class Response:
-            def __init__(self, message):
-                self.data = json.dumps({'choices': [{'message': message}]}, ensure_ascii=False).encode()
-            def read(self, size):
-                chunk, self.data = self.data[:size], self.data[size:]
-                return chunk
-            def close(self): pass
-
-        class Opener:
-            def __init__(self): self.payloads = []; self.timeouts = []
-            def open(self, request, timeout):
-                self.payloads.append(json.loads(request.data))
-                self.timeouts.append(timeout)
-                return Response(next(replies))
-
-        opener = Opener()
-        model = DeepSeek(key, opener)
-        # Exercise generation's tool loop without making an extra review request.
-        model.review = None
-        result = AgentLoop(model).run('查询', [], Executor(), threading.Event())
-        context = opener.payloads[1]['messages']
-        assistant = next(row for row in context if row['role'] == 'assistant')
-        self.assertEqual(assistant['reasoning_content'], thought.replace(key, '[已隐藏密钥]'))
-        self.assertNotIn(key, json.dumps(context))
-        self.assertEqual(result.text, '完成')
-        self.assertNotIn('reasoning_content', json.dumps(result.history))
-        self.assertNotIn('私有思考', json.dumps(result.history, ensure_ascii=False))
-        self.assertTrue(all(179 < timeout <= 180 for timeout in opener.timeouts))
-
-    def test_empty_or_invalid_answer_is_error(self):
-        for content in (None, '', '   ', {}, 1):
-            with self.subTest(content=content), self.assertRaises(ModelError):
-                AgentLoop(FakeModel([{'content': content}])).run('a', [], Executor(), threading.Event())
-
-    def test_model_error_propagates(self):
-        class Broken:
-            def complete(self, *args, **kwargs):
-                raise ModelError('失败')
-        with self.assertRaises(ModelError):
-            AgentLoop(Broken()).run('a', [], Executor(), threading.Event())
-
-    def test_late_model_reply_cancelled(self):
-        cancel = threading.Event()
-        class Late:
-            def complete(self, *args, **kwargs):
-                cancel.set()
-                return {'content': '迟到的正文'}
-        with self.assertRaises(ModelError):
-            AgentLoop(Late()).run('a', [], Executor(), cancel)
-
-    def test_interrupted_tool_propagates(self):
-        class Interrupted:
-            def execute(self, *args):
-                raise InterruptedError('取消')
-        with self.assertRaises(InterruptedError):
-            AgentLoop(FakeModel([{'tool_calls': [tool('components', {})]}])).run(
-                'a', [], Interrupted(), threading.Event())
-
-    def test_request_budget_raises(self):
-        model = FakeModel([{'tool_calls': [tool('components', {})]}] * 7)
-        with self.assertRaises(ModelError):
-            AgentLoop(model).run('a', [], Executor(), threading.Event())
-
-    def test_last_tool_round_still_gets_final_reply_without_tools(self):
-        class Model(FakeModel):
-            def complete(self, messages, tools, *args, **kwargs):
-                response = super().complete(messages, tools, *args, **kwargs)
-                if response.get('content'):
-                    self.final_tools = tools
-                return response
-        replies = [{'tool_calls': [tool('help', {'component': 'x'})]}] * 5
-        replies += [{'tool_calls': [tool('call', {'component': 'x', 'operation': 'mark', 'arguments': {'session_id': 's'}})]},
-                    {'content': '已标记'}]
-        model, executor = Model(replies), Executor()
-        result = AgentLoop(model).run('标记', [], executor, threading.Event())
-        self.assertEqual(result.text, '已标记')
-        self.assertEqual(model.final_tools, [])
-        self.assertEqual(sum(name == 'call' for name, _ in executor.calls), 1)
-
-    def test_printable_key_and_whitespace(self):
-        model = DeepSeek('  fake!key-123  ')
-        self.assertEqual(model.redact('fake!key-123'), '[已隐藏密钥]')
-        DeepSeek('x' * 4096)
-        for key in ('x' * 4097, 'fake key-123', 'fake\x7fkey-123'):
-            with self.assertRaises(ModelError):
-                DeepSeek(key)
-
-    def test_transport_rejects_invalid_types_and_late_cancel(self):
-        for message in ({'content': {}}, {'content': 'ok', 'reasoning_content': {}}, {'content': 'ok', 'tool_calls': {}},
-                        {'content': 'ok', 'tool_calls': ['bad']}):
-            class Response:
-                def __init__(self): self.done = False
-                def read(self, size):
-                    if self.done: return b''
-                    self.done = True
-                    return json.dumps({'choices': [{'message': message}]}).encode()
-                def close(self): pass
-            class Opener:
-                def open(self, *args, **kwargs): return Response()
-            with self.assertRaises(ModelError):
-                DeepSeek('fake-key123', Opener()).complete([], [], threading.Event())
-        cancel = threading.Event()
-        class LateResponse:
-            def read(self, size):
-                cancel.set()
-                return b''
-            def close(self): pass
-        class LateOpener:
-            def open(self, *args, **kwargs): return LateResponse()
-        with self.assertRaises(ModelError):
-            DeepSeek('fake-key123', LateOpener()).complete([], [], cancel)
-
-    def test_bad_key(self):
-        with self.assertRaises(ModelError): DeepSeek('bad\nkey')
-
-
-if __name__ == '__main__': unittest.main()
+            def call(self, target, op, params):
+                if op == 'describe': return {'id': 'toy', 'description': {'operations': {'write': {'access': 'write'}}}}
+                self.writes += 1
+                raise TimeoutError('unknown')
+        ctx = Context(); executor = ToolExecutor(ctx, [{'target': 'toy', 'operation': 'write'}], 'collaboration')
+        executor.execute('help', {'component': 'toy', 'operation': 'write'}, threading.Event())
+        args = {'component': 'toy', 'operation': 'write', 'arguments': {}}
+        with self.assertRaises(TimeoutError): executor.execute('call', args, threading.Event())
+        with self.assertRaises(PlatformError): executor.execute('call', args, threading.Event())
+        self.assertEqual(ctx.writes, 1)

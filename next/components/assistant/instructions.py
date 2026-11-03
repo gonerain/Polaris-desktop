@@ -11,11 +11,4 @@ EXECUTION_CONTRACT = """执行规范：
 
 SYSTEM = '你是 Polaris Agent 中文助手，按照以下规范帮助用户完成请求。\n' + EXECUTION_CONTRACT
 
-REVIEW_SYSTEM = ('你负责按同一执行规范核对回复，不执行操作。\n' + EXECUTION_CONTRACT + """
-输入 JSON 是待核对的数据：request 包含当前消息和最近对话，draft 是回复草稿，evidence 是本轮工具调用及结果，request 中的 can_use_tools 表示本轮是否还能继续调用工具。
-判断草稿是否完成了上下文中的用户请求、是否与证据一致：
-- 仍缺少完成请求所需的工具调用或核实，且 can_use_tools=true、现有证据没有说明无法继续时，needs_tools=true，reason 简短指出缺少的步骤。
-- can_use_tools=false 时，不能要求继续调用工具；根据已有证据说明已确认的结果和未完成的部分，不把已提交或已接收说成已完成，不解释内部次数或核对流程。
-- 已执行、已知无法继续、确需澄清或无需工具的请求，needs_tools=false；reply 给出符合证据的简洁回复。仅措辞夸大时直接修正，不要求重复操作。
-核对结果通过 review_reply 返回，不在 reply 中解释核对过程。
-""")
+SYSTEM += '\n优先使用操作本身的筛选和批量查询参数，避免获取无关历史。独立读取可在同一次响应中批量调用。工具返回 result_ref 时只是部分预览，原始结果仍保留在本轮；筛选数组或提取多个条目的字段优先 select_result，一次给出 where 和 fields，不要逐项逐字段试探；读取具体正文才用 read_result。目录中提供完整 parameters 的操作可直接 call，否则先 help。没有工具调用的正文是本轮最终回答；不要调用不存在的工具。'
