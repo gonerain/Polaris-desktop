@@ -29,6 +29,7 @@ class ManagerBridge(QObject):
         self._worker, self._pending_plan = None, None
         self._pending_user_request = []
         self._approvals = {}
+        self._application_checks = {}
         self.completed.connect(self._complete)
         self.approvalFinished.connect(self._finish_approval)
         self.timer = QTimer(self)
@@ -170,9 +171,16 @@ class ManagerBridge(QObject):
             self._data = json.dumps(records, ensure_ascii=False, default=str)
             self._permissions = json.dumps(decisions, ensure_ascii=False)
             if self._pending_plan:
-                source = next((row for row in snapshot if row['id'] == self._pending_plan['requester']), None)
-                if source is None or source['state'] != 'running' or source['instance'] != self._pending_plan['requesterInstance']:
-                    self.cancelView()
+                if self._pending_plan.get('type') == 'application':
+                    try:
+                        if self.runtime.application_client(self._pending_plan['requester']).instance != self._pending_plan['requesterInstance']:
+                            self.cancelView()
+                    except PlatformError:
+                        self.cancelView()
+                else:
+                    source = next((row for row in snapshot if row['id'] == self._pending_plan['requester']), None)
+                    if source is None or source['state'] != 'running' or source['instance'] != self._pending_plan['requesterInstance']:
+                        self.cancelView()
         self.changed.emit()
         if isinstance(value, dict) and '_view_plan' in value and self._pending_plan is not None:
             if all(row['authorized'] for row in self._pending_plan['permissions']):
@@ -307,7 +315,10 @@ class ManagerBridge(QObject):
                     user_input=True)
 
     def _make_plan(self, requester, target, action):
-        records = {row['id']: row for row in self.runtime.snapshot()}
+        records = {}
+        for row in self.runtime.snapshot():
+            records[row['id']] = row
+            records[row.get('instanceId', row['id'])] = row
         view = next((view for view in records[target]['description'].get('views', [])
                      if any(item['operation'] == action for item in view.get('actions', []))), None)
         if view is None: raise ValueError('此视图操作已经撤回')
@@ -352,7 +363,10 @@ class ManagerBridge(QObject):
                 'target': target, 'action': action, 'params': params or {}, 'type': plan_type, 'permissions': rows}
 
     def _make_mount_plan(self, requester, target, view_id):
-        records = {row['id']: row for row in self.runtime.snapshot()}
+        records = {}
+        for row in self.runtime.snapshot():
+            records[row['id']] = row
+            records[row.get('instanceId', row['id'])] = row
         descriptor = next((item for item in records[target]['description'].get('views', [])
                            if item.get('id') == view_id and item.get('adapter') == 'qt-quick-item'), None)
         if descriptor is None: raise ValueError('此视图已经撤回')
@@ -367,6 +381,68 @@ class ManagerBridge(QObject):
         plan = self._permission_plan(records, requester, requester, 'mount', permissions, params, 'mount')
         plan.update(provider=target, viewId=view_id)
         return plan
+
+    def _make_application_plan(self, definition, flow):
+        from polaris_platform.application import Application
+        from polaris_platform.protocol import capability
+        app = Application.from_dict(definition)
+        client = self.runtime.application_client(app.id)
+        if flow not in app.flows:
+            raise PlatformError('application_flow_missing', flow)
+        scope = self.runtime.authorization.scope(app.id)
+        rows, seen = [], set()
+        def include(target, name, kind='operation', binding=None):
+            if kind != 'operation':
+                raise PlatformError('application_binding_unsupported', '当前应用流程不支持事件订阅')
+            status = self.runtime.status(target)
+            stable = status.get('instanceId', status['installation'])
+            metadata = status['description']['operations' if kind == 'operation' else 'events'][name]
+            if metadata.get('applicationBinding') != 'instance':
+                raise PlatformError('application_binding_unsupported', '能力尚未声明稳定实例应用绑定：' + name)
+            key = list(capability(status['installation'], kind, name, metadata))
+            if binding and (status.get('installationId', status['installation']) != binding['installationId']
+                    or stable != binding['instanceId'] or key != list(binding['semantic'])):
+                raise PlatformError('application_binding_unavailable', name)
+            if (stable, kind, name) in seen:
+                return
+            seen.add((stable, kind, name))
+            if status['state'] != 'running' or not metadata.get('available', True):
+                raise PlatformError('application_binding_unavailable', name)
+            rows.append(dict(target=stable, instanceId=stable, runId=status.get('runId', status['instance']), title=status['manifest']['name'], name=name,
+                             access=metadata.get('access', 'read'), kind=kind, key=key,
+                             authorized=tuple(key) in scope))
+            for dependency in metadata.get('bindings', {}).values():
+                if not dependency.get('optional'):
+                    endpoint = dependency.get('endpoint')
+                    if endpoint is None:
+                        raise PlatformError('application_binding_unavailable', name)
+                    include(endpoint['target'], endpoint['name'], endpoint['kind'])
+        for step in app.flows[flow]:
+            binding = app.bindings[step['alias']]
+            include(binding['target'], binding['operation'], binding=binding)
+        return dict(type='application', requester=app.id, requesterInstallation=app.id,
+                    requesterInstance=client.instance, subject=app.title + ' · ' + app.id,
+                    target=app.id, action=flow, permissions=rows, definition=app.as_dict(), params={})
+
+    def request_application(self, definition, flow, on_finished=None, validate=None):
+        token = uuid.uuid4().hex
+        instance = self.runtime.application_client(definition['applicationId']).instance
+        self._approvals[token] = on_finished
+        self._application_checks[token] = validate
+        def prepare():
+            try:
+                if token not in self._approvals:
+                    return None
+                plan = self._make_application_plan(definition, flow)
+                if plan['requesterInstance'] != instance:
+                    raise PlatformError('stale_application', '应用身份已变化')
+                plan['approvalToken'] = token
+                return {'_view_plan': plan}
+            except Exception:
+                self.approvalFinished.emit(token, 'failed')
+                raise
+        self.submit(prepare, user_input=True)
+        return token
 
     def request_mount(self, requester, target, view_id, on_finished=None):
         token = uuid.uuid4().hex
@@ -395,7 +471,14 @@ class ManagerBridge(QObject):
     def _finish_approval(self, token, status):
         if token not in self._approvals: return
         callback = self._approvals.pop(token)
+        self._application_checks.pop(token, None)
         if callback: callback(status)
+
+    def cancel_approval(self, token):
+        if self._pending_plan and self._pending_plan.get('approvalToken') == token:
+            self.cancelView()
+        else:
+            self._finish_approval(token, 'cancelled')
 
     @Slot()
     def cancelView(self):
@@ -427,15 +510,21 @@ class ManagerBridge(QObject):
             try:
                 if token and token not in self._approvals:
                     return None
-                if plan.get('type') == 'mount':
+                if plan.get('type') == 'application':
+                    validate = self._application_checks.get(token)
+                    if validate is not None and not validate():
+                        raise PlatformError('stale_application', '应用定义已变化，请重新执行')
+                    current = self._make_application_plan(plan['definition'], plan['action'])
+                elif plan.get('type') == 'mount':
                     current = self._make_mount_plan(plan['requester'], plan['provider'], plan['viewId'])
                 else:
                     current = self._make_plan(plan['requester'], plan['target'], plan['action'])
                 if (current['requesterInstallation'] != plan['requesterInstallation']
                     or current['requesterInstance'] != plan['requesterInstance']
-                    or [row['key'] for row in current['permissions']] != [row['key'] for row in plan['permissions']]):
+                    or [(row['key'], row.get('runId')) for row in current['permissions']] != [(row['key'], row.get('runId')) for row in plan['permissions']]):
                     raise ValueError('能力或发起实例已变化，请重新选择')
-                client = self.runtime.client(plan['requester'])
+                client = (self.runtime.application_client(plan['requester']) if plan.get('type') == 'application'
+                          else self.runtime.client(plan['requester']))
                 if client.instance != plan['requesterInstance']:
                     raise ValueError('发起组件已重新启动，请重新选择')
                 for row in current['permissions']:
@@ -444,6 +533,9 @@ class ManagerBridge(QObject):
                                            expected_key=row['key'])
                 if token and token not in self._approvals:
                     return None
+                if plan.get('type') == 'application':
+                    outcome = 'confirmed'
+                    return {'_notice': '应用授权已确认'}
                 context = self.runtime.user_context(plan['requester'])
                 if current.get('usesRequirements'):
                     approved = {tuple(row['key']) for row in current['permissions']}
@@ -491,6 +583,16 @@ class Manager(Presentation):
             raise PlatformError('management_unavailable', '组件管理未运行')
         self.show()
         return self._gui.run(lambda: self.bridge.request_mount(requester, target, view_id, on_finished))
+
+    def request_application(self, definition, flow, on_finished=None, validate=None):
+        if not self.running or self.bridge is None:
+            raise PlatformError('management_unavailable', '组件管理未运行')
+        self.show()
+        return self._gui.run(lambda: self.bridge.request_application(definition, flow, on_finished, validate))
+
+    def cancel_approval(self, token):
+        if self.bridge is not None:
+            return self._gui.run(lambda: self.bridge.cancel_approval(token))
 
     def report_notice(self, message):
         def update():

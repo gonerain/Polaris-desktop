@@ -32,6 +32,15 @@ class DesktopUserAccess:
     def data_directory(self):
         return self._runtime.component_data_directory(self._subject)
 
+    def check_capabilities(self, context, handles):
+        """Authorization-only check for reusing an already-created native view."""
+        self._runtime.validate_context(context)
+        for handle in handles:
+            fresh = self._runtime.collaboration.bind(handle.target, handle.operation)
+            if fresh != handle:
+                raise PlatformError('stale_handle', '视图能力已变化')
+            self._runtime.authorization.check(context, handle.semantic)
+
     def prepare_mount(self, target, descriptor, on_finished=None):
         # A picker click opens the trusted approval UI; it never grants by itself.
         self.context()  # Verify this is the bound local GUI input entry.

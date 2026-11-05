@@ -276,7 +276,11 @@ class Canvas(Presentation):
         self._restoring = False
         self.dispatcher = GuiDispatcher()
         self.actions = CanvasActions(self)
-        self.qt_context = {'canvasActions': self.actions}
+        self.application_host = None
+        if runtime is not None:
+            from polaris_platform.desktop.application_host import ApplicationHost
+            self.application_host = ApplicationHost(runtime, self.hold)
+        self.qt_context = {'canvasActions': self.actions, 'applicationHost': self.application_host}
         from polaris_platform.desktop.user_access import DesktopUserAccess
         self.user_access = DesktopUserAccess(runtime) if runtime is not None else None
         self.available_views = []
@@ -331,6 +335,9 @@ class Canvas(Presentation):
         if self.user_access is not None:
             self.user_access.bind(port.id)
             self._load_storage_directory()
+        if self.application_host is not None:
+            directory = self._storage.path.parent if self._storage.path else None
+            self.dispatcher.run(lambda: self.application_host.configure(directory))
         self.dispatcher.run(self._monitor.start)
 
     def _load_storage_directory(self):
@@ -354,6 +361,8 @@ class Canvas(Presentation):
             self.mounts.clear()
             for record in records:
                 record["cancelled"] = True
+        if self.application_host is not None:
+            self.dispatcher.run(self.application_host.close)
         self.dispatcher.run(self._flush_layout)
         self.dispatcher.run(self._timer.stop)
         self.dispatcher.run(self._monitor.stop)
@@ -546,7 +555,7 @@ class Canvas(Presentation):
                     continue
                 for descriptor in component.get('description', {}).get('views', []):
                     if descriptor.get('adapter') == 'qt-quick-item':
-                        self.available_views.append(dict(target=component['id'], componentName=component['manifest']['name'],
+                        self.available_views.append(dict(target=component.get('instanceId', component['id']), stableInstanceId=component.get('instanceId'), componentName=component['manifest']['name'],
                             title=descriptor.get('title', descriptor['id']), descriptor=descriptor))
         self.actions.viewsChanged.emit()
 
@@ -568,9 +577,34 @@ class Canvas(Presentation):
             raise PlatformError('component_unavailable', 'Canvas is stopped')
         bound = client.bind(target, create)
         release_bound = client.bind(target, release)
+        stable_id = getattr(bound, 'instanceId', None)
+        if stable_id:
+            target = stable_id
+        declared = None
+        if self.user_access is not None:
+            current = self.user_access.status(target)
+            declared = next((view for view in current.get('description', {}).get('views', []) if view.get('id') == view_id), None)
+            if declared is not None:
+                descriptor = {**declared, **descriptor}
+                create = str(declared.get('create', 'create_view'))
+                release = str(declared.get('release', 'release_view'))
+                bound = client.bind(target, create)
+                release_bound = client.bind(target, release)
+        policy = (declared or descriptor).get('instancePolicy', 'multiple')
+        if policy not in ('single', 'multiple'):
+            raise PlatformError('invalid_view_policy', 'Unknown view instance policy')
+        if policy == 'single':
+            if self.user_access is None:
+                raise PlatformError('permission_required', 'Single-view reuse requires verified caller authority')
+            checks = [bound, release_bound]
+            for permission in (declared or descriptor).get('permissions', []):
+                if permission.get('kind', 'operation') == 'operation':
+                    checks.append(client.bind(permission.get('target', target), permission['name']))
+            self.user_access.check_capabilities(context, checks)
         window_state = self._window('status', {'handle': self.handle}, context)
         if self.session_id is None or not window_state.get('visible'):
             self.show(context, {})
+        restoring_layout = layout_id is not None
         layout_id = layout_id or uuid.uuid4().hex
         mount_id = uuid.uuid4().hex
         preferred = descriptor.get('preferredSize')
@@ -583,6 +617,23 @@ class Canvas(Presentation):
         card_width = dimension('width', 380, 240, 1600)
         card_height = dimension('height', 340, 130, 1200)
         with self._lock:
+            # Duplicate selection and insertion share this lock, including
+            # concurrent calls arriving before either provider item is attached.
+            if policy == 'single':
+                duplicate = next((record for record in self.mounts.values()
+                                  if record['target'] == target and record['view'] == view_id
+                                  and not record['cancelled']), None)
+                if duplicate is not None:
+                    if restoring_layout and duplicate['layoutId'] != layout_id:
+                        raise PlatformError('view_layout_conflict', '单视图存在重复保存布局，请移除重复布局后重试')
+                    previous = duplicate['context']
+                    if (previous.origin != context.origin or previous.source != context.source
+                            or previous.origin_installation != context.origin_installation
+                            or not previous.scope <= context.scope):
+                        raise PlatformError('view_context_conflict', '已有视图使用不同授权范围，请先关闭再重新打开')
+                    if duplicate['layout']['collapsed']:
+                        self.set_layout(dict(mountId=duplicate['mountId'], collapsed=False), context)
+                    return dict(mountId=duplicate['mountId'], state=duplicate['state'], reused=True)
             # Find a free position using current geometries, including user-moved cards.
             existing = [dict(r['layout']) for r in self.mounts.values()]
             # Text cards use a Flow with 330×160 items and a 16 px gap.
@@ -607,7 +658,7 @@ class Canvas(Presentation):
                         break
                 if found:
                     break
-            record = dict(mountId=mount_id, layoutId=layout_id, target=target, view=view_id, title=str(descriptor.get('title', target)),
+            record = dict(mountId=mount_id, layoutId=layout_id, target=target, stableInstanceId=stable_id, view=view_id, title=str(descriptor.get('title', target)),
                           create=create, release=release, bound=bound, release_bound=release_bound, context=context, handle=None,
                           state='pending', error='', container=None, item=None, client=client, cancelled=False,
                           preferredSize=(card_width, card_height),
@@ -617,8 +668,11 @@ class Canvas(Presentation):
             saved = self._storage.entries.get(layout_id)
             if saved is not None:
                 record['layout'] = dict(saved['layout'])
+                if stable_id and not saved.get('stableInstanceId'):
+                    saved.update(target=target, stableInstanceId=stable_id)
+                    self._save_layout()
             else:
-                self._storage.entries[layout_id] = dict(id=layout_id, target=target, view=view_id, layout=dict(record['layout']))
+                self._storage.entries[layout_id] = dict(id=layout_id, target=target, stableInstanceId=stable_id, view=view_id, layout=dict(record['layout']))
                 self._save_layout()
             record['generation'] = self._generation
             self.mounts[mount_id] = record
@@ -787,12 +841,22 @@ class Canvas(Presentation):
                         existing['cancelled'] = True
                 if existing is not None:
                     self._release(existing, context=context)
-                selection = next((v for v in self.available_views if v['target'] == saved['target'] and v['descriptor']['id'] == saved['view']), None)
+                saved_target = saved.get('stableInstanceId') or saved['target']
+                selection = next((v for v in self.available_views if v['target'] == saved_target and v['descriptor']['id'] == saved['view']), None)
+                if selection is None and not saved.get('stableInstanceId'):
+                    # Legacy aliases may resolve only to the current default instance.
+                    try:
+                        stable = self.user_access.status(saved_target).get('instanceId', saved_target)
+                        selection = next((v for v in self.available_views if v['target'] == stable and v['descriptor']['id'] == saved['view']), None)
+                    except PlatformError:
+                        pass
                 if selection is None:
                     continue
                 try:
-                    self._mount(dict(target=saved['target'], view=saved['view'], descriptor=selection['descriptor']), context, layout_id=identity)
-                except PlatformError:
+                    self._mount(dict(target=selection['target'], view=saved['view'], descriptor=selection['descriptor']), context, layout_id=identity)
+                except PlatformError as error:
+                    if error.code == 'view_layout_conflict':
+                        self.actions.failed.emit('', error.message)
                     pass  # Keep intent intact for a later authorized local input.
         finally:
             with self._lock:

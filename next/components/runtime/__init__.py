@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 from threading import RLock
-from uuid import uuid4
+from uuid import uuid4, UUID
 from dataclasses import replace
 from polaris_platform.component import Component
 from polaris_platform.protocol import Context, Handle, PlatformError, capability, validate_description, _dispatched, handler_signature
@@ -63,7 +63,7 @@ class Client:
 
     def bind(self, target, operation):
         self.__runtime.validate_client(self)
-        return self.__runtime.collaboration.bind(target, operation)
+        return self.__runtime.collaboration.bind(self.__runtime._address(target), operation)
 
     def call(self, target, operation, params=None, context=None):
         return self.invoke(self.bind(target, operation), params, context)
@@ -81,7 +81,10 @@ class Client:
         return RequiredBindings(self, bindings)
 
     def subscribe(self, target, event, callback, context=None, expected=None):
+        target = self.__runtime._address(target)
         context = self._context(context)
+        if context.origin in self.__runtime._application_ids:
+            raise PlatformError('application_binding_unsupported', 'Application event subscriptions are not supported')
         if expected is None:
             return self.__runtime.collaboration.subscribe(target, event, callback, context)
         return self.__runtime.collaboration.subscribe(target, event, callback, context, expected=expected)
@@ -134,6 +137,13 @@ class Runtime(Component):
         super().__init__()
         self._lock = RLock()
         self._records = {}
+        self._application_principals = {}
+        self._application_contexts = {}
+        self._application_ids = set()
+        self._instance_storage = None
+        self._saved_instances = []
+        self._retired_instances = set()
+        self._application_bindings = {}
         self._seal = secrets.token_bytes(32)
         self.collaboration = self.authorization = None
         self.roles = {}
@@ -164,8 +174,11 @@ class Runtime(Component):
         with self._lock:
             if component_id in self._records:
                 raise PlatformError("already_installed", component_id)
+            if (component_id in self._application_ids or component_id in self._retired_instances
+                    or (installation_id and (self._address(installation_id) in self._records or installation_id in self._application_ids or installation_id in self._retired_instances))):
+                raise PlatformError('identity_collision', component_id)
             self._records[component_id] = dict(manifest=dict(manifest), factory=factory,
-                installation=installation_id or uuid4().hex, instance=None, state="installed", component=None, error=None, directory=str(Path(directory).resolve()) if directory else None, autostart=bool(autostart), trustedBindings=bool(trusted_bindings))
+                installation=installation_id or uuid4().hex, instance=None, state="installed", component=None, error=None, directory=str(Path(directory).resolve()) if directory else None, autostart=bool(autostart), trustedBindings=bool(trusted_bindings), componentType=component_id, isDefault=True, config={})
             was_removed = component_id in self._removed_installations
             self._removed_installations.discard(component_id)
             try:
@@ -204,13 +217,19 @@ class Runtime(Component):
                 raise PlatformError("invalid_manifest", "Process entry requires a nonempty command array")
         if not isinstance(entry.get("kwargs", {}), dict):
             raise PlatformError("invalid_manifest", "Entry kwargs must be an object")
+        policy = manifest.get('instances', {'mode': 'single'})
+        if (not isinstance(policy, dict) or set(policy) != {'mode'}
+                or policy['mode'] not in ('single', 'multiple')
+                or (policy['mode'] == 'multiple' and entry['mode'] != 'inprocess')
+                or (policy['mode'] == 'multiple' and 'instance_context' in entry.get('kwargs', {}))):
+            raise PlatformError('invalid_manifest', 'Invalid component instance policy')
 
     def export_installations(self):
         """Public manager migration record; component-owned data is not included."""
         with self._lock:
             return [{"manifest": dict(r["manifest"]), "installationId": r["installation"],
                      "directory": r["directory"], "autostart": r["autostart"], "trustedBindings": r["trustedBindings"]}
-                    for r in self._records.values()]
+                    for r in self._records.values() if r.get('isDefault', True)]
 
     def import_installations(self, records, factory_resolver):
         if _active.get() is not None:
@@ -220,16 +239,38 @@ class Runtime(Component):
 
     def replace_component(self, component_id, manifest, factory):
         """Trusted update, retaining installation identity through a public control API."""
+        component_id = self._address(component_id)
         if _active.get() is not None:
             raise PlatformError("permission_denied", "Replacement requires trusted user management")
+        self.validate_manifest(manifest)
         if manifest.get("id") != component_id or manifest.get("platformApi") != 1:
             raise PlatformError("invalid_manifest", "Replacement must preserve component ID and API")
         if component_id == self.roles.get("runtime"):
             raise PlatformError("restart_required", "Changing the management implementation requires a new bootstrap")
-        self.stop_component(component_id)
+        siblings = [r for r in self._records.values() if not r.get('isDefault', True) and r['componentType'] == component_id]
+        if any(r['state'] not in ('installed', 'stopped', 'failed') for r in siblings):
+            raise PlatformError('instance_in_use', 'Stop additional instances before replacing this installation')
+        if siblings and manifest.get('instances', {}).get('mode') != 'multiple':
+            raise PlatformError('instances_unsupported', 'Replacement must retain the multiple-instance contract')
         record = self._record(component_id)
-        record.update(manifest=dict(manifest), factory=factory, component=None)
-        return self.start_component(component_id)
+        previous = [(item, item['manifest'], item['factory']) for item in [record, *siblings]]
+        was_running, autostart = record['state'] == 'running', record['autostart']
+        self.stop_component(component_id, persist=False)
+        try:
+            for item in [record, *siblings]:
+                item.update(manifest=dict(manifest), factory=factory, component=None)
+            return self.start_component(component_id)
+        except Exception as error:
+            try:
+                for item, old_manifest, old_factory in previous:
+                    item.update(manifest=old_manifest, factory=old_factory, component=None, error=None, state='stopped')
+                record['autostart'] = autostart
+                self._persist()
+                if was_running:
+                    self.start_component(component_id)
+            except Exception as recovery:
+                raise PlatformError('rollback_failed', f'Replacement failed: {error}; restoration failed: {recovery}') from error
+            raise
 
     def management_options(self, component_id):
         record = self._record(component_id)
@@ -252,7 +293,16 @@ class Runtime(Component):
             raise PlatformError("busy", component_id)
 
     def uninstall_component(self, component_id):
+        component_id = self._address(component_id)
         with self._lock:
+            if not self._record(component_id).get('isDefault', True):
+                raise PlatformError('invalid_params', 'Uninstall requires a component type')
+            if any(not r.get('isDefault', True) and r['componentType'] == component_id for r in self._records.values()):
+                raise PlatformError('instance_in_use', 'Remove additional instances before uninstalling')
+            identity = self._record(component_id)['installation']
+            references = sorted(app for app, ids in self._application_bindings.items() if identity in ids)
+            if references:
+                raise PlatformError('instance_in_use', 'Instance is referenced by applications', {'applicationIds': references})
             self._check_management(component_id, "uninstall")
             record = self._record(component_id)
             record["uninstalling"] = True
@@ -317,24 +367,54 @@ class Runtime(Component):
         if not replace:
             raise PlatformError("already_installed", component_id)
         self._check_management(component_id)
+        siblings = [r for r in self._records.values() if not r.get('isDefault', True) and r['componentType'] == component_id]
+        if any(r['state'] not in ('installed', 'stopped', 'failed') for r in siblings):
+            raise PlatformError('instance_in_use', 'Stop additional instances before replacing this installation')
+        if siblings and manifest.get('instances', {}).get('mode') != 'multiple':
+            raise PlatformError('instances_unsupported', 'Replacement must retain the multiple-instance contract')
         record = self._record(component_id)
         # Validate reload eligibility before withdrawing the old instance.
         invalidate_plugin_modules(record["manifest"], record["directory"], check_only=True, installations=self.export_installations())
         invalidate_plugin_modules(manifest, directory, check_only=True, installations=self.export_installations())
         running, autostart = record["state"] == "running", record["autostart"]
+        previous = [(item, {key: item[key] for key in ('manifest', 'factory', 'directory', 'autostart')}) for item in [record, *siblings]]
         self.stop_component(component_id, persist=False)
-        invalidate_plugin_modules(record["manifest"], record["directory"], installations=self.export_installations())
-        invalidate_plugin_modules(manifest, directory, installations=self.export_installations())
-        record.update(manifest=dict(manifest), factory=factory, directory=str(directory),
-                      component=None, error=None, autostart=autostart)
-        self._persist()
-        if running:
-            self.start_component(component_id)
+        try:
+            invalidate_plugin_modules(previous[0][1]['manifest'], previous[0][1]['directory'], installations=self.export_installations())
+            invalidate_plugin_modules(manifest, directory, installations=self.export_installations())
+            for item in [record, *siblings]:
+                item.update(manifest=dict(manifest), factory=factory, directory=str(directory), component=None, error=None)
+            record['autostart'] = autostart
+            self._persist()
+            if running:
+                self.start_component(component_id)
+        except Exception as error:
+            try:
+                if record['state'] == 'running':
+                    self.stop_component(component_id, persist=False)
+                invalidate_plugin_modules(manifest, directory, installations=self.export_installations())
+                for item, original in previous:
+                    item.update(**original, component=None, error=None, state='stopped')
+                self._persist()
+                if running:
+                    self.start_component(component_id)
+            except Exception as recovery:
+                raise PlatformError('rollback_failed', f'Replacement failed: {error}; restoration failed: {recovery}') from error
+            raise
         return component_id
+
+    def _address(self, target):
+        with self._lock:
+            if target in self._records:
+                return target
+            for address, record in self._records.items():
+                if record['installation'] == target:
+                    return address
+            return target
 
     def _record(self, component_id):
         try:
-            return self._records[component_id]
+            return self._records[self._address(component_id)]
         except KeyError:
             raise PlatformError("not_installed", component_id) from None
 
@@ -343,6 +423,20 @@ class Runtime(Component):
 
     def load_installations(self, path):
         from polaris_platform.persistence import read_json
+        self._state_dir = Path(path).resolve().parent
+        self._instance_storage = Path(path).with_name('component-instances.json')
+        saved_instances = read_json(self._instance_storage, {'version': 1, 'instances': []})
+        if not isinstance(saved_instances, dict) or saved_instances.get('version') != 1 or not isinstance(saved_instances.get('instances'), list):
+            raise PlatformError('invalid_instances', 'Unsupported component instance records')
+        self._saved_instances = saved_instances['instances']
+        retired = saved_instances.get('retired', [])
+        if not isinstance(retired, list) or any(not isinstance(i, str) for i in retired):
+            raise PlatformError('invalid_instances', 'Invalid retired instance records')
+        self._retired_instances = set(retired)
+        refs = saved_instances.get('applicationBindings', {})
+        if not isinstance(refs, dict) or any(not isinstance(k, str) or not isinstance(v, list) or any(not isinstance(i, str) for i in v) for k, v in refs.items()):
+            raise PlatformError('invalid_instances', 'Invalid application instance references')
+        self._application_bindings = {k: set(v) for k, v in refs.items()}
         self._selection_storage = Path(path).with_name('capability-bindings.json')
         self._selections = read_json(self._selection_storage, {})
         self._contract_storage = Path(path).with_name('capability-contracts.json')
@@ -423,10 +517,139 @@ class Runtime(Component):
                 write_json(self._storage.with_name("removed-installations.json"), sorted(self._removed_installations))
                 write_json(self._storage, self.export_installations())
 
+    def _persist_instances(self):
+        if self._instance_storage is not None:
+            from polaris_platform.persistence import write_json
+            rows = [dict(instanceId=key, componentType=r['componentType'],
+                         installationId=r['packageInstallation'], config=deepcopy(r['config']),
+                         autostart=r['autostart'])
+                    for key, r in self._records.items() if not r.get('isDefault', True)]
+            write_json(self._instance_storage, dict(version=1, instances=rows,
+                                                     retired=sorted(self._retired_instances),
+                                                     applicationBindings={k: sorted(v) for k, v in self._application_bindings.items()}))
+
+    def _add_instance_record(self, component_type, identity, installation, config, autostart=False):
+        parent = self._records.get(component_type)
+        if not parent or not parent.get('isDefault', True) or parent['installation'] != installation:
+            raise PlatformError('invalid_instances', 'Instance installation is missing or replaced')
+        manifest = parent['manifest']
+        if manifest.get('instances', {}).get('mode') != 'multiple' or manifest['entry']['mode'] != 'inprocess':
+            raise PlatformError('instances_unsupported', component_type)
+        if identity in self._retired_instances or self._address(identity) in self._records or identity in self._application_ids:
+            raise PlatformError('identity_collision', identity)
+        self._records[identity] = dict(manifest=dict(manifest), factory=parent['factory'],
+            installation=identity, packageInstallation=installation, componentType=component_type,
+            isDefault=False, config=deepcopy(config), instance=None, state='installed', component=None,
+            error=None, directory=parent['directory'], autostart=bool(autostart),
+            trustedBindings=parent['trustedBindings'])
+        if self.authorization is not None:
+            self.authorization.bind_identity(identity, identity)
+
+    def restore_instances(self):
+        """Restore additional instances after the installed definitions and authorization."""
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Instance restoration requires trusted management')
+        with self._lock:
+            rows = self._saved_instances
+            self._saved_instances = []
+            added = []
+            try:
+                for row in rows:
+                    identity = row['instanceId']
+                    if not isinstance(identity, str) or UUID(identity).hex != identity or not isinstance(row['config'], dict) or type(row['autostart']) is not bool:
+                        raise ValueError('Invalid instance record')
+                    json.dumps(row['config'], allow_nan=False)
+                    self._add_instance_record(row['componentType'], identity, row['installationId'], row['config'], row['autostart'])
+                    added.append(identity)
+            except (KeyError, TypeError, ValueError, PlatformError) as error:
+                for identity in added:
+                    self._records.pop(identity, None)
+                self._saved_instances = rows
+                raise PlatformError('invalid_instances', str(error)) from error
+            if self._retired_instances and not hasattr(self.authorization, 'forget_identity'):
+                raise PlatformError('unsupported_authorization', 'Authorization cannot retire identities safely')
+            for identity in self._retired_instances:
+                self.authorization.forget_identity(identity)
+
+    def list_instances(self, component_type=None):
+        with self._lock:
+            return [self.status(key) for key, r in self._records.items()
+                    if component_type is None or r['componentType'] == component_type]
+
+    def create_instance(self, component_type, *, config=None):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Creating instances requires trusted management')
+        if config is None:
+            config = {}
+        if not isinstance(config, dict):
+            raise PlatformError('invalid_params', 'Instance config must be an object')
+        try:
+            config = json.loads(json.dumps(config, allow_nan=False))
+        except (TypeError, ValueError) as error:
+            raise PlatformError('invalid_params', 'Instance config must be JSON') from error
+        with self._lock:
+            if self._state_dir is None:
+                raise PlatformError('instance_storage_required', 'Multiple instances require persistent state')
+            parent = self._records.get(component_type)
+            if parent is None or not parent.get('isDefault', True):
+                raise PlatformError('not_installed', component_type)
+            identity = uuid4().hex
+            self._add_instance_record(component_type, identity, parent['installation'], config)
+            try:
+                self._persist_instances()
+            except Exception:
+                self._records.pop(identity, None)
+                raise
+            return identity
+
+    def start_instance(self, instance_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Instance lifecycle requires trusted management')
+        if self._record(instance_id)['installation'] != instance_id:
+            raise PlatformError('invalid_params', 'A stable instance ID is required')
+        return self.start_component(instance_id)
+
+    def stop_instance(self, instance_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Instance lifecycle requires trusted management')
+        if self._record(instance_id)['installation'] != instance_id:
+            raise PlatformError('invalid_params', 'A stable instance ID is required')
+        return self.stop_component(instance_id)
+
+    def destroy_instance(self, instance_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Destroying instances requires trusted management')
+        with self._lock:
+            address = self._address(instance_id)
+            record = self._record(address)
+            if record.get('isDefault', True):
+                raise PlatformError('protected_instance', 'Default instances are removed with their installation')
+            references = sorted(app for app, ids in self._application_bindings.items() if instance_id in ids)
+            if references:
+                raise PlatformError('instance_in_use', 'Instance is referenced by applications', {'applicationIds': references})
+            if record['state'] not in ('installed', 'stopped', 'failed'):
+                raise PlatformError('instance_in_use', 'Stop the instance and release its views first')
+            if not hasattr(self.authorization, 'forget_identity'):
+                raise PlatformError('unsupported_authorization', 'Authorization cannot retire identities safely')
+            del self._records[address]
+            self._retired_instances.add(instance_id)
+            try:
+                self._persist_instances()
+            except Exception:
+                self._records[address] = record
+                self._retired_instances.discard(instance_id)
+                raise
+            self.authorization.forget_identity(instance_id)
+        self.refresh_all()
+        return {'instanceId': instance_id, 'destroyed': True}
+
     def component_data_directory(self, component_id):
         """Trusted assembly location; each component owns its data beneath it."""
         record = self._record(component_id)
-        return self._state_dir / 'components' / record['installation'] if self._state_dir is not None else None
+        if self._state_dir is None:
+            return None
+        directory = 'components' if record.get('isDefault', True) else 'component-instances'
+        return self._state_dir / directory / record['installation']
 
     def component_instance(self, component_id):
         return self._record(component_id)["component"]
@@ -434,10 +657,20 @@ class Runtime(Component):
     def prepare(self, component_id):
         record = self._record(component_id)
         if record["component"] is None:
-            record["component"] = record["factory"]()
+            if record['manifest'].get('instances', {}).get('mode') == 'multiple':
+                data_dir = self.component_data_directory(component_id)
+                if data_dir is None:
+                    raise PlatformError('instance_storage_required', 'Multiple instances require persistent state')
+                context = dict(instanceId=record['installation'],
+                               dataDir=str(data_dir),
+                               config=deepcopy(record['config']))
+                record["component"] = record["factory"](instance_context=context)
+            else:
+                record["component"] = record["factory"]()
         return record["component"]
 
     def start_component(self, component_id):
+        component_id = self._address(component_id)
         with self._lock:
             record = self._record(component_id)
             if record.get("uninstalling"):
@@ -466,7 +699,7 @@ class Runtime(Component):
             component.start(Client(self, component_id, record["instance"]))
             record["state"] = "running"
             record["autostart"] = True
-            self._persist()
+            self._persist() if record.get("isDefault", True) else self._persist_instances()
             self.refresh(component_id, record['instance'])
             return self.status(component_id)
         except Exception as error:
@@ -486,6 +719,7 @@ class Runtime(Component):
             raise
 
     def stop_component(self, component_id, force=False, persist=True, _uninstall=False):
+        component_id = self._address(component_id)
         with self._lock:
             record = self._record(component_id)
             if record.get("uninstalling") and not _uninstall:
@@ -496,7 +730,7 @@ class Runtime(Component):
                 raise PlatformError("busy", component_id)
             if persist:
                 record["autostart"] = False
-                self._persist()
+                self._persist() if record.get("isDefault", True) else self._persist_instances()
             record["state"] = "stopping"
             self.collaboration.withdraw(component_id)
         self.refresh_all()
@@ -531,11 +765,114 @@ class Runtime(Component):
         self.collaboration.withdraw(component_id)
         self.refresh_all()
 
+    def register_application_principal(self, application_id, *, restore=False):
+        """Register an application-owned authority identity, never a provider."""
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application registration requires trusted management')
+        try:
+            if not isinstance(application_id, str) or UUID(application_id).hex != application_id:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            raise PlatformError('invalid_application', 'Application ID must be a canonical UUID') from None
+        with self._lock:
+            if application_id in self._retired_instances or application_id in self._records or any(r['installation'] == application_id for r in self._records.values()):
+                raise PlatformError('identity_collision', application_id)
+            if application_id not in self._application_principals:
+                if not restore and (self.authorization.scope(application_id) or self.authorization.scope(application_id, True)):
+                    raise PlatformError('application_identity_reserved', 'Application ID already has authorization history')
+                self._application_principals[application_id] = uuid4().hex
+                self._application_contexts[application_id] = set()
+                self._application_ids.add(application_id)
+            self.authorization.bind_identity(application_id, application_id)
+        return application_id
+
+    def register_application_bindings(self, application_id, instance_ids):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application bindings require trusted management')
+        if application_id not in self._application_principals:
+            raise PlatformError('unknown_application', application_id)
+        if not isinstance(instance_ids, (list, tuple, set)) or any(not isinstance(i, str) for i in instance_ids):
+            raise PlatformError('invalid_params', 'Instance references must be a list of IDs')
+        with self._lock:
+            requested = set(instance_ids)
+            for identity in requested:
+                if self._record(identity)['installation'] != identity:
+                    raise PlatformError('invalid_params', 'Bindings require stable instance IDs')
+            previous = self._application_bindings.get(application_id)
+            self._application_bindings[application_id] = requested
+            try:
+                self._persist_instances()
+            except Exception:
+                if previous is None:
+                    self._application_bindings.pop(application_id, None)
+                else:
+                    self._application_bindings[application_id] = previous
+                raise
+
+    def revoke_application_authority(self, application_id):
+        """Revoke an application's authority without changing its durable bindings."""
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application revocation requires trusted management')
+        with self._lock:
+            if application_id not in self._application_principals:
+                raise PlatformError('unknown_application', application_id)
+            if not hasattr(self.authorization, 'forget_identity'):
+                raise PlatformError('unsupported_authorization', 'Authorization cannot retire identities safely')
+            self.authorization.forget_identity(application_id)
+            self.authorization.bind_identity(application_id, application_id)
+            self._application_principals[application_id] = uuid4().hex
+            self._application_contexts[application_id] = set()
+
+    def unregister_application_principal(self, application_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application removal requires trusted management')
+        with self._lock:
+            if application_id not in self._application_principals:
+                raise PlatformError('unknown_application', application_id)
+            # Revoke all privileges before releasing the identity; no authority
+            # is inherited if a deleted application is later recreated.
+            if not hasattr(self.authorization, 'forget_identity'):
+                raise PlatformError('unsupported_authorization', 'Authorization cannot retire identities safely')
+            self.authorization.forget_identity(application_id)
+            previous = self._application_bindings.pop(application_id, None)
+            try:
+                self._persist_instances()
+            except Exception:
+                if previous is not None:
+                    self._application_bindings[application_id] = previous
+                raise
+            del self._application_principals[application_id]
+            self._application_contexts.pop(application_id, None)
+
+    def application_client(self, application_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application clients require trusted management')
+        with self._lock:
+            generation = self._application_principals.get(application_id)
+            if generation is None:
+                raise PlatformError('unknown_application', application_id)
+            return Client(self, application_id, generation)
+
+    def application_context(self, application_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application authority requires trusted management')
+        if application_id not in self._application_principals:
+            raise PlatformError('unknown_application', application_id)
+        context = self._stamp(Context(application_id, application_id, 'user',
+                                      self.authorization.scope(application_id), origin_installation=application_id))
+        self._application_contexts[application_id].add(context.request_id)
+        return context
+
     def client(self, component_id):
+        component_id = self._address(component_id)
         record = self._record(component_id)
         return Client(self, component_id, record["instance"])
 
     def validate_client(self, client):
+        if client.id in self._application_principals:
+            if self._application_principals[client.id] != client.instance:
+                raise PlatformError('stale_instance', client.id)
+            return
         record = self._record(client.id)
         if record["instance"] != client.instance or record["state"] not in ("running", "starting"):
             raise PlatformError("stale_instance", client.id)
@@ -557,6 +894,8 @@ class Runtime(Component):
             valid = False
         if not valid:
             raise PlatformError("invalid_context", "Context identity or scope was altered")
+        if context.origin in self._application_ids and context.request_id not in self._application_contexts.get(context.origin, set()):
+            raise PlatformError('invalid_context', 'Application session is no longer active')
 
     def derive_context(self, context, *, caller=None, scope=None):
         self.validate_context(context)
@@ -566,6 +905,7 @@ class Runtime(Component):
                                    scope=context.scope if scope is None else frozenset(scope)))
 
     def user_context(self, requester, targets=None):
+        requester = self._address(requester)
         if _active.get() is not None:
             raise PlatformError("scope_escalation", "User authority is unavailable inside request handlers")
         self._record(requester)
@@ -575,6 +915,7 @@ class Runtime(Component):
         return self._stamp(Context(requester, requester, "user", scope, origin_installation=self._record(requester)["installation"]))
 
     def background_context(self, requester):
+        requester = self._address(requester)
         if _active.get() is not None:
             raise PlatformError("scope_escalation", "Background authority is unavailable inside request handlers")
         return self._stamp(Context(requester, requester, "background", self.authorization.scope(requester, True), origin_installation=self._record(requester)["installation"]))
@@ -582,7 +923,10 @@ class Runtime(Component):
     def grant(self, requester, target, name, kind="operation", background=False, expected_key=None):
         if _active.get() is not None:
             raise PlatformError("permission_denied", "Only trusted user management can grant authority")
-        self._record(requester)
+        if requester not in self._application_principals:
+            requester = self._address(requester)
+            self._record(requester)
+        target = self._address(target)
         record = self.collaboration.describe_target(target)
         metadata = record["description"].get("operations" if kind == "operation" else "events", {}).get(name)
         if metadata is None:
@@ -593,6 +937,7 @@ class Runtime(Component):
         self.authorization.grant(requester, key, background)
 
     def revoke(self, requester, target, name, kind="operation", background=False):
+        requester = self._address(requester)
         if _active.get() is not None:
             raise PlatformError("permission_denied", "Only trusted user management can revoke authority")
         record = self._record(target)
@@ -611,6 +956,9 @@ class Runtime(Component):
                 or handle.contract != metadata.get('provides')
                 or capability(record['installation'], 'operation', handle.operation, metadata) != handle.semantic):
             raise PlatformError('stale_handle', handle.operation)
+        if (context.origin in self._application_ids
+                and metadata.get('applicationBinding') != 'instance'):
+            raise PlatformError('application_binding_unsupported', 'Provider has not opted this operation into instance-bound application use')
         component = record['component']
         bindings = self.resolved_requirements(handle.target, 'operation', handle.operation, handle.instance) if metadata.get('requires') else {}
         native_create = context.source == 'user' and metadata.get('profile') == 'qt-native' and 'parent' in params and any(
@@ -734,6 +1082,9 @@ class Runtime(Component):
                             if name in operations:
                                 operations[name].update(available=False, reason=dep)
                 records[target] = dict(id=target, installation=record['installation'], instance=record['instance'],
+                                       instanceId=record['installation'],
+                                       installationId=record.get('packageInstallation', record['installation']),
+                                       componentType=record['componentType'], runId=record['instance'],
                                        description=description, manifest=record['manifest'])
             graph = DirectoryGraph(records, self._selections)
             if hasattr(self.collaboration, 'replace_directory'):
@@ -776,6 +1127,7 @@ class Runtime(Component):
             return deepcopy(bindings)
 
     def select_provider(self, target, kind, name, alias, installation, consumer_installation):
+        target = self._address(target)
         if _active.get() is not None:
             raise PlatformError('permission_denied', 'Selecting a provider requires trusted management')
         with self._lock:
@@ -788,6 +1140,7 @@ class Runtime(Component):
             self._save_selections(dict.fromkeys(self._graph.selection_keys[node, alias], installation))
 
     def status(self, component_id):
+        component_id = self._address(component_id)
         record = self._record(component_id)
         published = self._graph.records.get(component_id)
         if published and record['state'] == 'running':
@@ -796,7 +1149,10 @@ class Runtime(Component):
                 description['view_state'] = record['component'].describe().get('view_state', {})
         else:
             description = record['component'].describe() if record['component'] else {}
-        return {"id": component_id, **{k: record[k] for k in ("installation", "instance", "state", "error", "manifest")},
+        return {"id": component_id, "componentType": record['componentType'],
+                "installationId": record.get('packageInstallation', record['installation']),
+                "instanceId": record['installation'], "runId": record['instance'], "autostart": record['autostart'], "isDefault": record['isDefault'],
+                **{k: record[k] for k in ("installation", "instance", "state", "error", "manifest")},
                 "description": description,
                 "dependencies": [dict(d, available=self._dependency_available(d)) for d in description.get('dependencies', [])]}
 

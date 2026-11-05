@@ -76,6 +76,8 @@ class Collaboration(Component):
 
     def describe_target(self, target):
         self.require_running()
+        if self.runtime is not None:
+            target = self.runtime._address(target)
         with self._lock:
             if target not in self._entries:
                 raise PlatformError("unavailable", target)
@@ -94,7 +96,7 @@ class Collaboration(Component):
         if not metadata.get("available", True):
             reason = metadata.get("reason")
             raise PlatformError("dependency_unavailable", f"{operation}: {reason}", reason)
-        return Handle(target, record["instance"], operation,
+        return Handle(record["id"], record["instance"], operation,
                       capability(record["installation"], "operation", operation, metadata),
                       metadata.get('provides'), metadata.get('generation', 0))
 
@@ -107,6 +109,8 @@ class Collaboration(Component):
         return self.runtime.dispatch(handle, params, context)
 
     def subscribe(self, target, event, callback, context, expected=None):
+        if self.runtime is not None:
+            target = self.runtime._address(target)
         record = self.describe_target(target)
         meta = record["description"].get("events", {}).get(event)
         if meta is None or not meta.get("available", True):

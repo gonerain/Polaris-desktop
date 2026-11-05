@@ -7,6 +7,7 @@ Button {
     property var canvasPalette: null
     property string glyph: "plus"
     property bool primary: false
+    property bool truncateLabel: false
     property string hint: text
     implicitHeight: 34
     implicitWidth: text.length ? label.implicitWidth + 26 : 32
@@ -24,7 +25,7 @@ Button {
             spacing: 6
             anchors.centerIn: parent
             CanvasIcon { anchors.verticalCenter: parent.verticalCenter; kind: control.glyph; ink: control.primary ? control.canvasPalette.accentInk : control.canvasPalette ? control.canvasPalette.muted : "#697386" }
-            Text { visible: control.text.length > 0; text: control.text; anchors.verticalCenter: parent.verticalCenter; color: control.primary ? control.canvasPalette.accentInk : control.canvasPalette ? control.canvasPalette.ink : "#1f2937"; font.pixelSize: 13; font.weight: Font.Medium }
+            Text { textFormat: Text.PlainText; width: control.truncateLabel ? Math.min(implicitWidth, Math.max(0, control.width - 48)) : implicitWidth; elide: Text.ElideRight; visible: control.text.length > 0; text: control.text; anchors.verticalCenter: parent.verticalCenter; color: control.primary ? control.canvasPalette.accentInk : control.canvasPalette ? control.canvasPalette.ink : "#1f2937"; font.pixelSize: 13; font.weight: Font.Medium }
         }
     }
     background: Rectangle {

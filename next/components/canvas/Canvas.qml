@@ -24,6 +24,11 @@ Rectangle {
     readonly property var paletteForControls: colors
     readonly property bool empty: Object.keys(viewCards).length === 0 && JSON.parse(cardsJson).length === 0
     function chooseView() { canvasActions.refreshViews(); viewPicker.open() }
+    readonly property var appHost: typeof applicationHost === 'undefined' ? null : applicationHost
+    readonly property var applications: appHost ? JSON.parse(appHost.applicationsJson) : []
+    readonly property var selectedApplication: appHost ? JSON.parse(appHost.selectedJson) : ({})
+    readonly property int navigationWidth: applications.length ? 172 : 64
+    readonly property bool applicationSelected: !!selectedApplication.applicationId
     property string cardsJson: '[]'
     property var viewCards: ({})
     property string lastError: ''
@@ -53,35 +58,50 @@ Rectangle {
         }
     }
     Rectangle {
-        x: 64; y: 8; width: 1; height: parent.height - 16; color: colors.border
+        x: canvasRoot.navigationWidth; y: 8; width: 1; height: parent.height - 16; color: colors.border
     }
-    Column {
-        x: 12; y: 18; spacing: 14; z: 11
-        Item { width: 40; height: 40; CanvasIcon { anchors.centerIn: parent; width: 20; height: 20; kind: 'star'; ink: colors.accent } }
-        CanvasButton { canvasPalette: canvasRoot.paletteForControls; glyph: 'plus'; hint: '添加组件'; onClicked: canvasRoot.chooseView() }
-        CanvasButton { canvasPalette: canvasRoot.paletteForControls; glyph: 'palette'; hint: '配色'; objectName: 'canvasThemePicker'; onClicked: themePicker.open() }
+    Flickable {
+        x: 12; y: 18; z: 11; width: canvasRoot.navigationWidth - 24; height: parent.height - 36
+        contentHeight: railColumn.implicitHeight; clip: true; boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: WorkspaceScrollBar { policy: ScrollBar.AsNeeded }
+        Column {
+        id: railColumn; spacing: 10; width: parent.width
+        Item { width: canvasRoot.navigationWidth - 24; height: 40; CanvasIcon { anchors.centerIn: parent; width: 20; height: 20; kind: 'star'; ink: colors.accent } }
+        CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '工作台' : ''; hint: '工作台'; glyph: 'board'; objectName: 'workspaceEntry'; primary: !canvasRoot.applicationSelected; onClicked: if (canvasRoot.appHost) canvasRoot.appHost.select('') }
+        Repeater {
+            model: canvasRoot.applications
+            CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: modelData.title; hint: modelData.title; glyph: 'board'; objectName: 'applicationEntry_' + modelData.applicationId
+                primary: canvasRoot.selectedApplication.applicationId === modelData.applicationId
+                onClicked: canvasRoot.appHost.select(modelData.applicationId) }
+        }
+        Rectangle { width: canvasRoot.navigationWidth - 24; height: 1; color: colors.border }
+        CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '添加组件' : ''; hint: '添加组件'; glyph: 'plus'; onClicked: canvasRoot.chooseView() }
+        CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '配色' : ''; hint: '配色'; glyph: 'palette'; objectName: 'canvasThemePicker'; onClicked: themePicker.open() }
+        CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '导入应用 JSON' : ''; glyph: 'plus'; hint: '开发者：导入应用 JSON'; objectName: 'importApplication'; visible: !!canvasRoot.appHost; onClicked: applicationImport.open() }
     }
-    CanvasWindowHandle { objectName: 'canvasWindowMove'; x: 72; y: 8; width: Math.max(0, parent.width - 280); height: 48 }
+    }
+    CanvasWindowHandle { objectName: 'canvasWindowMove'; x: canvasRoot.navigationWidth + 8; y: 8; width: Math.max(0, parent.width - canvasRoot.navigationWidth - 216); height: 48 }
     Item {
         id: toolbar
-        x: 92; y: 12; width: parent.width - 112; height: 36; z: 10
+        x: canvasRoot.navigationWidth + 28; y: 12; width: parent.width - canvasRoot.navigationWidth - 48; height: 36; z: 10
         Row {
             anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; spacing: 10
             Text { text: 'Polaris'; color: colors.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
         }
         Row {
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 5
-            CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '整理布局'; glyph: 'board'; objectName: 'arrangeCanvas'; visible: !canvasRoot.empty; onClicked: canvasActions.arrange(viewport.width) }
+            CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '整理布局'; glyph: 'board'; objectName: 'arrangeCanvas'; visible: !canvasRoot.applicationSelected && !canvasRoot.empty; onClicked: canvasActions.arrange(viewport.width) }
             CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '添加组件'; glyph: "plus"; objectName: 'chooseComponentView'; onClicked: canvasRoot.chooseView() }
             CanvasButton { canvasPalette: canvasRoot.paletteForControls; glyph: "down"; hint: "收起画布"; objectName: 'dismissCanvas'; onClicked: canvasActions.dismiss() }
         }
     }
-    Text { x: 96; y: 68; text: '工作台'; color: colors.ink; font.pixelSize: 20; font.weight: Font.DemiBold }
-    Rectangle { x: 92; y: 58; width: Math.max(0, parent.width - 112); height: 1; color: colors.border }
+    Text { textFormat: Text.PlainText; width: parent.width - canvasRoot.navigationWidth - 56; elide: Text.ElideRight; x: canvasRoot.navigationWidth + 32; y: 68; text: canvasRoot.applicationSelected ? canvasRoot.selectedApplication.title : '工作台'; color: colors.ink; font.pixelSize: 20; font.weight: Font.DemiBold }
+    Rectangle { x: canvasRoot.navigationWidth + 28; y: 58; width: Math.max(0, parent.width - canvasRoot.navigationWidth - 48); height: 1; color: colors.border }
     Flickable {
         id: viewport
         objectName: 'canvasViewport'
-        anchors.fill: parent; anchors.topMargin: 102; anchors.leftMargin: 84; anchors.rightMargin: 12; anchors.bottomMargin: 12
+        visible: !canvasRoot.applicationSelected
+        anchors.fill: parent; anchors.topMargin: 102; anchors.leftMargin: canvasRoot.navigationWidth + 20; anchors.rightMargin: 12; anchors.bottomMargin: 12
         clip: true
         // Native views own their gestures. Navigation uses the scrollbars or
         // wheel events that were not consumed by a component.
@@ -147,14 +167,103 @@ Rectangle {
         }
     }
     Column {
-        anchors.centerIn: viewport; spacing: 12; visible: canvasRoot.empty
+        anchors.centerIn: viewport; spacing: 12; visible: canvasRoot.empty && !canvasRoot.applicationSelected
         width: Math.min(360, viewport.width - 32)
         Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: 42; height: 42; radius: 12; color: colors.softAccent; CanvasIcon { anchors.centerIn: parent; kind: 'board'; ink: colors.accent; width: 22; height: 22 } }
         Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: '把常用组件放到工作台'; color: colors.ink; font.pixelSize: 17; font.weight: Font.DemiBold; wrapMode: Text.Wrap }
         Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: '添加组件后，可以自由摆放、调整大小和折叠。\n布局会为你保留。'; color: colors.muted; font.pixelSize: 13; wrapMode: Text.Wrap; lineHeight: 1.35 }
         CanvasButton { canvasPalette: canvasRoot.paletteForControls; anchors.horizontalCenter: parent.horizontalCenter; text: '添加第一个组件'; primary: true; onClicked: canvasRoot.chooseView() }
     }
-    Text { anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12; text: canvasRoot.lastError; color: colors.error; width: parent.width - 24; wrapMode: Text.Wrap }
+    ScrollView {
+        id: applicationPageScroll
+        objectName: 'applicationPage'; visible: canvasRoot.applicationSelected
+        anchors.fill: parent; anchors.topMargin: 102; anchors.leftMargin: canvasRoot.navigationWidth + 28; anchors.rightMargin: 24; anchors.bottomMargin: 20
+        clip: true
+        ColumnLayout {
+            width: applicationPageScroll.availableWidth; spacing: 16
+            Repeater {
+                model: canvasRoot.selectedApplication.pages || []
+                Rectangle {
+                    id: applicationForm
+                    required property var modelData
+                    property var values: ({})
+                    Layout.fillWidth: true; implicitHeight: formColumn.implicitHeight + 40
+                    radius: 12; color: colors.card; border.color: colors.border
+                    ColumnLayout {
+                        id: formColumn; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 20; spacing: 12
+                        Text { textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap; text: applicationForm.modelData.title || applicationForm.modelData.id; color: colors.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                        Repeater {
+                            model: applicationForm.modelData.inputs || []
+                            ColumnLayout {
+                                required property var modelData
+                                Layout.fillWidth: true; spacing: 6
+                                Text { textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap; text: modelData.label; color: colors.ink; font.pixelSize: 13 }
+                                TextField {
+                                    objectName: 'applicationInput_' + modelData.name
+                                    Layout.fillWidth: true; text: modelData.default || ''; color: colors.ink
+                                    background: Rectangle { radius: 6; color: colors.panel; border.color: colors.border }
+                                    Component.onCompleted: applicationForm.values[modelData.name] = text
+                                    onTextChanged: applicationForm.values[modelData.name] = text
+                                }
+                            }
+                        }
+                        CanvasButton {
+                            canvasPalette: canvasRoot.paletteForControls; text: '执行'; glyph: 'right'; primary: true; objectName: 'runApplication_' + applicationForm.modelData.id
+                            enabled: canvasRoot.appHost && !canvasRoot.appHost.busy
+                            onClicked: canvasRoot.appHost.run(applicationForm.modelData.action, JSON.stringify(applicationForm.values))
+                        }
+                    }
+                }
+            }
+            RowLayout {
+                CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '撤销应用授权'; glyph: 'close'; objectName: 'revokeApplication'; onClicked: canvasRoot.appHost.revoke() }
+                CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '移除应用'; glyph: 'close'; objectName: 'removeApplication'; onClicked: applicationRemoval.open() }
+            }
+            Text { textFormat: Text.PlainText; text: canvasRoot.appHost && canvasRoot.appHost.busy ? '正在处理：' + canvasRoot.appHost.busyTitle : ''; color: colors.muted }
+            Text { text: canvasRoot.appHost ? ({idle: '就绪', approval: '等待授权确认', running: '正在执行…', done: '执行完成', error: '执行失败'}[canvasRoot.appHost.state] || '') : ''; color: colors.muted }
+            Text { Layout.fillWidth: true; text: canvasRoot.appHost ? canvasRoot.appHost.error : ''; color: colors.error; wrapMode: Text.Wrap; textFormat: Text.PlainText }
+            TextArea { Layout.fillWidth: true; visible: text.length > 0; readOnly: true; textFormat: TextEdit.PlainText; selectByMouse: true; wrapMode: TextEdit.Wrap; text: canvasRoot.appHost ? canvasRoot.appHost.result : ''; color: colors.ink; background: Rectangle { color: colors.card; radius: 8 } }
+        }
+    }
+    Popup {
+        id: applicationRemoval; objectName: 'applicationRemovalDialog'
+        anchors.centerIn: parent; width: Math.min(440, parent.width - 40); padding: 20
+        modal: true; focus: true
+        background: Rectangle { radius: 12; color: colors.card; border.color: colors.border }
+        onOpened: canvasActions.hold('application-removal', true)
+        onClosed: canvasActions.hold('application-removal', false)
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text { textFormat: Text.PlainText; text: '移除应用：' + (canvasRoot.selectedApplication.title || ''); color: colors.ink; font.pixelSize: 18; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Text { text: '将停止该应用流程，并清除应用定义、授权和能力绑定。'; color: colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            RowLayout {
+                CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '取消'; onClicked: applicationRemoval.close() }
+                CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '确认移除'; glyph: 'close'; primary: true; objectName: 'confirmApplicationRemoval'; onClicked: { canvasRoot.appHost.remove(); applicationRemoval.close() } }
+            }
+        }
+    }
+    Popup {
+        id: applicationImport; objectName: 'applicationImportDialog'
+        anchors.centerIn: parent; width: Math.min(640, parent.width - 40); height: Math.min(520, parent.height - 40)
+        modal: true; focus: true; padding: 20
+        background: Rectangle { radius: 12; color: colors.card; border.color: colors.border }
+        onOpened: canvasActions.hold('application-import', true)
+        onClosed: canvasActions.hold('application-import', false)
+        ColumnLayout {
+            anchors.fill: parent; spacing: 12
+            Text { text: '开发者 · 导入应用定义 JSON'; color: colors.ink; font.pixelSize: 18 }
+            Text { text: '粘贴本机应用定义。导入后，执行能力仍需单独授权。'; color: colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            ScrollView { Layout.fillWidth: true; Layout.fillHeight: true
+                TextArea { id: applicationJson; objectName: 'applicationJsonInput'; color: colors.ink; selectByMouse: true; wrapMode: TextEdit.Wrap; placeholderText: 'Application schemaVersion: 1'; background: Rectangle { color: colors.panel; radius: 6 } }
+            }
+            Text { textFormat: Text.PlainText; text: canvasRoot.appHost ? canvasRoot.appHost.error : ''; color: colors.error; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            RowLayout {
+                CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '取消'; onClicked: applicationImport.close() }
+                CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '导入'; primary: true; objectName: 'confirmApplicationImport'; onClicked: { canvasRoot.appHost.importJson(applicationJson.text); if (!canvasRoot.appHost.error) { applicationJson.text = ''; applicationImport.close() } } }
+            }
+        }
+    }
+    Text { anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12; textFormat: Text.PlainText; text: canvasRoot.appHost ? (canvasRoot.appHost.feedback || canvasRoot.appHost.error || canvasRoot.lastError) : canvasRoot.lastError; color: canvasRoot.appHost && canvasRoot.appHost.feedback ? colors.muted : colors.error; width: parent.width - 24; wrapMode: Text.Wrap }
     Popup {
         id: viewPicker
         objectName: 'componentViewPicker'

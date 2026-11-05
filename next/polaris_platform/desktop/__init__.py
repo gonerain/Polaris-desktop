@@ -100,6 +100,9 @@ def run(runtime):
     pending = {record['manifest']['id'] for record in runtime.export_installations()
                if record['manifest']['id'] not in excluded and record['autostart']
                and record['manifest']['entry'].get('defer') == 'desktop'}
+    pending.update(record['id'] for record in runtime.list_instances()
+                   if not record['isDefault'] and record['autostart']
+                   and record['manifest']['entry'].get('defer') == 'desktop')
     for identity in tuple(pending):
         try:
             runtime.prepare(identity)

@@ -46,9 +46,11 @@ class Component:
                     self.events = entries
                 raise
 
-    def operation(self, name, access="read", major=1, revision=1, interface=None, *, provides=None, requires=None):
+    def operation(self, name, access="read", major=1, revision=1, interface=None, *, provides=None, requires=None, applicationBinding=None):
         def register(handler):
             meta = dict(access=access, major=major, revision=revision, interface=interface)
+            if applicationBinding is not None:
+                meta['applicationBinding'] = applicationBinding
             if provides is not None:
                 meta['provides'] = provides
             if requires is not None:

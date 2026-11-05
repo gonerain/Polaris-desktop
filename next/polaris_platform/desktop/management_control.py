@@ -46,6 +46,19 @@ class ManagementControlPort:
             raise PlatformError('management_unavailable', '组件管理不提供本机挂载授权')
         return control.request_mount(requester, target, view_id, on_finished)
 
+    def request_application(self, definition, flow, on_finished=None, validate=None):
+        control = self._control()
+        request = getattr(control, 'request_application', None)
+        if not callable(request):
+            raise PlatformError('management_unavailable', '组件管理不提供应用授权')
+        return request(definition, flow, on_finished, validate)
+
+    def cancel_approval(self, token):
+        control = self._control()
+        cancel = getattr(control, 'cancel_approval', None)
+        if callable(cancel):
+            return cancel(token)
+
     def report_notice(self, message):
         control = self._control()
         if control is None:

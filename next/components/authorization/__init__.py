@@ -59,6 +59,24 @@ class Authorization(Component):
         if key not in context.scope or key not in self.scope(context.origin, context.source == "background"):
             raise PlatformError("permission_required", "Explicit permission required", {"requester": context.origin, "capability": list(key)})
 
+    def forget_identity(self, identity):
+        """Forget all grants to and from a retired stable instance."""
+        self.require_running()
+        with self._lock:
+            previous = {k: set(v) for k, v in self._grants.items()}
+            self._grants = {k: {cap for cap in values if cap[0] != identity}
+                            for k, values in self._grants.items() if k[0] != identity}
+            try:
+                if self._grants != previous:
+                    self._persist()
+            except Exception:
+                self._grants = previous
+                raise
+            for label, value in list(self._identities.items()):
+                if value == identity:
+                    del self._identities[label]
+            self._labels.pop(identity, None)
+
     def decisions(self):
         with self._lock:
             return [{"requester": self._labels.get(r, r), "requesterInstallation": r, "background": b, "scope": [list(k) for k in keys]}

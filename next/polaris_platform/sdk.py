@@ -10,7 +10,7 @@ from .transport import _Peer
 
 class Component(BaseComponent):
     """Register plain keyword handlers; optional ``ctx`` carries request authority."""
-    def operation(self, name, access='read', major=1, revision=1, interface=None, *, provides=None, requires=None):
+    def operation(self, name, access='read', major=1, revision=1, interface=None, *, provides=None, requires=None, applicationBinding=None):
         def register(function):
             signature = inspect.signature(function)
             def handler(params, context):
@@ -23,7 +23,7 @@ class Component(BaseComponent):
                     kwargs['ctx'] = context
                 return function(**kwargs)
             super(Component, self).operation(name, access, major, revision, interface,
-                                            provides=provides, requires=requires)(handler)
+                                            provides=provides, requires=requires, applicationBinding=applicationBinding)(handler)
             return function
         return register
 

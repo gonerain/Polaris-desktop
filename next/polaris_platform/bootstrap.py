@@ -77,7 +77,7 @@ def load_factory(manifest, directory, runtime, trusted_bindings=False):
     if not reference or ":" not in reference:
         raise PlatformError("invalid_manifest", "Inprocess entry requires module:factory")
     module, name = reference.split(":", 1)
-    def construct():
+    def construct(instance_context=None):
         import sys
         location = str(directory)
         if location in sys.path:
@@ -112,6 +112,10 @@ def load_factory(manifest, directory, runtime, trusted_bindings=False):
                 elif isinstance(value, dict) and "component" in value:
                     value = runtime.component_instance(value["component"])
                 kwargs[key] = value
+            if instance_context is not None:
+                if 'instance_context' in kwargs:
+                    raise PlatformError('invalid_manifest', 'instance_context is reserved')
+                kwargs['instance_context'] = instance_context
             return factory(**kwargs)
         finally:
             sys.meta_path.remove(finder)
@@ -193,6 +197,12 @@ def build(config, base_dir=None, state_dir=None):
                     raise
         if state_dir is not None:
             runtime.configure_storage(state_dir)
+            runtime.restore_instances()
+            for item in runtime.list_instances():
+                if (not item['isDefault'] and item.get('autostart')
+                        and not item['manifest']['entry'].get('defer')):
+                    runtime.start_instance(item['instanceId'])
+                    started.append(item['id'])
         if not saved:
             for grant in config.get("grants", []):
                 runtime.grant(**grant)

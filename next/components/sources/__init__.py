@@ -262,10 +262,21 @@ class Sources(Component):
         installed = next((i for i in self._control.export_installations() if i['manifest']['id'] == component_id), None)
         if installed is None:
             raise PlatformError('not_installed', component_id)
-        running = any(s['id'] == component_id and s['state'] == 'running' for s in self._control.snapshot())
+        before_status = {s['id']: (s['state'], s['instance'], s['manifest'])
+                         for s in self._control.snapshot()
+                         if s['id'] == component_id or s.get('componentType') == component_id}
+        running = before_status.get(component_id, (None,))[0] == 'running'
         try:
             self._control.install_directory(target, replace=True)
         except Exception as error:
+            current = next((i for i in self._control.export_installations() if i['manifest']['id'] == component_id), None)
+            after_status = {s['id']: (s['state'], s['instance'], s['manifest'])
+                            for s in self._control.snapshot()
+                            if s['id'] == component_id or s.get('componentType') == component_id}
+            if (isinstance(error, PlatformError) and error.code in ('instance_in_use', 'instances_unsupported')
+                    and current == installed and after_status == before_status):
+                # Proven precondition rejection: nothing was stopped or replaced.
+                raise
             try:
                 self._control.install_directory(installed['directory'], replace=True)
                 if running:

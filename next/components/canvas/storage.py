@@ -43,6 +43,10 @@ class CanvasStorage:
                     if any(not isinstance(entry[k], str) or not entry[k] for k in ('id', 'target', 'view')) or entry['id'] in entries:
                         raise ValueError('Invalid canvas view identity')
                     entries[entry['id']] = {k: entry[k] for k in ('id', 'target', 'view')}
+                    if entry.get('stableInstanceId') is not None:
+                        if not isinstance(entry['stableInstanceId'], str) or not entry['stableInstanceId']:
+                            raise ValueError('Invalid stable component instance identity')
+                        entries[entry['id']]['stableInstanceId'] = entry['stableInstanceId']
                     entries[entry['id']]['layout'] = layout(entry['layout'])
                 theme = data.get('theme', 'light')
                 if theme not in ('light', 'dark', 'warm'):

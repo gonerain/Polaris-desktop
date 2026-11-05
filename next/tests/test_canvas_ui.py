@@ -606,4 +606,103 @@ else:
             self.assertGreater(layout['x'], 24)
             self.assertEqual(self.call('org.example.counter', 'get'), {'value': 0})
 
+        def test_single_view_concurrent_mounts_reuse_and_recheck_authority(self):
+            import threading
+            from polaris_platform.protocol import PlatformError
+            provider = self.runtime.component_instance('org.example.counter')
+            provider.views[0]['instancePolicy'] = 'single'
+            provider.port.advertise()
+            barrier = threading.Barrier(5)
+            results, errors = [], []
+            def mount():
+                try:
+                    barrier.wait(timeout=3)
+                    results.append(self.call('canvas', 'mount', {'target': 'org.example.counter', 'view': 'main'}))
+                except Exception as error:
+                    errors.append(error)
+            threads = [threading.Thread(target=mount) for _ in range(5)]
+            for thread in threads: thread.start()
+            self.wait(lambda: all(not thread.is_alive() for thread in threads), timeout=8)
+            self.assertFalse(errors, errors)
+            self.assertEqual(len({result['mountId'] for result in results}), 1)
+            mount_id = results[0]['mountId']
+            self.wait(lambda: self.canvas.mounts[mount_id]['state'] == 'mounted')
+            self.assertEqual(len(provider._views), 1)
+            self.call('canvas', 'layout', {'mountId': mount_id, 'collapsed': True})
+            self.call('canvas', 'hide')
+            result = self.call('canvas', 'mount', {'target': 'org.example.counter', 'view': 'main'})
+            self.assertTrue(result['reused'])
+            self.assertTrue(self.window.isVisible())
+            self.assertFalse(self.canvas.mounts[mount_id]['layout']['collapsed'])
+            self.runtime.revoke('user', 'org.example.counter', 'create_view')
+            with self.assertRaises(PlatformError) as caught:
+                self.call('canvas', 'mount', {'target': 'org.example.counter', 'view': 'main'})
+            self.assertEqual(caught.exception.code, 'permission_required')
+            self.assertEqual(len(provider._views), 1)
+
+        def test_application_switch_preserves_workbench_and_renders_inputs(self):
+            import tempfile
+            import json
+            from polaris_platform.application import Application
+            mount_id = self.mount()
+            capture = os.environ.get('POLARIS_UI_CAPTURE_DIR')
+            if capture:
+                Path(capture).mkdir(parents=True, exist_ok=True)
+                self.window.grabWindow().save(str(Path(capture) / 'workbench.png'))
+            with tempfile.TemporaryDirectory() as directory:
+                host = self.canvas.application_host
+                host.configure(directory)
+                app = Application('示例应用')
+                stable = self.runtime.status('org.example.counter')['instanceId']
+                client = self.runtime.client('canvas')
+                provider = self.runtime.component_instance('org.example.counter')
+                provider._operations['get']['applicationBinding'] = 'instance'
+                provider.port.advertise()
+                app.bindings = {'read': dict(target=stable, installationId=stable, instanceId=stable,
+                    operation='get', semantic=list(client.bind(stable, 'get').semantic))}
+                app.flows = {'read': [{'alias': 'read', 'input': 'previous'}]}
+                app.pages = [{'id': 'main', 'title': '计数示例', 'action': 'read',
+                              'inputs': [{'name': 'label', 'label': '标签', 'default': '示例'}]}]
+                host.importJson(json.dumps(app.as_dict()))
+                self.assertFalse(host.error)
+                self.wait(lambda: find_item(self.window.rootObject(), 'applicationEntry_' + app.id) is not None)
+                host.select(app.id)
+                self.wait(lambda: find_item(self.window.rootObject(), 'applicationInput_label') is not None)
+                self.assertFalse(find_item(self.window.rootObject(), 'canvasViewport').isVisible())
+                self.assertTrue(find_item(self.window.rootObject(), 'applicationPage').isVisible())
+                self.assertIn(mount_id, self.canvas.mounts)
+                if capture:
+                    QTest.qWait(80)
+                    self.window.grabWindow().save(str(Path(capture) / 'application.png'))
+                host.select('')
+                self.assertTrue(find_item(self.window.rootObject(), 'canvasViewport').isVisible())
+                self.assertIn(mount_id, self.canvas.mounts)
+
+        def test_legacy_layout_pins_default_identity_and_single_conflicts_preserve_intent(self):
+            from copy import deepcopy
+            from PySide6.QtTest import QSignalSpy
+            mount_id = self.mount()
+            record = self.canvas.mounts[mount_id]
+            saved = deepcopy(self.canvas._storage.entries[record['layoutId']])
+            saved.pop('stableInstanceId', None)
+            saved['target'] = 'org.example.counter'
+            self.call('canvas', 'unmount', {'mountId': mount_id})
+            self.canvas._storage.entries[saved['id']] = saved
+            self.canvas.restore_layout(self.context)
+            self.wait(lambda: len(self.canvas.mounts) == 1)
+            stable = self.runtime.status('org.example.counter')['instanceId']
+            self.assertEqual(saved['stableInstanceId'], stable)
+            self.assertEqual(saved['target'], stable)
+            provider = self.runtime.component_instance('org.example.counter')
+            provider.views[0]['instancePolicy'] = 'single'
+            provider.port.advertise()
+            duplicate = deepcopy(saved)
+            duplicate['id'] = 'duplicate-layout'
+            self.canvas._storage.entries[duplicate['id']] = duplicate
+            failed = QSignalSpy(self.canvas.actions.failed)
+            self.canvas.restore_layout(self.context)
+            self.assertEqual(len(self.canvas.mounts), 1)
+            self.assertEqual(len(self.canvas._storage.entries), 2)
+            self.assertGreater(failed.count(), 0)
+
     unittest.main()

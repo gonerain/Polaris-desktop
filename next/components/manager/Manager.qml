@@ -210,12 +210,12 @@ Pane {
     FolderDialog { id: folder; title: '选择组件目录'; onAccepted: manager.loadDirectory(selectedFolder.toString()) }
     Connections { target: manager; function onPlanReady() { viewPlan.open() } function onPlanCancelled() { viewPlan.close() } }
     SettingsDialog {
-        id: viewPlan; objectName: 'viewPermissionDialog'; title: '确认展示权限'; modal: true; anchors.centerIn: parent; width: Math.min(580, root.width - 48)
+        id: viewPlan; objectName: 'viewPermissionDialog'; title: '确认能力权限'; modal: true; anchors.centerIn: parent; width: Math.min(580, root.width - 48)
         onClosed: { if (manager) manager.cancelView() }
         property var permissions: JSON.parse(manager ? manager.planJson : '[]')
         contentItem: ColumnLayout {
             spacing: 12
-            Label { text: '授权使用者：' + (manager ? manager.planSubject : ''); font.pixelSize: 15 }
+            Label { textFormat: Text.PlainText; text: '授权使用者：' + (manager ? manager.planSubject : ''); font.pixelSize: 15 }
             Label { text: '将使用以下组件'; color: root.muted }
             ScrollView {
                 Layout.fillWidth: true; Layout.preferredHeight: Math.min(permissionGroups.implicitHeight, 320); clip: true
@@ -226,17 +226,17 @@ Pane {
                             var groups = []
                             for (var row of viewPlan.permissions) {
                                 var group = groups.find(function(g) { return g.target === row.target })
-                                if (!group) { group = {target: row.target, title: row.title, permissions: []}; groups.push(group) }
+                                if (!group) { group = {target: row.target, title: row.title, instanceId: row.instanceId, permissions: []}; groups.push(group) }
                                 group.permissions.push(row)
                             }
                             return groups
                         }
                         Column {
                             id: permissionGroup; required property var modelData
-                            width: permissionGroups.width; property bool expanded: false; spacing: 4
+                            width: permissionGroups.width; property bool expanded: !!modelData.instanceId; spacing: 4
                             RowLayout {
                                 width: parent.width
-                                Label { text: permissionGroup.modelData.title; font.bold: true; color: root.ink; Layout.fillWidth: true }
+                                Label { textFormat: Text.PlainText; text: permissionGroup.modelData.title + (permissionGroup.modelData.instanceId ? '\n实例 ' + permissionGroup.modelData.instanceId : ''); wrapMode: Text.Wrap; font.bold: true; color: root.ink; Layout.fillWidth: true }
                                 Label { text: permissionGroup.modelData.permissions.some(function(p) { return p.access === 'write' }) ? '查看与操作' : '查看'; color: root.muted }
                                 SettingsButton { text: permissionGroup.expanded ? '收起 ▴' : '详情 ▾'; flat: true; onClicked: permissionGroup.expanded = !permissionGroup.expanded }
                             }

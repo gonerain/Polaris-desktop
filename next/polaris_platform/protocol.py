@@ -33,6 +33,11 @@ class Handle:
     contract: str | None = None
     generation: int = 0
 
+    @property
+    def instanceId(self):
+        # The authorization key pins the stable provider instance identity.
+        return self.semantic[0]
+
 
 def capability(installation, kind, name, metadata):
     return (installation, kind, name, int(metadata.get("major", 1)),
@@ -46,7 +51,7 @@ _dispatched = ContextVar('polaris_dispatched_capability', default=None)
 
 def handler_signature(metadata):
     return (metadata.get('major', 1), metadata.get('access', 'read'), metadata.get('revision', 1),
-            metadata.get('provides'))
+            metadata.get('provides'), metadata.get('applicationBinding'))
 
 
 def validate_description(description):
@@ -62,6 +67,8 @@ def validate_description(description):
                 raise PlatformError("invalid_description", "Capabilities require names and metadata")
             if metadata.get("access", "read") not in ("read", "write"):
                 raise PlatformError("invalid_description", "Access must be read or write")
+            if 'applicationBinding' in metadata and (group != 'operations' or metadata['applicationBinding'] != 'instance'):
+                raise PlatformError('invalid_description', 'applicationBinding must be instance on an operation')
             for version in ("major", "revision"):
                 value = metadata.get(version, 1)
                 if type(value) is not int or value < 1:
