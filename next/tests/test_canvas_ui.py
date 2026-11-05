@@ -20,7 +20,7 @@ if __name__ != '__main__':
 else:
     import time
     from PySide6.QtCore import QPoint, QPointF, Qt, QEvent, QCoreApplication
-    from PySide6.QtGui import QGuiApplication, QCursor, QMouseEvent
+    from PySide6.QtGui import QGuiApplication, QCursor, QMouseEvent, QWheelEvent
     from PySide6.QtTest import QTest
 
     def _mouseMove(window, point):
@@ -112,6 +112,83 @@ else:
             self.wait(lambda: any(m['mountId'] == mount_id and m['state'] == 'mounted'
                                   for m in self.canvas.status()['mounts']))
             return mount_id
+
+        def test_overflow_navigation_keeps_cards_reachable_after_resize(self):
+            mounts = [self.mount() for _ in range(7)]
+            viewport = find_item(self.window.rootObject(), 'canvasViewport')
+            self.assertIsNotNone(viewport)
+
+            def card_for(identity):
+                def visit(item):
+                    if item.objectName() == 'canvasViewCard' and item.property('mountId') == identity:
+                        return item
+                    for child in item.childItems():
+                        found = visit(child)
+                        if found is not None:
+                            return found
+                return visit(self.window.rootObject())
+
+            def title_visible(card):
+                point = card.mapToScene(QPointF(32, 20))
+                return 12 <= point.x() < self.window.width() - 24 and 56 <= point.y() < self.window.height() - 24
+
+            last = card_for(mounts[-1])
+            self.wait(lambda: viewport.property('contentY') > 0 and title_visible(last))
+            self.assertEqual(last.y(), 730, 'Scrolling must preserve the logical card layout')
+            self.assertEqual(viewport.property('contentWidth'), viewport.width())
+            self.assertFalse(find_item(self.window.rootObject(), 'canvasHorizontalScroll').isVisible())
+            self.window.resize(380, 280)
+            self.wait(lambda: viewport.width() == 356 and viewport.height() == 212)
+            self.assertGreater(viewport.property('contentWidth'), viewport.width())
+            self.assertGreater(viewport.property('contentHeight'), viewport.height())
+
+            def drag_scrollbar(name, end):
+                bar = find_item(self.window.rootObject(), name)
+                self.assertTrue(bar.isVisible())
+                vertical = name == 'canvasVerticalScroll'
+                length = bar.height() if vertical else bar.width()
+                center = (bar.property('position') + bar.property('size') / 2) * length
+                start = QPointF(bar.width() / 2, center) if vertical else QPointF(center, bar.height() / 2)
+                finish = QPointF(bar.width() / 2, 2 if end == 0 else length - 2) if vertical else QPointF(2 if end == 0 else length - 2, bar.height() / 2)
+                start, finish = bar.mapToScene(start).toPoint(), bar.mapToScene(finish).toPoint()
+                _mousePress(self.window, Qt.LeftButton, Qt.NoModifier, start)
+                for step in range(1, 6):
+                    _mouseMove(self.window, start + (finish - start) * step / 5)
+                    QTest.qWait(10)
+                _mouseRelease(self.window, Qt.LeftButton, Qt.NoModifier, finish)
+                QTest.qWait(30)
+
+            # Both axes must be usable by pointer even when a native card is
+            # wider than the window. Its own content still receives clicks.
+            drag_scrollbar('canvasVerticalScroll', 0)
+            drag_scrollbar('canvasHorizontalScroll', 1)
+            second = card_for(mounts[1])
+            self.wait(lambda: title_visible(second))
+            self.click('counterIncrease', parent=second)
+            self.assertEqual(self.call('org.example.counter', 'get'), {'value': 1})
+            self.click('canvasCollapseView', parent=second)
+            self.assertTrue(second.property('collapsed'))
+            before = next(row['layout'] for row in self.canvas.status()['mounts'] if row['mountId'] == mounts[1])
+            start = second.mapToScene(QPointF(100, 20)).toPoint()
+            _mousePress(self.window, Qt.LeftButton, Qt.NoModifier, start)
+            _mouseMove(self.window, start + QPoint(-30, 30))
+            _mouseMove(self.window, start + QPoint(-50, 50))
+            _mouseRelease(self.window, Qt.LeftButton, Qt.NoModifier, start + QPoint(-50, 50))
+            self.wait(lambda: next(row['layout'] for row in self.canvas.status()['mounts'] if row['mountId'] == mounts[1]) != before)
+            self.assertEqual(self.canvas.mounts[mounts[1]]['layout']['collapsed'], True)
+            drag_scrollbar('canvasHorizontalScroll', 0)
+            drag_scrollbar('canvasVerticalScroll', 1)
+            # This card is taller than the shrunken viewport. A background
+            # wheel event can move back from its bottom to reach its title.
+            point = QPoint(20, 150)
+            self.app.sendEvent(self.window, QWheelEvent(QPointF(point), QPointF(self.window.mapToGlobal(point)),
+                QPoint(), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
+            self.wait(lambda: title_visible(last))
+            self.app.sendEvent(self.window, QWheelEvent(QPointF(point), QPointF(self.window.mapToGlobal(point)),
+                QPoint(), QPoint(0, -120), Qt.NoButton, Qt.ShiftModifier, Qt.NoScrollPhase, False))
+            self.wait(lambda: viewport.property('contentX') > 0)
+            self.click('canvasUnmountView', parent=last)
+            self.wait(lambda: mounts[-1] not in self.canvas.mounts)
 
         def test_first_show_pointer_delay_cancel_and_popup_hold(self):
             # A window-leave notification before the first entry is not a dismissal.

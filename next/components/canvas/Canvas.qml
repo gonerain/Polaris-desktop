@@ -55,24 +55,78 @@ Rectangle {
             CanvasButton { canvasPalette: canvasRoot.paletteForControls; glyph: "down"; hint: "收起画布"; objectName: 'dismissCanvas'; onClicked: canvasActions.dismiss() }
         }
     }
-    Item { id: surface; anchors.fill: parent; anchors.topMargin: 56; anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.bottomMargin: 12; clip: true }
-    Column {
-        anchors.centerIn: surface; spacing: 12; visible: canvasRoot.empty
-        Text { anchors.horizontalCenter: parent.horizontalCenter; text: '暂无组件'; color: colors.muted; font.pixelSize: 14 }
-        CanvasButton { canvasPalette: canvasRoot.paletteForControls; anchors.horizontalCenter: parent.horizontalCenter; text: '添加组件'; onClicked: canvasRoot.chooseView() }
-    }
-    Flow {
-        x: 24; y: 64; width: parent.width - 48; spacing: 16
-        Repeater {
-            model: JSON.parse(cardsJson)
-            Rectangle {
-                width: 330; height: 160; radius: 10; clip: true; color: colors.card; border.color: colors.border
-                Column { anchors.fill: parent; anchors.margins: 20; spacing: 12
-                    Text { objectName: 'cardTitle'; textFormat: Text.PlainText; text: modelData.title; font.pixelSize: 15; font.weight: Font.DemiBold; color: colors.ink }
-                    Text { objectName: 'cardBody'; textFormat: Text.PlainText; text: modelData.text; wrapMode: Text.Wrap; width: parent.width; color: colors.muted; font.pixelSize: 14 }
+    Flickable {
+        id: viewport
+        objectName: 'canvasViewport'
+        anchors.fill: parent; anchors.topMargin: 56; anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.bottomMargin: 12
+        clip: true
+        // Native views own their gestures. Navigation uses the scrollbars or
+        // wheel events that were not consumed by a component.
+        interactive: false
+        boundsBehavior: Flickable.StopAtBounds
+        readonly property real originX: Math.min(0, surface.childrenRect.x)
+        readonly property real originY: Math.min(0, surface.childrenRect.y)
+        contentWidth: Math.max(width, surface.childrenRect.x + surface.childrenRect.width - originX + 16)
+        contentHeight: Math.max(height, surface.childrenRect.y + surface.childrenRect.height - originY + 16)
+        function scrollBy(dx, dy) {
+            contentX = Math.max(0, Math.min(contentWidth - width, contentX + dx))
+            contentY = Math.max(0, Math.min(contentHeight - height, contentY + dy))
+        }
+        function reveal(card) {
+            var left = card.x - originX, top = card.y - originY
+            var right = left + Math.min(card.width, Math.max(0, width - 16))
+            var bottom = top + Math.min(card.height, Math.max(42, height - 16))
+            if (left < contentX) contentX = left
+            else if (right > contentX + width - 16) contentX = right - width + 16
+            if (top < contentY) contentY = top
+            else if (bottom > contentY + height - 16) contentY = bottom - height + 16
+            scrollBy(0, 0)
+        }
+        ScrollBar.horizontal: ScrollBar {
+            objectName: 'canvasHorizontalScroll'; height: 12; z: 20
+            policy: ScrollBar.AsNeeded; visible: viewport.contentWidth > viewport.width; active: visible
+            onPressedChanged: canvasActions.hold('scroll-horizontal', pressed)
+        }
+        ScrollBar.vertical: ScrollBar {
+            objectName: 'canvasVerticalScroll'; width: 12; z: 20
+            policy: ScrollBar.AsNeeded; visible: viewport.contentHeight > viewport.height; active: visible
+            onPressedChanged: canvasActions.hold('scroll-vertical', pressed)
+        }
+        MouseArea {
+            width: viewport.contentWidth; height: viewport.contentHeight; z: -1
+            acceptedButtons: Qt.NoButton
+            onWheel: function(wheel) {
+                var dx = wheel.pixelDelta.x || wheel.angleDelta.x / 3
+                var dy = wheel.pixelDelta.y || wheel.angleDelta.y / 3
+                if (wheel.modifiers & Qt.ShiftModifier) { dx += dy; dy = 0 }
+                viewport.scrollBy(-dx, -dy)
+                wheel.accepted = true
+            }
+        }
+        Item {
+            id: surface
+            x: -viewport.originX; y: -viewport.originY
+            width: viewport.width; height: viewport.height
+            Flow {
+                x: 12; y: 8; width: Math.max(0, viewport.width - 32); spacing: 16
+                visible: JSON.parse(cardsJson).length > 0
+                Repeater {
+                    model: JSON.parse(cardsJson)
+                    Rectangle {
+                        width: 330; height: 160; radius: 10; clip: true; color: colors.card; border.color: colors.border
+                        Column { anchors.fill: parent; anchors.margins: 20; spacing: 12
+                            Text { objectName: 'cardTitle'; textFormat: Text.PlainText; text: modelData.title; font.pixelSize: 15; font.weight: Font.DemiBold; color: colors.ink }
+                            Text { objectName: 'cardBody'; textFormat: Text.PlainText; text: modelData.text; wrapMode: Text.Wrap; width: parent.width; color: colors.muted; font.pixelSize: 14 }
+                        }
+                    }
                 }
             }
         }
+    }
+    Column {
+        anchors.centerIn: viewport; spacing: 12; visible: canvasRoot.empty
+        Text { anchors.horizontalCenter: parent.horizontalCenter; text: '暂无组件'; color: colors.muted; font.pixelSize: 14 }
+        CanvasButton { canvasPalette: canvasRoot.paletteForControls; anchors.horizontalCenter: parent.horizontalCenter; text: '添加组件'; onClicked: canvasRoot.chooseView() }
     }
     Text { anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12; text: canvasRoot.lastError; color: colors.error; width: parent.width - 24; wrapMode: Text.Wrap }
     Popup {
@@ -199,8 +253,8 @@ Rectangle {
                 Text { x: 31; anchors.verticalCenter: parent.verticalCenter; text: caption; textFormat: Text.PlainText; elide: Text.ElideRight; width: parent.width - 110; color: colors.ink; font.pixelSize: 13; font.weight: Font.Medium }
                 DragHandler {
                     id: cardDrag; target: viewCard
-                    xAxis.minimum: 0; xAxis.maximum: Math.max(0, surface.width - viewCard.width)
-                    yAxis.minimum: 0; yAxis.maximum: Math.max(0, surface.height - 42)
+                    xAxis.minimum: Math.min(0, viewCard.x); xAxis.maximum: Math.max(0, viewport.contentWidth + viewport.originX - viewCard.width)
+                    yAxis.minimum: Math.min(0, viewCard.y); yAxis.maximum: Math.max(0, viewport.contentHeight + viewport.originY - 42)
                     onActiveChanged: { canvasActions.hold('move-' + mountId, active); if (!active) viewCard.saveLayout() }
                 }
                 Row {
@@ -259,17 +313,21 @@ Rectangle {
         function onAdded(record) {
             var card = viewCardFactory.createObject(surface, {
                 mountId: record.mountId, caption: record.title,
-                x: record.layout.x, y: Math.max(0, record.layout.y),
+                x: record.layout.x, y: record.layout.y,
                 width: record.layout.width, expandedHeight: record.layout.height,
                 collapsed: record.layout.collapsed
             })
             var next = Object.assign({}, canvasRoot.viewCards)
             next[record.mountId] = card
             canvasRoot.viewCards = next
+            Qt.callLater(function() { if (canvasRoot.viewCards[record.mountId] === card) viewport.reveal(card) })
         }
         function onArranged(mountId, layout) {
             var card = canvasRoot.viewCards[mountId]
-            if (card) { card.x = layout.x; card.y = layout.y; card.width = layout.width; card.expandedHeight = layout.height; card.collapsed = layout.collapsed }
+            if (card) {
+                card.x = layout.x; card.y = layout.y; card.width = layout.width; card.expandedHeight = layout.height; card.collapsed = layout.collapsed
+                Qt.callLater(function() { if (canvasRoot.viewCards[mountId] === card) viewport.reveal(card) })
+            }
         }
         function onRemoved(mountId) {
             var card = canvasRoot.viewCards[mountId]

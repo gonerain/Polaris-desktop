@@ -91,7 +91,7 @@ else:
         def test_restart_restores_only_from_authorized_local_input(self):
             mounts = [self.call('mount', {'target': 'org.example.counter'})['mountId'] for _ in range(2)]
             self.wait(lambda: all(r['state'] == 'mounted' for r in self.canvas.mounts.values()))
-            geometry = dict(x=71, y=53, width=415, height=260, collapsed=True)
+            geometry = dict(x=1431, y=953, width=415, height=260, collapsed=True)
             self.call('layout', dict(mountId=mounts[0], **geometry))
             window = self.host._views[self.canvas.handle]
             window.resize(1010, 740)
@@ -112,6 +112,17 @@ else:
             self.canvas.actions.pointerEntered()
             self.wait(lambda: len(self.canvas.mounts) == 2 and all(r['state'] == 'mounted' for r in self.canvas.mounts.values()))
             self.assertIn(geometry, [r['layout'] for r in self.canvas.mounts.values()])
+            def find(item, name):
+                if item.objectName() == name:
+                    return item
+                for child in item.childItems():
+                    found = find(child, name)
+                    if found is not None:
+                        return found
+            viewport = find(self.host._views[self.canvas.handle].rootObject(), 'canvasViewport')
+            self.assertGreaterEqual(viewport.property('contentWidth'), geometry['x'] + geometry['width'])
+            self.assertGreaterEqual(viewport.property('contentHeight'), geometry['y'] + 42)
+            self.assertEqual(self.canvas._storage.path.read_text(), original, 'Navigation must not rewrite a restored layout')
             self.call('show')
             self.assertEqual(len(self.canvas.mounts), 2)
             self.runtime.stop_component('org.example.counter', persist=False)
