@@ -113,7 +113,41 @@ else:
                                   for m in self.canvas.status()['mounts']))
             return mount_id
 
+        def test_preferred_sizes_are_clamped_and_theme_updates(self):
+            cases = [({'width': '640', 'height': True}, (380, 340)),
+                     ({'width': float('nan'), 'height': float('inf')}, (380, 340)),
+                     ({'width': -1, 'height': 10 ** 400}, (240, 1200)),
+                     ({'width': 640, 'height': 540}, (640, 540))]
+            for preferred, expected in cases:
+                result = self.call('canvas', 'mount', {'target': 'org.example.counter', 'view': 'main',
+                                                       'descriptor': {'preferredSize': preferred}})
+                identity = result['mountId']
+                self.wait(lambda: self.canvas.mounts[identity]['state'] == 'mounted')
+                record = self.canvas.mounts[identity]
+                self.assertEqual((record['layout']['width'], record['layout']['height']), expected)
+                parent = record['container']
+                before = parent.property('polarisTheme').toVariant()['background']
+                self.canvas.actions.setTheme('warm')
+                self.app.processEvents()
+                self.assertNotEqual(parent.property('polarisTheme').toVariant()['background'], before)
+                self.canvas.actions.setTheme('light')
+                self.app.processEvents()
+                self.assertNotEqual(parent.property('polarisTheme').toVariant()['background'], before)
+                self.canvas.actions.setTheme('dark')
+                self.call('canvas', 'unmount', {'mountId': identity})
+                self.wait(lambda: identity not in self.canvas.mounts)
+
+        def test_text_cards_and_explicit_arrange_do_not_overlap(self):
+            self.call('canvas', 'set_cards', {'cards': [{'title': 'One'}, {'title': 'Two'}]})
+            first, second = self.mount(), self.mount()
+            self.assertGreaterEqual(self.canvas.mounts[first]['layout']['y'], 168)
+            self.canvas.actions.arrange(1000)
+            layouts = [self.canvas.mounts[identity]['layout'] for identity in (first, second)]
+            self.assertTrue(all(row['y'] >= 168 for row in layouts))
+            self.assertGreaterEqual(layouts[1]['x'], layouts[0]['x'] + layouts[0]['width'])
+
         def test_overflow_navigation_keeps_cards_reachable_after_resize(self):
+            self.window.resize(950, 620)
             mounts = [self.mount() for _ in range(7)]
             viewport = find_item(self.window.rootObject(), 'canvasViewport')
             self.assertIsNotNone(viewport)
@@ -129,16 +163,19 @@ else:
                 return visit(self.window.rootObject())
 
             def title_visible(card):
-                point = card.mapToScene(QPointF(32, 20))
+                caption = find_item(card, 'canvasViewCaption')
+                point = caption.mapToScene(QPointF(1, caption.height() / 2))
                 return 12 <= point.x() < self.window.width() - 24 and 56 <= point.y() < self.window.height() - 24
 
             last = card_for(mounts[-1])
+            original_y = self.canvas.mounts[mounts[-1]]['layout']['y']
             self.wait(lambda: viewport.property('contentY') > 0 and title_visible(last))
-            self.assertEqual(last.y(), 730, 'Scrolling must preserve the logical card layout')
+            self.assertEqual(last.y(), original_y, 'Scrolling must preserve the logical card layout')
+            self.assertEqual((last.width(), last.height()), (380, 340), 'New native cards must leave useful space for their content')
             self.assertEqual(viewport.property('contentWidth'), viewport.width())
             self.assertFalse(find_item(self.window.rootObject(), 'canvasHorizontalScroll').isVisible())
             self.window.resize(380, 280)
-            self.wait(lambda: viewport.width() == 356 and viewport.height() == 212)
+            self.wait(lambda: viewport.width() == 284 and viewport.height() == 166)
             self.assertGreater(viewport.property('contentWidth'), viewport.width())
             self.assertGreater(viewport.property('contentHeight'), viewport.height())
 
@@ -146,10 +183,13 @@ else:
                 bar = find_item(self.window.rootObject(), name)
                 self.assertTrue(bar.isVisible())
                 vertical = name == 'canvasVerticalScroll'
-                length = bar.height() if vertical else bar.width()
-                center = (bar.property('position') + bar.property('size') / 2) * length
+                length = bar.property('availableHeight') if vertical else bar.property('availableWidth')
+                padding = bar.property('topPadding') if vertical else bar.property('leftPadding')
+                visual_size = bar.property('visualSize')
+                center = padding + (bar.property('visualPosition') + visual_size / 2) * length
+                target = padding + (end * (1 - visual_size) + visual_size / 2) * length
                 start = QPointF(bar.width() / 2, center) if vertical else QPointF(center, bar.height() / 2)
-                finish = QPointF(bar.width() / 2, 2 if end == 0 else length - 2) if vertical else QPointF(2 if end == 0 else length - 2, bar.height() / 2)
+                finish = QPointF(bar.width() / 2, target) if vertical else QPointF(target, bar.height() / 2)
                 start, finish = bar.mapToScene(start).toPoint(), bar.mapToScene(finish).toPoint()
                 _mousePress(self.window, Qt.LeftButton, Qt.NoModifier, start)
                 for step in range(1, 6):
@@ -164,8 +204,16 @@ else:
             drag_scrollbar('canvasHorizontalScroll', 1)
             second = card_for(mounts[1])
             self.wait(lambda: title_visible(second))
+            # A new card is taller than this viewport. Navigate to its native
+            # content by the real scrollbar, then return to its header.
+            drag_scrollbar('canvasVerticalScroll', 0.12)
+            increase = find_item(second, 'counterIncrease')
+            point = increase.mapToScene(QPointF(increase.width() / 2, increase.height() / 2))
+            self.assertTrue(64 <= point.y() < self.window.height() - 12)
             self.click('counterIncrease', parent=second)
             self.assertEqual(self.call('org.example.counter', 'get'), {'value': 1})
+            drag_scrollbar('canvasVerticalScroll', 0)
+            self.wait(lambda: title_visible(second))
             self.click('canvasCollapseView', parent=second)
             self.assertTrue(second.property('collapsed'))
             before = next(row['layout'] for row in self.canvas.status()['mounts'] if row['mountId'] == mounts[1])
@@ -180,13 +228,16 @@ else:
             drag_scrollbar('canvasVerticalScroll', 1)
             # This card is taller than the shrunken viewport. A background
             # wheel event can move back from its bottom to reach its title.
-            point = QPoint(20, 150)
+            point = QPoint(90, 150)
             self.app.sendEvent(self.window, QWheelEvent(QPointF(point), QPointF(self.window.mapToGlobal(point)),
-                QPoint(), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
+                QPoint(), QPoint(0, 540), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
             self.wait(lambda: title_visible(last))
             self.app.sendEvent(self.window, QWheelEvent(QPointF(point), QPointF(self.window.mapToGlobal(point)),
-                QPoint(), QPoint(0, -120), Qt.NoButton, Qt.ShiftModifier, Qt.NoScrollPhase, False))
+                QPoint(), QPoint(0, -480), Qt.NoButton, Qt.ShiftModifier, Qt.NoScrollPhase, False))
             self.wait(lambda: viewport.property('contentX') > 0)
+            close = find_item(last, 'canvasUnmountView')
+            point = close.mapToScene(QPointF(close.width() / 2, close.height() / 2))
+            self.assertTrue(84 <= point.x() < self.window.width() - 12 and 102 <= point.y() < self.window.height() - 12, (point.x(), point.y(), viewport.property('contentX'), viewport.property('contentY')))
             self.click('canvasUnmountView', parent=last)
             self.wait(lambda: mounts[-1] not in self.canvas.mounts)
 
@@ -357,7 +408,7 @@ else:
             with tempfile.TemporaryDirectory() as directory:
                 canvas = Canvas(data_dir=directory)
                 spy = QSignalSpy(canvas.actions.themeChanged)
-                self.assertEqual(canvas.actions.theme, 'light')
+                self.assertEqual(canvas.actions.theme, 'dark')
                 canvas.actions.setTheme('warm')
                 self.assertEqual(spy.count(), 1)
                 self.assertEqual(Canvas(data_dir=directory).actions.theme, 'warm')

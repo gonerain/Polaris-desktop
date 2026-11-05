@@ -53,6 +53,8 @@ A provider may declare `views` entries using `{id, title, adapter:'qt-quick-item
 
 `canvas.mount({target, view:'main', descriptor?}, context)` invokes the provider's declared operations through its ordinary Client. It returns `{mountId, state:'pending'}`; attachment completes asynchronously and `canvas.status` exposes mount state. The canvas owns only the wrapper, geometry and collapsed state. `unmount({mountId})` releases a presentation, and `layout({mountId,x?,y?,width?,height?,collapsed?})` changes canvas placement. No provider-specific model or identifier belongs in the canvas.
 
+A view descriptor may include `preferredSize:{width,height}` in logical pixels. Canvas clamps these values to 240–1600 by 130–1200 for new mounts; missing or invalid dimensions use 380 by 340. Saved geometry takes precedence. The supplied parent may expose an optional `polarisTheme` object with `background`, `surface`, `surfaceRaised`, `border`, `text`, `muted`, and `accent` colors. Providers may bind to it and must supply their own fallback when absent.
+
 Provider view buttons retain the creating request context and invoke their provider's ordinary public operations through its Client. Declarative `permissions` describe the required controls; they do not grant access. Existing views must honor authorization revocation, and reopening a view cannot replace the original user scope with the provider's standing permissions.
 
 ## Transient desktop session

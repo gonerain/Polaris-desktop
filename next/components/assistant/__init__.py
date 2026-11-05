@@ -50,7 +50,8 @@ class Assistant(Component):
         self._settings_input = threading.local()
         self.presentation = None
         self.views = [dict(id='main',title='Polaris Agent',adapter='qt-quick-item',create='create_view',
-                           release='release_view', permissions=[dict(name='reply', access='write'),
+                           release='release_view', preferredSize=dict(width=640, height=540),
+                           permissions=[dict(name='reply', access='write'),
                            dict(target=directory_id, name='discover', access='read'),
                            dict(target=directory_id, name='describe', access='read')])]
         self.operation('create_view', access='write')(self.create_view)

@@ -22,6 +22,7 @@ class Chat(QObject):
         self.identity = component.port.id
         self.conversation = uuid.uuid4().hex
         self.closed = threading.Event()
+        self._submission = threading.Lock()
 
     @Property(str, notify=configurationChanged)
     def configurationJson(self):
@@ -45,15 +46,26 @@ class Chat(QObject):
 
     @Slot(str, bool)
     def submit(self, text, enable_tools=False):
+        if self.closed.is_set() or not self._submission.acquire(blocking=False):
+            return
         def work():
             try:
-                result = self.ctx.call(self.identity, 'reply', dict(text=text, conversation=self.conversation, use_authorized_tools=enable_tools))
-                reply, error = result['text'], ''
-            except Exception as exc:
-                reply, error = '', str(exc)
+                try:
+                    result = self.ctx.call(self.identity, 'reply', dict(text=text, conversation=self.conversation, use_authorized_tools=enable_tools))
+                    reply, error = result['text'], ''
+                except Exception as exc:
+                    reply, error = '', str(exc)
+            finally:
+                self._submission.release()
             if not self.closed.is_set() and isValid(self):
                 self.answered.emit(reply, error)
-        threading.Thread(target=work, daemon=True, name='polaris-agent-chat').start()
+        thread = threading.Thread(target=work, daemon=True, name='polaris-agent-chat')
+        try:
+            thread.start()
+        except Exception:
+            self._submission.release()
+            if not self.closed.is_set() and isValid(self):
+                self.answered.emit('', '消息未能发送，请重试')
 
 
 class Presentation:

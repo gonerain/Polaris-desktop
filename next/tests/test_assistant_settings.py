@@ -166,7 +166,7 @@ class SettingsTests(unittest.TestCase):
 def run_ui():
     import time
     from PySide6.QtCore import QObject, QPoint, QPointF, Qt
-    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtGui import QGuiApplication, QInputMethodEvent
     from PySide6.QtTest import QTest
     from polaris_platform.desktop import WindowHost, Canvas
     from components.assistant.loop import AgentResult
@@ -196,7 +196,7 @@ def run_ui():
         def call(target, operation, params=None):
             return runtime.client('user').call(target, operation, params, context=context)
         call('canvas', 'show')
-        call('canvas', 'mount', dict(target='assistant', view='main', descriptor=agent.views[0]))
+        mounted = call('canvas', 'mount', dict(target='assistant', view='main', descriptor=agent.views[0]))
         window = host._views[canvas.handle]
         wait(lambda: bool(agent.presentation and agent.presentation.views))
         _, chat = next(iter(agent.presentation.views.values()))
@@ -229,6 +229,13 @@ def run_ui():
             # Save/close remain visible after shrinking; long content scrolls.
             window.resize(380, 280)
             QTest.qWait(50)
+            item('modelProvider').setProperty('currentIndex', 2)
+            QTest.qWait(50)
+            scroll = item('modelSettingsScroll')
+            notice = item('modelSettingsPrivacyNotice')
+            assert abs(scroll.property('contentWidth') - scroll.property('availableWidth')) < 1
+            assert notice.width() <= scroll.property('availableWidth') + 1
+            assert notice.height() > 20, 'The privacy explanation must wrap in a narrow window'
             save_button = item('saveModelSettings')
             point = save_button.mapToScene(QPointF(1, 1))
             assert 0 <= point.y() < window.height() - save_button.height()
@@ -236,18 +243,49 @@ def run_ui():
             if screenshot:
                 path = Path(screenshot)
                 window.grabWindow().save(str(path.with_name(path.stem + '-small' + path.suffix)))
-            window.resize(880, 620)
+            window.resize(1120, 760)
             QTest.qWait(50)
             if screenshot:
                 window.grabWindow().save(screenshot)
             dialog.close()
             QTest.qWait(20)
+            dark_color = view_item.property('color')
+            canvas.actions.setTheme('light')
+            wait(lambda: view_item.property('color') != dark_color)
+            canvas.actions.setTheme('dark')
+            wait(lambda: view_item.property('color') == dark_color)
+            # Resizing must retain one tool switch and expose every compact control.
+            item('authorizedTools').setProperty('checked', True)
+            for width, height in ((370, 220), (240, 130)):
+                call('canvas', 'layout', dict(mountId=mounted['mountId'], width=width, height=height))
+                QTest.qWait(40)
+                assert item('authorizedTools').property('checked')
+                for name in ('modelSettingsButton', 'authorizedTools', 'messageDraft', 'sendMessage'):
+                    control = item(name)
+                    assert control.isVisible(), name
+                    point = control.mapToItem(view_item, QPointF(0, 0))
+                    assert 0 <= point.x() and point.x() + control.width() <= view_item.width() + 1, name
+                    assert 0 <= point.y() and point.y() + control.height() <= view_item.height() + 1, name
+                click('modelSettingsButton')
+                assert dialog.property('visible')
+                dialog.close()
+            call('canvas', 'layout', dict(mountId=mounted['mountId'], width=640, height=540))
+            item('authorizedTools').setProperty('checked', False)
+            QTest.qWait(40)
             class Echo:
                 def run(self, text, history, tools, cancel):
                     return AgentResult('设置完成，可以继续对话。', [{'role':'user','content':text}, {'role':'assistant','content':'设置完成，可以继续对话。'}])
             agent.engine = Echo()
+            # Enter while an IME is composing must not submit its preedit.
+            draft = item('messageDraft')
+            draft.forceActiveFocus()
+            QGuiApplication.sendEvent(draft, QInputMethodEvent('ni', []))
+            assert draft.property('inputMethodComposing')
+            QTest.keyClick(window, Qt.Key_Return)
+            assert item('conversationList').property('count') == 0
+            QGuiApplication.sendEvent(draft, QInputMethodEvent('', []))
             item('messageDraft').setProperty('text', '你好，开始使用 Polaris Agent。')
-            click('sendMessage')
+            QTest.keyClick(window, Qt.Key_Return)
             wait(lambda: item('conversationList').property('count') == 2)
             if screenshot:
                 path = Path(screenshot)
@@ -265,7 +303,9 @@ def run_ui():
             class Blocking:
                 def __init__(self):
                     self.entered, self.done = threading.Event(), threading.Event()
+                    self.calls = 0
                 def run(self, text, history, tools, cancel):
+                    self.calls += 1
                     self.entered.set()
                     self.done.wait(3)
                     raise ModelError('fixture-old-secret')
@@ -275,8 +315,19 @@ def run_ui():
             agent.engine = engine
             answers = []
             chat.answered.connect(lambda text, error: answers.append((text, error)))
-            chat.submit('测试')
+            dialog.close()
+            QTest.qWait(30)
+            draft.forceActiveFocus()
+            draft.setProperty('text', '测试')
+            assert draft.hasActiveFocus(), 'Composer must have focus after closing settings'
+            assert item('sendMessage').isEnabled(), 'Configured idle draft must be sendable'
+            assert not draft.property('inputMethodComposing'), 'IME preedit must be cleared before a normal Enter'
+            QTest.keyClick(window, Qt.Key_Return)
             wait(engine.entered.is_set)
+            draft.setProperty('text', '重复发送')
+            QTest.keyClick(window, Qt.Key_Return)
+            QTest.qWait(30)
+            assert engine.calls == 1
             chat.saveModel('deepseek', 'fixture-new-secret')
             assert saves[-1][0] is False and '正在回复' in saves[-1][1]
             assert agent.engine is engine and agent.configuration_status()['provider'] == 'bigmodel'

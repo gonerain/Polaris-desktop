@@ -27,8 +27,8 @@ class CanvasStorage:
     def __init__(self, data_dir=None):
         self.path = Path(data_dir) / 'layout.json' if data_dir is not None else None
         self.entries = {}
-        self.size = (880, 620)
-        self.theme = 'light'
+        self.size = (1120, 760)
+        self.theme = 'dark'
         self.error = None
         try:
             if self.path is not None and self.path.exists():

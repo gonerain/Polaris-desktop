@@ -20,6 +20,7 @@ Quick.Canvas {
         else if (kind === "down") { c.moveTo(5, 7); c.lineTo(9, 11); c.lineTo(13, 7) }
         else if (kind === "right") { c.moveTo(7, 5); c.lineTo(11, 9); c.lineTo(7, 13) }
         else if (kind === "resize") { c.moveTo(7, 14); c.lineTo(14, 7); c.moveTo(11, 14); c.lineTo(14, 11) }
+        else if (kind === "star") { c.moveTo(9, 2); c.lineTo(10.5, 7.5); c.lineTo(16, 9); c.lineTo(10.5, 10.5); c.lineTo(9, 16); c.lineTo(7.5, 10.5); c.lineTo(2, 9); c.lineTo(7.5, 7.5); c.closePath() }
         else if (kind === "board") { c.roundedRect(3, 3, 12, 12, 2, 2); c.moveTo(7, 3); c.lineTo(7, 15) }
         else if (kind === "palette") {
             c.moveTo(15, 9); c.bezierCurveTo(15, 5.3, 12.4, 3, 9, 3)

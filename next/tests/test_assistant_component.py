@@ -1,6 +1,8 @@
 import sys
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from components import manifest
@@ -95,4 +97,69 @@ class AssistantTests(unittest.TestCase):
                 self.assertEqual(result, [('0:hello', '')])
             finally:
                 client.call('assistant', 'release_view', {'handle':view['handle']}, ctx)
+                window.close()
+
+    def test_view_submission_is_local_and_recovers_after_failure_and_release(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQuick import QQuickView
+        from PySide6.QtTest import QTest
+        app = QGuiApplication.instance() or QGuiApplication([])
+        release = threading.Event()
+        calls = []
+        class Blocking:
+            def run(_, text, history, tools, cancel):
+                calls.append(text)
+                release.wait(3)
+                if text == 'fail':
+                    raise RuntimeError('fixture failure')
+                return AgentResult(text, [])
+        service = self.rt.component_instance('assistant')
+        service.engine = Blocking()
+        def wait(predicate):
+            for _ in range(300):
+                if predicate():
+                    return
+                QTest.qWait(10)
+            self.assertTrue(predicate())
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'Root.qml'
+            path.write_text('import QtQuick\nItem {width: 640; height: 540}', encoding='utf-8')
+            window = QQuickView()
+            window.setSource(QUrl.fromLocalFile(str(path)))
+            for op in ('create_view', 'release_view'):
+                self.rt.grant('first', 'assistant', op)
+            client, ctx = self.rt.client('first'), self.rt.user_context('first')
+            views = [client.call('assistant', 'create_view', dict(view='main', parent=window.rootObject()), ctx) for _ in range(2)]
+            first, second = [service.presentation.views[v['handle']][1] for v in views]
+            results = [[], []]
+            first.answered.connect(lambda text, error: results[0].append((text, error)))
+            second.answered.connect(lambda text, error: results[1].append((text, error)))
+            try:
+                first.submit('fail')
+                first.submit('duplicate')
+                second.submit('other')
+                wait(lambda: len(calls) == 2)
+                self.assertCountEqual(calls, ['fail', 'other'])
+                release.set()
+                wait(lambda: all(results))
+                self.assertIn('fixture failure', results[0][0][1])
+                self.assertEqual(results[1], [('other', '')])
+                first.submit('retry')
+                wait(lambda: len(results[0]) == 2)
+                self.assertEqual(results[0][1], ('retry', ''))
+                with patch('components.assistant.view.threading.Thread.start', side_effect=RuntimeError('cannot start')):
+                    first.submit('start-failure')
+                self.assertEqual(results[0][-1], ('', '消息未能发送，请重试'))
+                first.submit('retry-start')
+                wait(lambda: len(results[0]) == 4)
+                self.assertEqual(results[0][-1], ('retry-start', ''))
+                client.call('assistant', 'release_view', {'handle':views[0]['handle']}, ctx)
+                first.submit('after-release')
+                self.assertEqual(len(calls), 4)
+                self.assertEqual(calls[-1], 'retry-start')
+            finally:
+                release.set()
+                for view in views:
+                    client.call('assistant', 'release_view', {'handle':view['handle']}, ctx)
                 window.close()

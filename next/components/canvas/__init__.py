@@ -1,6 +1,8 @@
 """Canvas-owned layout, transient sessions, and native component view mounting."""
 from __future__ import annotations
 
+import math
+
 import json
 import threading
 from pathlib import Path
@@ -237,6 +239,23 @@ class CanvasActions(QObject):
         except PlatformError as error:
             self.failed.emit('', error.message)
 
+    @Slot(float)
+    def arrange(self, available_width):
+        with self.canvas._lock:
+            columns = max(1, int((max(0, available_width - 32) + 16) // 346))
+            text_rows = (len(self.canvas.cards) + columns - 1) // columns
+            x, y, row_height = 16, 8 + text_rows * 176, 0
+            limit = max(240, available_width - 16)
+            for record in list(self.canvas.mounts.values()):
+                width, height = record['preferredSize']
+                if x > 16 and x + width > limit:
+                    x, y, row_height = 16, y + row_height + 16, 0
+                self.canvas.set_layout(dict(mountId=record['mountId'], x=x, y=y,
+                                            width=width, height=height,
+                                            collapsed=record['layout']['collapsed']), None)
+                x += width + 16
+                row_height = max(row_height, 44 if record['layout']['collapsed'] else height)
+
     @Slot(str, float, float, float, float, bool)
     def layout(self, mount_id, x, y, width, height, collapsed):
         record = self.canvas.mounts.get(mount_id)
@@ -246,7 +265,7 @@ class CanvasActions(QObject):
 
 class Canvas(Presentation):
     resource_dir = Path(__file__).parent
-    source, title, size = 'Canvas.qml', 'Polaris · 画布', (880, 620)
+    source, title, size = 'Canvas.qml', 'Polaris · 画布', (1120, 760)
 
     def __init__(self, runtime=None, window_id='window', cleanup_port=None, collapse_delay=700, data_dir=None):
         super().__init__(runtime, window_id, cleanup_port)
@@ -495,8 +514,9 @@ class Canvas(Presentation):
         cards = params.get('cards', [])
         if not isinstance(cards, list) or any(not isinstance(c, dict) for c in cards):
             raise PlatformError('invalid_params', '卡片应为对象列表')
-        self.cards = [{'title': str(c.get('title', '')), 'text': str(c.get('text', ''))} for c in cards]
-        self.properties['cardsJson'] = json.dumps(self.cards, ensure_ascii=False)
+        with self._lock:
+            self.cards = [{'title': str(c.get('title', '')), 'text': str(c.get('text', ''))} for c in cards]
+            self.properties['cardsJson'] = json.dumps(self.cards, ensure_ascii=False)
         if self.handle:
             self._window('update', {'handle': self.handle, 'properties': self.properties}, context)
         return {'count': len(self.cards)}
@@ -553,13 +573,45 @@ class Canvas(Presentation):
             self.show(context, {})
         layout_id = layout_id or uuid.uuid4().hex
         mount_id = uuid.uuid4().hex
-        position = len(self.mounts) + len(self.cards)
-        record = dict(mountId=mount_id, layoutId=layout_id, target=target, view=view_id, title=str(descriptor.get('title', target)),
-                      create=create, release=release, bound=bound, release_bound=release_bound, context=context, handle=None,
-                      state='pending', error='', container=None, item=None, client=client, cancelled=False,
-                      layout=dict(x=24 + (position % 2) * 390, y=10 + (position // 2) * 240,
-                                  width=370, height=220, collapsed=False))
+        preferred = descriptor.get('preferredSize')
+        preferred = preferred if isinstance(preferred, dict) else {}
+        def dimension(key, fallback, minimum, maximum):
+            value = preferred.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not math.isfinite(value)):
+                return fallback
+            return max(minimum, min(maximum, int(value)))
+        card_width = dimension('width', 380, 240, 1600)
+        card_height = dimension('height', 340, 130, 1200)
         with self._lock:
+            # Find a free position using current geometries, including user-moved cards.
+            existing = [dict(r['layout']) for r in self.mounts.values()]
+            # Text cards use a Flow with 330×160 items and a 16 px gap.
+            columns = max(1, int((max(0, self.size[0] - 128) + 16) // 346))
+            existing += [dict(x=12 + (i % columns) * 346, y=8 + (i // columns) * 176,
+                              width=330, height=160, collapsed=False) for i in range(len(self.cards))]
+            xs = sorted({16, *(r['x'] + r['width'] + 16 for r in existing)})
+            ys = sorted({8, *(r['y'] + (44 if r['collapsed'] else r['height']) + 16 for r in existing)})
+            limit = max(card_width + 16, self.size[0] - 112)
+            x, y = 16, max(ys)
+            for candidate_y in ys:
+                found = False
+                for candidate_x in xs:
+                    if candidate_x + card_width > limit:
+                        continue
+                    if all(candidate_x + card_width + 16 <= r['x'] or
+                           candidate_x >= r['x'] + r['width'] + 16 or
+                           candidate_y + card_height + 16 <= r['y'] or
+                           candidate_y >= r['y'] + (44 if r['collapsed'] else r['height']) + 16
+                           for r in existing):
+                        x, y, found = candidate_x, candidate_y, True
+                        break
+                if found:
+                    break
+            record = dict(mountId=mount_id, layoutId=layout_id, target=target, view=view_id, title=str(descriptor.get('title', target)),
+                          create=create, release=release, bound=bound, release_bound=release_bound, context=context, handle=None,
+                          state='pending', error='', container=None, item=None, client=client, cancelled=False,
+                          preferredSize=(card_width, card_height),
+                          layout=dict(x=x, y=y, width=card_width, height=card_height, collapsed=False))
             if not self.running or self.port is not client:
                 raise PlatformError('component_unavailable', 'Canvas stopped before mounting')
             saved = self._storage.entries.get(layout_id)
