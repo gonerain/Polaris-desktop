@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from copy import deepcopy
@@ -22,6 +23,9 @@ class SourceTests(unittest.TestCase):
         self.repository.mkdir()
         self.runtime = build(default_config(), state_dir=self.root / 'runtime')
         self.sources = Sources(self.runtime, self.root / 'state')
+        self.runtime.install(dict(id='sources', name='Sources', version='1', platformApi=1,
+                                  entry=dict(mode='inprocess')), lambda: self.sources)
+        self.runtime.start_component('sources')
         self.control = self.sources.local_source_control()
         self.git('init')
         self.git('config', 'user.email', 'test@example.invalid')
@@ -31,6 +35,66 @@ class SourceTests(unittest.TestCase):
         self.index()
         self.commit()
         self.addCleanup(self.modules)
+        self.addCleanup(self.stop)
+
+    def stop(self):
+        for row in reversed(self.runtime.snapshot()):
+            if row['state'] == 'running':
+                self.runtime.stop_component(row['id'], persist=False)
+
+    def test_stopped_and_restarted_source_rejects_old_controls(self):
+        source = self.control.add(str(self.repository))
+        install = self.control.install
+        catalog = self.control.catalog
+        self.runtime.stop_component('sources')
+        for operation in (self.sources.local_source_control, lambda: install(source['id'], 'one'),
+                          lambda: catalog(source['id']), lambda: self.control.preset({'name': 'new', 'location': 'unused'}),
+                          lambda: self.control.fetch_preset(source['id'], lambda: False)):
+            with self.assertRaises(PlatformError) as error:
+                operation()
+            self.assertEqual(error.exception.code, 'unavailable')
+        self.runtime.start_component('sources')
+        with self.assertRaises(PlatformError) as error:
+            install(source['id'], 'one')
+        self.assertEqual(error.exception.code, 'stale_instance')
+        self.assertFalse(any(row['id'] == 'one' for row in self.runtime.snapshot()))
+        self.sources.local_source_control().install(source['id'], 'one')
+        self.assertEqual(self.runtime.status('one')['state'], 'installed')
+
+    def test_fetch_in_flight_cannot_commit_after_source_restart(self):
+        source_id = self.control.preset(dict(name='Fixture', location=str(self.repository)))
+        prepared, finish = threading.Event(), threading.Event()
+        prepare = self.sources._prepare
+        fetched, errors = [], []
+        def pause(*args):
+            result = prepare(*args)
+            fetched.append(result)
+            prepared.set()
+            if not finish.wait(5):
+                raise TimeoutError('Test did not release the fetch')
+            return result
+        def fetch():
+            try:
+                self.control.fetch_preset(source_id, lambda: False)
+            except Exception as error:
+                errors.append(error)
+        with patch.object(self.sources, '_prepare', side_effect=pause):
+            worker = threading.Thread(target=fetch)
+            worker.start()
+            try:
+                self.assertTrue(prepared.wait(5))
+                self.runtime.stop_component('sources')
+                self.runtime.start_component('sources')
+            finally:
+                finish.set()
+                worker.join(5)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        source, = self.sources.local_source_control().sources()
+        self.assertIsNone(source['revision'])
+        self.assertFalse(Path(fetched[0]['directory']).exists())
+        saved = json.loads(self.sources._storage.read_text())
+        self.assertIsNone(saved['sources'][source_id]['revision'])
 
     def modules(self):
         for name in list(sys.modules):

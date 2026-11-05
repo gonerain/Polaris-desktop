@@ -30,7 +30,20 @@ class Sources(Component):
 
     def local_source_control(self):
         self._trusted()
-        return _SourceControl(self)
+        with self._lock:
+            if self.port is None:
+                raise PlatformError('unavailable', 'Plugin sources are stopped')
+            return _SourceControl(self)
+
+    def start(self, port):
+        with self._lock:
+            super().start(port)
+
+    def stop(self):
+        # Finish an active installation transaction before invalidating its port.
+        # Background fetches recheck their port before committing a snapshot.
+        with self._lock:
+            super().stop()
 
     @staticmethod
     def _trusted():
@@ -313,23 +326,33 @@ class Sources(Component):
 class _SourceControl:
     def __init__(self, owner):
         self._owner = owner
+        self._port = owner.port
+
+    def _check(self):
+        self._owner._trusted()
+        if self._owner.port is None:
+            raise PlatformError('unavailable', 'Plugin sources are stopped')
+        if self._owner.port is not self._port:
+            raise PlatformError('stale_instance', 'Plugin source control belongs to an old instance')
 
     def preset(self, spec):
-        self._owner._trusted()
-        return self._owner._preset(spec)
+        with self._owner._lock:
+            self._check()
+            return self._owner._preset(spec)
 
     def fetch_preset(self, source_id, cancelled):
-        self._owner._trusted()
-        self._owner._fetch_preset(source_id, cancelled)
+        with self._owner._lock:
+            self._check()
+        self._owner._fetch_preset(source_id, lambda: cancelled() or self._owner.port is not self._port)
 
     def __getattr__(self, name):
-        if name in {'sources', 'catalog'}:
-            return getattr(self._owner, name)
-        if name not in {'add', 'refresh', 'install', 'update', 'rollback'}:
+        if name not in {'sources', 'catalog', 'add', 'refresh', 'install', 'update', 'rollback'}:
             raise AttributeError(name)
         def invoke(*args, **kwargs):
-            self._owner._trusted()
             with self._owner._lock:
+                self._check()
+                if name in {'sources', 'catalog'}:
+                    return getattr(self._owner, name)(*args, **kwargs)
                 position = 1 if name == 'install' else 0
                 target = kwargs.get('component_id', args[position] if len(args) > position else None)
                 before = deepcopy(self._owner._data)

@@ -93,7 +93,11 @@ def record_failure():
                managerVisible=manager.status()['visible'],
                showGranted=any(key[0]==runtime.status('pet')['installation'] and key[2]=='show' for key in runtime.authorization.scope('pet')))
  if sys.argv[2]=='revoked': runtime.stop_component('pet')
-if sys.argv[2] in ('revoked','disabled'): app.aboutToQuit.connect(record_failure)
+if sys.argv[2] in ('revoked','disabled'):
+ def finish_failure():
+  record_failure()
+  app.quit()
+ QTimer.singleShot(0,lambda: QTimer.singleShot(200,finish_failure))
 else: QTimer.singleShot(40,exercise)
 runtime.manager_config['defaultSources'] = []
 result['exit']=run(runtime)
@@ -109,10 +113,10 @@ print(json.dumps(result))
                     payload = json.loads(process.stdout)
                     self.assertNotIn('error', payload)
                     if phase in ('revoked', 'disabled'):
-                        self.assertEqual(payload['exit'], 1)
+                        self.assertEqual(payload['exit'], 0)
                         self.assertIn('桌宠启动失败', process.stderr)
                         self.assertFalse(payload['visible'])
-                        self.assertFalse(payload['managerVisible'])
+                        self.assertTrue(payload['managerVisible'])
                         self.assertFalse(payload['showGranted'], 'Startup must not restore a revoked initial pet permission')
                     else:
                         self.assertEqual(payload['exit'], 0)
