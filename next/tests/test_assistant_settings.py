@@ -164,6 +164,7 @@ class SettingsTests(unittest.TestCase):
 
 
 def run_ui():
+    import importlib
     import time
     from PySide6.QtCore import QObject, QPoint, QPointF, Qt
     from PySide6.QtGui import QGuiApplication, QInputMethodEvent
@@ -185,9 +186,25 @@ def run_ui():
         assert predicate(), 'UI did not complete'
     with tempfile.TemporaryDirectory() as directory:
         runtime = build(default_config())
-        host, canvas, agent = WindowHost(runtime=runtime), Canvas(runtime=runtime, collapse_delay=600000), Assistant(data_dir=directory)
+        host, canvas = WindowHost(runtime=runtime), Canvas(runtime=runtime, collapse_delay=600000)
+        exported = os.environ.get('POLARIS_TEST_ASSISTANT_EXPORT')
+        if exported:
+            from polaris_platform.bootstrap import load_factory
+            row = json.loads(Path(exported).read_text())
+            agent = load_factory(row['manifest'], row['directory'], runtime)()
+            # Isolate all settings and model requests from the user's data.
+            agent.data_dir = Path(directory)
+            agent_manifest = row['manifest']
+            package = type(agent).__module__
+            assert package == 'polaris_assistant'
+            assert Path(importlib.import_module(package).__file__).parent == Path(row['directory']) / package
+            view_settings = importlib.import_module(package + '.settings')
+            view_model_error = importlib.import_module(package + '.model').ModelError
+        else:
+            agent, agent_manifest = Assistant(data_dir=directory), manifest('assistant')
+            view_settings, view_model_error = settings, ModelError
         for identity, component in [('window', host), ('canvas', canvas), ('assistant', agent), ('user', Component())]:
-            runtime.install(manifest('assistant') if identity == 'assistant' else dict(id=identity, name=identity, version='1', platformApi=1, entry=dict(mode='inprocess')), lambda c=component: c)
+            runtime.install(agent_manifest if identity == 'assistant' else dict(id=identity, name=identity, version='1', platformApi=1, entry=dict(mode='inprocess')), lambda c=component: c)
             runtime.start_component(identity)
         for target in ('window', 'canvas', 'assistant'):
             for operation in runtime.status(target)['description']['operations']:
@@ -223,6 +240,10 @@ def run_ui():
             assert item('modelProvider').property('currentIndex') == 1
             assert '已保存' in item('modelSettingsNotice').property('text')
             view_item, _ = next(iter(agent.presentation.views.values()))
+            if exported:
+                from PySide6.QtQml import QQmlComponent
+                definition = view_item.findChild(QQmlComponent)
+                assert Path(definition.url().toLocalFile()) == Path(row['directory']) / 'polaris_assistant/Chat.qml'
             dialog = view_item.findChild(QObject, 'modelSettingsDialog')
             assert dialog is not None
             assert dialog.property('height') < window.height()
@@ -293,7 +314,7 @@ def run_ui():
             saves = []
             chat.settingsSaved.connect(lambda success, message: saves.append((success, message)))
             saved_engine = agent.engine
-            with patch.object(settings, '_stage', side_effect=OSError('fixture-secret')):
+            with patch.object(view_settings, '_stage', side_effect=OSError('fixture-secret')):
                 chat.saveModel('deepseek', 'fixture-failed-secret')
             assert saves[-1][0] is False and '保存失败' in saves[-1][1]
             assert agent.engine is saved_engine and agent.configuration_status()['provider'] == 'bigmodel'
@@ -308,7 +329,7 @@ def run_ui():
                     self.calls += 1
                     self.entered.set()
                     self.done.wait(3)
-                    raise ModelError('fixture-old-secret')
+                    raise view_model_error('fixture-old-secret')
                 def _safe(self, value):
                     return str(value).replace('fixture-old-secret', '[已隐藏密钥]')
             engine = Blocking()
