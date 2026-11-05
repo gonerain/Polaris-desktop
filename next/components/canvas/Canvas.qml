@@ -3,6 +3,7 @@ import QtQuick as Quick
 import QtQuick.Window
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 Rectangle {
     id: canvasRoot
@@ -34,7 +35,7 @@ Rectangle {
     property string lastError: ''
     property var canvasWindow: Window.window
     onCanvasWindowChanged: if (typeof canvasActions !== 'undefined') canvasActions.bindWindow(canvasWindow)
-    Component.onCompleted: canvasActions.bindWindow(canvasWindow)
+    Component.onCompleted: { canvasActions.bindWindow(canvasWindow); if (appHost) appHost.attachView(customApplicationSurface) }
     HoverHandler {
         onHoveredChanged: {
             if (typeof canvasActions !== 'undefined') {
@@ -77,7 +78,7 @@ Rectangle {
         Rectangle { width: canvasRoot.navigationWidth - 24; height: 1; color: colors.border }
         CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '添加组件' : ''; hint: '添加组件'; glyph: 'plus'; onClicked: canvasRoot.chooseView() }
         CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '配色' : ''; hint: '配色'; glyph: 'palette'; objectName: 'canvasThemePicker'; onClicked: themePicker.open() }
-        CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '导入应用 JSON' : ''; glyph: 'plus'; hint: '开发者：导入应用 JSON'; objectName: 'importApplication'; visible: !!canvasRoot.appHost; onClicked: applicationImport.open() }
+        CanvasButton { truncateLabel: true; width: canvasRoot.navigationWidth - 24; canvasPalette: canvasRoot.paletteForControls; text: canvasRoot.applications.length ? '添加应用' : ''; glyph: 'plus'; hint: '添加应用'; objectName: 'addApplication'; visible: !!canvasRoot.appHost; onClicked: applicationFolder.open() }
     }
     }
     CanvasWindowHandle { objectName: 'canvasWindowMove'; x: canvasRoot.navigationWidth + 8; y: 8; width: Math.max(0, parent.width - canvasRoot.navigationWidth - 216); height: 48 }
@@ -176,7 +177,7 @@ Rectangle {
     }
     ScrollView {
         id: applicationPageScroll
-        objectName: 'applicationPage'; visible: canvasRoot.applicationSelected
+        objectName: 'applicationPage'; visible: canvasRoot.applicationSelected && !canvasRoot.selectedApplication.package
         anchors.fill: parent; anchors.topMargin: 102; anchors.leftMargin: canvasRoot.navigationWidth + 28; anchors.rightMargin: 24; anchors.bottomMargin: 20
         clip: true
         ColumnLayout {
@@ -225,6 +226,56 @@ Rectangle {
             TextArea { Layout.fillWidth: true; visible: text.length > 0; readOnly: true; textFormat: TextEdit.PlainText; selectByMouse: true; wrapMode: TextEdit.Wrap; text: canvasRoot.appHost ? canvasRoot.appHost.result : ''; color: colors.ink; background: Rectangle { color: colors.card; radius: 8 } }
         }
     }
+    ColumnLayout {
+        visible: canvasRoot.applicationSelected && !!canvasRoot.selectedApplication.package
+        anchors.fill: parent; anchors.topMargin: 102; anchors.leftMargin: canvasRoot.navigationWidth + 28; anchors.rightMargin: 24; anchors.bottomMargin: 38
+        spacing: 12
+        RowLayout {
+            Layout.fillWidth: true
+            CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '组件连接 / 权限'; glyph: connectionPanel.visible ? 'down' : 'right'; objectName: 'applicationConnectionsToggle'; onClicked: { connectionPanel.visible = !connectionPanel.visible; canvasRoot.appHost.refreshConnections() } }
+            Item { Layout.fillWidth: true }
+            Text { text: canvasRoot.appHost && canvasRoot.appHost.busy ? '等待确认或处理中…' : ''; color: colors.muted }
+        }
+        Rectangle {
+            id: connectionPanel; objectName: 'applicationConnections'; visible: false
+            Layout.fillWidth: true; implicitHeight: Math.min(connectionContent.implicitHeight + 24, Math.min(280, canvasRoot.height * 0.38)); clip: true
+            color: colors.card; radius: 10; border.color: colors.border
+            ScrollView {
+                id: connectionScroll; anchors.fill: parent; anchors.margins: 12; clip: true
+            ColumnLayout {
+                id: connectionContent; width: connectionScroll.availableWidth; spacing: 10
+                Repeater {
+                    model: canvasRoot.appHost ? JSON.parse(canvasRoot.appHost.connectionsJson) : []
+                    ColumnLayout {
+                        required property var modelData
+                        Layout.fillWidth: true; spacing: 5
+                        Text { textFormat: Text.PlainText; text: modelData.operation; color: colors.ink; font.pixelSize: 13 }
+                        ComboBox {
+                            objectName: 'applicationBinding_' + modelData.alias
+                            Layout.fillWidth: true; textRole: 'label'
+                            model: [{label: modelData.issue || '选择组件实例', instanceId: ''}].concat(modelData.candidates)
+                            currentIndex: modelData.selected + 1
+                            onActivated: function(index) { if (index > 0) canvasRoot.appHost.bindInstance(modelData.alias, modelData.candidates[index - 1].instanceId) }
+                            palette.text: colors.ink; palette.buttonText: colors.ink; palette.base: colors.panel; palette.button: colors.panel
+                        }
+                        Text { text: modelData.candidates.length ? '' : '请先安装并启动提供此能力的组件'; visible: text.length > 0; color: colors.muted; font.pixelSize: 12 }
+                    }
+                }
+                RowLayout {
+                    CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '刷新连接'; glyph: 'right'; onClicked: canvasRoot.appHost.refreshConnections() }
+                    CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '撤销应用授权'; glyph: 'close'; objectName: 'revokePackagedApplication'; onClicked: canvasRoot.appHost.revoke() }
+                    CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '移除应用'; glyph: 'close'; objectName: 'removePackagedApplication'; onClicked: applicationRemoval.open() }
+                }
+            }
+        }
+        }
+        Item { id: customApplicationSurface; objectName: 'customApplicationSurface'; Layout.fillWidth: true; Layout.fillHeight: true; clip: true }
+    }
+    FolderDialog {
+        id: applicationFolder; objectName: 'applicationDirectoryPicker'; title: '选择应用目录'
+        onAccepted: canvasRoot.appHost.installDirectory(selectedFolder.toString())
+        onVisibleChanged: canvasActions.hold('application-folder', visible)
+    }
     Popup {
         id: applicationRemoval; objectName: 'applicationRemovalDialog'
         anchors.centerIn: parent; width: Math.min(440, parent.width - 40); padding: 20
@@ -235,7 +286,7 @@ Rectangle {
         contentItem: ColumnLayout {
             spacing: 14
             Text { textFormat: Text.PlainText; text: '移除应用：' + (canvasRoot.selectedApplication.title || ''); color: colors.ink; font.pixelSize: 18; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Text { text: '将停止该应用流程，并清除应用定义、授权和能力绑定。'; color: colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Text { text: '关闭应用，移除安装记录、授权和连接；保留应用数据。'; color: colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
             RowLayout {
                 CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '取消'; onClicked: applicationRemoval.close() }
                 CanvasButton { canvasPalette: canvasRoot.paletteForControls; text: '确认移除'; glyph: 'close'; primary: true; objectName: 'confirmApplicationRemoval'; onClicked: { canvasRoot.appHost.remove(); applicationRemoval.close() } }

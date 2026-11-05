@@ -16,7 +16,7 @@ class Application:
     literal params or the preceding step's result.
     """
     def __init__(self, title, bindings=None, config=None, flows=None, pages=None,
-                 application_id=None):
+                 application_id=None, package=None):
         if (bindings is not None and not isinstance(bindings, dict)
                 or config is not None and not isinstance(config, dict)
                 or flows is not None and not isinstance(flows, dict)
@@ -33,6 +33,12 @@ class Application:
         self.config = deepcopy(config or {})
         self.flows = deepcopy(flows or {})
         self.pages = deepcopy(pages or [])
+        if package is not None and (not isinstance(package, dict) or set(package) != {'snapshot', 'digest'}
+                or not isinstance(package['snapshot'], str) or package['snapshot'] != self.id
+                or not isinstance(package['digest'], str) or len(package['digest']) != 64
+                or any(c not in '0123456789abcdef' for c in package['digest'])):
+            raise PlatformError('invalid_application', 'Invalid application package reference')
+        self.package = deepcopy(package)
         if not isinstance(self.id, str) or not self.id or not isinstance(title, str):
             raise PlatformError('invalid_application', 'Application identity and title are required')
         for alias, binding in self.bindings.items():
@@ -81,16 +87,23 @@ class Application:
         json.dumps(self.as_dict(), allow_nan=False)
 
     def as_dict(self):
-        return deepcopy(dict(schemaVersion=1, applicationId=self.id, title=self.title,
-                             bindings=self.bindings, config=self.config,
-                             flows=self.flows, pages=self.pages))
+        value = dict(schemaVersion=2 if self.package else 1, applicationId=self.id, title=self.title,
+                     bindings=self.bindings, config=self.config, flows=self.flows, pages=self.pages)
+        if self.package is not None:
+            value['package'] = self.package
+        return deepcopy(value)
 
     @classmethod
     def from_dict(cls, value):
-        if not isinstance(value, dict) or value.get('schemaVersion') != 1:
+        if (not isinstance(value, dict) or type(value.get('schemaVersion')) is not int
+                or value['schemaVersion'] not in (1, 2)):
             raise PlatformError('invalid_application', 'Unsupported application schema')
+        if value['schemaVersion'] == 2 and not isinstance(value.get('package'), dict):
+            raise PlatformError('invalid_application', 'Packaged application is missing its package reference')
+        if value['schemaVersion'] == 1 and 'package' in value:
+            raise PlatformError('invalid_application', 'Legacy application cannot declare a package')
         return cls(value['title'], value.get('bindings'), value.get('config'),
-                   value.get('flows'), value.get('pages'), value['applicationId'])
+                   value.get('flows'), value.get('pages'), value['applicationId'], value.get('package'))
 
     def save(self, path):
         write_json(path, self.as_dict())

@@ -3,7 +3,7 @@ import json
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Slot, Property
+from PySide6.QtCore import QObject, Signal, Slot, Property, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtCore import QThread
 
@@ -20,6 +20,11 @@ class ApplicationHost(QObject):
         super().__init__()
         self.runtime = runtime
         self.store = None
+        self.packages = None
+        self._views = {}
+        self._view_parent = None
+        self._presentation_active = False
+        self._deliveries = {}
         self._hold = hold or (lambda reason, active: None)
         self._selected, self._state, self._result, self._error = '', 'idle', '', ''
         self._generation = 0
@@ -35,6 +40,8 @@ class ApplicationHost(QObject):
     def configure(self, directory):
         self.store = ApplicationStore(Path(directory) / 'applications') if directory is not None else None
         self._closed = False
+        from ..application_package import ApplicationPackageStore
+        self.packages = ApplicationPackageStore(Path(directory) / 'application-packages') if directory is not None else None
         if self.store:
             for definition in self._definitions():
                 app = Application.from_dict(definition)
@@ -102,8 +109,11 @@ class ApplicationHost(QObject):
             self._local_input()
             if application_id:
                 self.store.load(application_id)
+            if self._selected != application_id and self._selected:
+                self._stop_application(self._selected)
             self._selected = application_id
             self._notice = ''
+            self._update_views()
         except Exception as error:
             self._notice = str(error)
         self.changed.emit()
@@ -157,19 +167,36 @@ class ApplicationHost(QObject):
     def run(self, flow, params_json):
         try:
             self._local_input()
-            if self.busy:
-                self._notice = '正在执行：' + self._run_title
-                self.changed.emit()
-                return
             app = self.store.load(self._selected)
             params = json.loads(params_json)
+            self._begin(app, flow, params)
+        except Exception as error:
+            self._notice = str(error)
+            self.changed.emit()
+
+    def _begin(self, app, flow, params, alias=None, delivery=None):
+        if self.busy:
+            message = '正在执行：' + self._run_title
+            self._notice = message
+            if delivery is not None:
+                bridge, view_generation, request_id = delivery
+                bridge.deliver(view_generation, request_id, '', message)
+            self.changed.emit()
+            return
+        try:
             if not isinstance(params, dict):
                 raise PlatformError('invalid_application_input', '输入应为对象')
-            if flow not in app.flows:
+            execution = Application.from_dict(app.as_dict())
+            if alias is not None:
+                execution.flows = {'__application_call__': [{'alias': alias, 'input': 'previous'}]}
+                flow = '__application_call__'
+            if flow not in execution.flows:
                 raise PlatformError('application_flow_missing', flow)
             self.runtime.register_application_principal(app.id)
             self._generation += 1
             generation = self._generation
+            if delivery is not None:
+                self._deliveries[generation] = delivery
             self._notice = ''
             self._run_app, self._run_title = app.id, app.title
             self._state, self._result, self._error = 'approval', '', ''
@@ -189,7 +216,9 @@ class ApplicationHost(QObject):
                     self.finished.emit(generation, '', '授权已取消' if outcome == 'cancelled' else '应用授权失败')
                     return
                 try:
-                    session = app.open(self.runtime.application_client(app.id),
+                    if app.package:
+                        self.packages.load_verified(app)
+                    session = execution.open(self.runtime.application_client(app.id),
                                        self.runtime.application_context(app.id), self.runtime.status)
                 except Exception as error:
                     self.finished.emit(generation, '', str(error))
@@ -199,7 +228,7 @@ class ApplicationHost(QObject):
                 self.changed.emit()
                 def execute():
                     try:
-                        result = session.run(flow, params)
+                        result = session.call(alias, params) if alias is not None else session.run(flow, params)
                         self.finished.emit(generation, json.dumps(result, ensure_ascii=False, indent=2), '')
                     except Exception as error:
                         self.finished.emit(generation, '', str(error))
@@ -209,16 +238,21 @@ class ApplicationHost(QObject):
                 threading.Thread(target=execute, daemon=True).start()
             def current_definition():
                 try:
+                    if app.package:
+                        self.packages.load_verified(app)
                     return (not self._closed and generation == self._generation
                             and self.store.load(app.id).as_dict() == app.as_dict())
                 except Exception:
                     return False
-            token = ManagementControlPort(self.runtime).request_application(app.as_dict(), flow, approved, current_definition)
+            token = ManagementControlPort(self.runtime).request_application(execution.as_dict(), flow, approved, current_definition)
             self._approval_tokens[app.id] = token
         except Exception as error:
             self._run_app = self._selected
             self._state, self._error = 'error', str(error)
             self._hold('application', False)
+            if delivery is not None:
+                bridge, view_generation, request_id = delivery
+                bridge.deliver(view_generation, request_id, '', str(error))
         self.changed.emit()
 
     @Slot(int, str, str)
@@ -227,10 +261,18 @@ class ApplicationHost(QObject):
             return
         self._state, self._result, self._error = ('error' if error else 'done'), result, error
         self._hold('application', False)
+        delivery = self._deliveries.pop(generation, None)
+        if delivery is not None:
+            bridge, view_generation, request_id = delivery
+            bridge.deliver(view_generation, request_id, result, error)
         self.changed.emit()
 
     def _stop_application(self, application_id):
+        view = self._views.get(application_id)
+        if view is not None:
+            view.bridge.set_active(False)
         if self._run_app == application_id:
+            self._deliveries.pop(self._generation, None)
             self._generation += 1
         token = self._approval_tokens.pop(application_id, None)
         if token:
@@ -253,6 +295,7 @@ class ApplicationHost(QObject):
             self.runtime.revoke_application_authority(app.id)
             self._notice = ''
             self._feedback = '已撤销此应用的全部授权；再次执行时需重新确认'
+            self._update_views()
         except Exception as error:
             self._notice = '撤销授权失败：' + str(error)
         self.changed.emit()
@@ -273,7 +316,15 @@ class ApplicationHost(QObject):
             except Exception:
                 self.store.save(app)
                 raise
+            view = self._views.pop(app.id, None)
+            if view is not None:
+                view.close()
             self._selected = ''
+            if app.package:
+                try:
+                    self.packages.remove(app)
+                except Exception as error:
+                    raise PlatformError('application_cleanup_failed', '应用已停用且授权已撤销，残留代码清理失败：' + str(error)) from error
             self._notice = ''
             self._feedback = '应用已移除，授权和实例引用已清理'
         except Exception as error:
@@ -289,4 +340,201 @@ class ApplicationHost(QObject):
         for token in tuple(self._approval_tokens.values()):
             ManagementControlPort(self.runtime).cancel_approval(token)
         self._approval_tokens.clear()
+        self._deliveries.clear()
+        for view in self._views.values():
+            view.close()
+        self._views.clear()
+        self._view_parent = None
         self._hold('application', False)
+
+    def application_data_directory(self, application_id):
+        if self.store is None:
+            raise PlatformError('application_storage_unavailable', '应用存储目录尚未就绪')
+        return self.store.directory.parent / 'application-data' / application_id
+
+    @Slot(str)
+    def installDirectory(self, location):
+        app = None
+        committed = False
+        try:
+            self._local_input()
+            if self.packages is None:
+                raise PlatformError('application_storage_unavailable', '应用存储目录尚未就绪')
+            if self.busy:
+                raise PlatformError('application_busy', '请等待当前应用操作完成')
+            path = QUrl(location).toLocalFile() if location.startswith('file:') else location
+            app = self.packages.install(path)
+            verified = self.packages.load_verified(app)
+            package_id = verified['manifest']['id']
+            for existing in self._definitions():
+                previous = Application.from_dict(existing)
+                if previous.package:
+                    try:
+                        previous_id = self.packages.load_verified(previous)['manifest']['id']
+                    except PlatformError:
+                        continue  # A broken old package cannot block unrelated installs.
+                    if previous_id == package_id:
+                        raise PlatformError('application_exists', '此应用已安装，当前版本暂不支持就地更新')
+            self.runtime.register_application_principal(app.id)
+            try:
+                self.runtime.register_application_bindings(app.id, [])
+                self.store.save(app)
+                committed = True
+            except Exception:
+                self.runtime.unregister_application_principal(app.id)
+                raise
+            if self._selected:
+                self._stop_application(self._selected)
+            self._selected = app.id
+            self._notice, self._feedback = '', '应用已安装，请在“组件连接 / 权限”中连接所需能力'
+            self._update_views()
+        except Exception as error:
+            if app is not None and not committed:
+                self.packages.remove(app)
+            self._notice = str(error)
+        self.changed.emit()
+
+    def _verify_binding(self, app, alias):
+        verified = self.packages.load_verified(app)
+        requirement = verified['requires'].get(alias)
+        if requirement is None:
+            raise PlatformError('application_alias_missing', alias)
+        binding = app.bindings.get(alias)
+        if binding is None:
+            raise PlatformError('application_binding_missing', '请先连接组件能力：' + alias)
+        status = self.runtime.status(binding['target'])
+        metadata = status.get('description', {}).get('operations', {}).get(binding['operation'], {})
+        if (status['componentType'] != requirement['componentType']
+                or binding['operation'] != requirement['operation']
+                or metadata.get('major', 1) != requirement['major']
+                or metadata.get('access', 'read') != requirement['access']
+                or metadata.get('applicationBinding') != 'instance'
+                or status['installationId'] != binding['installationId']
+                or status['instanceId'] != binding['instanceId']):
+            raise PlatformError('application_binding_unavailable', '原组件连接已不可用，请重新选择：' + alias)
+        handle = self.runtime.application_client(app.id).bind(binding['target'], binding['operation'])
+        if list(handle.semantic) != list(binding['semantic']):
+            raise PlatformError('application_binding_unavailable', '组件能力已变化，请重新选择：' + alias)
+        return binding
+
+    @Property(str, notify=changed)
+    def connectionsJson(self):
+        try:
+            app = self.store.load(self._selected)
+            if not app.package:
+                return '[]'
+            requirements = self.packages.load_verified(app)['requires']
+            rows = []
+            for alias, requirement in requirements.items():
+                binding = app.bindings.get(alias)
+                candidates = []
+                for status in self.runtime.list_instances(requirement['componentType']):
+                    metadata = status.get('description', {}).get('operations', {}).get(requirement['operation'], {})
+                    if (status['state'] == 'running' and metadata.get('applicationBinding') == 'instance'
+                            and metadata.get('major', 1) == requirement['major']
+                            and metadata.get('access', 'read') == requirement['access']):
+                        label = status['manifest']['name'] + (' · 默认实例' if status.get('isDefault') else ' · 实例 ' + status['instanceId'][:8])
+                        candidates.append(dict(instanceId=status['instanceId'], label=label))
+                selected, issue = -1, ''
+                if binding:
+                    try:
+                        self._verify_binding(app, alias)
+                        selected = next((index for index, candidate in enumerate(candidates)
+                                         if candidate['instanceId'] == binding['instanceId']), -1)
+                    except Exception:
+                        issue = '原实例不可用，请重新选择'
+                rows.append(dict(alias=alias, operation=requirement['operation'], componentType=requirement['componentType'],
+                                 candidates=candidates, selected=selected, issue=issue))
+            return json.dumps(rows, ensure_ascii=False)
+        except Exception:
+            return '[]'
+
+    @Slot()
+    def refreshConnections(self):
+        self.changed.emit()
+
+    @Slot(str, str)
+    def bindInstance(self, alias, instance_id):
+        try:
+            self._local_input()
+            app = self.store.load(self._selected)
+            requirement = self.packages.load_verified(app)['requires'].get(alias)
+            if requirement is None:
+                raise PlatformError('application_alias_missing', alias)
+            status = self.runtime.status(instance_id)
+            if status['instanceId'] != instance_id or status['componentType'] != requirement['componentType']:
+                raise PlatformError('application_binding_unavailable', '请选择匹配的组件实例')
+            handle = self.runtime.application_client(app.id).bind(instance_id, requirement['operation'])
+            candidate = dict(target=instance_id, instanceId=instance_id, installationId=status['installationId'],
+                             operation=requirement['operation'], semantic=list(handle.semantic))
+            previous = dict(app.bindings)
+            app.bindings[alias] = candidate
+            self._verify_binding(app, alias)
+            self._stop_application(app.id)
+            # Previously approved authority must not silently survive a changed
+            # connection to another component instance or revision.
+            self.runtime.revoke_application_authority(app.id)
+            self.runtime.register_application_bindings(app.id, [item['instanceId'] for item in app.bindings.values()])
+            try:
+                self.store.save(app)
+            except Exception:
+                self.runtime.register_application_bindings(app.id, [item['instanceId'] for item in previous.values()])
+                raise
+            self._notice, self._feedback = '', '组件已连接；执行时将确认所需权限'
+            self._update_views()
+        except Exception as error:
+            self._notice = str(error)
+        self.changed.emit()
+
+    @Slot(QObject)
+    def attachView(self, parent):
+        try:
+            self._local_input()
+            if self._view_parent is not parent:
+                for view in self._views.values():
+                    view.close()
+                self._views.clear()
+                self._view_parent = parent
+            self._update_views()
+        except Exception as error:
+            self._notice = str(error)
+            self.changed.emit()
+
+    def _update_views(self):
+        for identity, view in self._views.items():
+            if identity != self._selected or not self._presentation_active or self._closed:
+                view.set_active(False)
+        if not self._selected or self._view_parent is None or self._closed:
+            return
+        try:
+            import shiboken6
+            if not shiboken6.isValid(self._view_parent):
+                return
+            app = self.store.load(self._selected)
+            if not app.package:
+                return
+            verified = self.packages.load_verified(app)
+            if app.id not in self._views:
+                from .application_view import ApplicationView
+                self._views[app.id] = ApplicationView(self, app, verified['entry'], self._view_parent)
+            self._views[app.id].set_active(self._presentation_active)
+        except Exception as error:
+            self._stop_application(self._selected)
+            self._notice = '应用界面不可用：' + str(error)
+
+    def set_presentation_active(self, active):
+        self._presentation_active = bool(active)
+        if not active and self._selected:
+            self._stop_application(self._selected)
+        self._update_views()
+
+    def call_alias(self, bridge, alias, params, request_id):
+        self._local_input()
+        if (not self._presentation_active or bridge.application_id != self._selected
+                or self._views.get(self._selected) is None
+                or self._views[self._selected].bridge is not bridge):
+            raise PlatformError('application_inactive', '此应用当前未打开')
+        app = self.store.load(self._selected)
+        self._verify_binding(app, alias)
+        self._begin(app, None, params, alias=alias,
+                    delivery=(bridge, bridge.generation, request_id))

@@ -422,6 +422,8 @@ class Canvas(Presentation):
             self.dispatcher.run(self.pointer_entered)
         self.dispatcher.run(self._schedule_collapse)
         self.dispatcher.run(lambda: QTimer.singleShot(0, self.actions.restorePending))
+        if self.application_host is not None:
+            self.dispatcher.run(lambda: self.application_host.set_presentation_active(True))
         return dict(result, sessionId=self.session_id)
 
     def hide(self, context=None, params=None):
@@ -435,6 +437,8 @@ class Canvas(Presentation):
         return dict(result, sessionId=session_id, dismissed=session_id is not None)
 
     def _finish_session(self, reason, context=None, publish=True):
+        if self.application_host is not None:
+            self.dispatcher.run(lambda: self.application_host.set_presentation_active(False))
         with self._lock:
             session_id, session_context = self.session_id, self.session_context or context
             self.session_id = self.session_context = None
