@@ -50,8 +50,15 @@ def verify():
     manager = runtime.component_instance('manager')
     if manager.bridge.busy or (manager.bridge._worker and manager.bridge._worker.is_alive()):
         return
+    from components.mcp.stdio import forward
+    mcp = runtime.component_instance('mcp')
+    if runtime.status('mcp')['state'] != 'running':
+        raise RuntimeError('MCP component did not start')
+    reply = forward({'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}, mcp.directory / 'endpoint.json')
+    if reply.get('result') != {}:
+        raise RuntimeError('MCP endpoint did not respond')
     verified = True
-    print(json.dumps({'petVisible': True, 'skinReady': True, 'installation': runtime.status('pet')['installation']}), flush=True)
+    print(json.dumps({'petVisible': True, 'skinReady': True, 'mcpReady': True, 'installation': runtime.status('pet')['installation']}), flush=True)
     app.quit()
 
 

@@ -33,6 +33,7 @@ namespaces = false
 "components.assistant" = ["*.qml"]
 "components.canvas" = ["*.qml"]
 "components.manager" = ["*.qml", "default-sources.json"]
+"components.mcp" = ["standalone-manifest.json", "README.md"]
 "components.pet" = ["*.qml", "skins/dshpet/*"]
 
 [tool.setuptools.dynamic]
