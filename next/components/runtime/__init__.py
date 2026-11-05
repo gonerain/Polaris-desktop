@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import secrets
 import json
+import logging
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -165,10 +166,24 @@ class Runtime(Component):
                 raise PlatformError("already_installed", component_id)
             self._records[component_id] = dict(manifest=dict(manifest), factory=factory,
                 installation=installation_id or uuid4().hex, instance=None, state="installed", component=None, error=None, directory=str(Path(directory).resolve()) if directory else None, autostart=bool(autostart), trustedBindings=bool(trusted_bindings))
-        if self.authorization is not None:
-            self.authorization.bind_identity(component_id, self._records[component_id]["installation"])
-        self._removed_installations.discard(component_id)
-        self._persist()
+            was_removed = component_id in self._removed_installations
+            self._removed_installations.discard(component_id)
+            try:
+                if was_removed and self._storage is not None:
+                    # Keep the tombstone until the replacement installation is
+                    # durable; a failed second write then stays uninstalled.
+                    from polaris_platform.persistence import write_json
+                    write_json(self._storage, self.export_installations())
+                    write_json(self._storage.with_name("removed-installations.json"), sorted(self._removed_installations))
+                else:
+                    self._persist()
+            except Exception:
+                del self._records[component_id]
+                if was_removed:
+                    self._removed_installations.add(component_id)
+                raise
+            if self.authorization is not None:
+                self.authorization.bind_identity(component_id, self._records[component_id]["installation"])
         return component_id
 
     @staticmethod
@@ -233,23 +248,52 @@ class Runtime(Component):
         options = self.management_options(component_id)
         if not options[action]:
             raise PlatformError("restart_required", options["reason"])
-        if self._record(component_id)["state"] == "starting":
+        if self._record(component_id)["state"] == "starting" or self._record(component_id).get("uninstalling"):
             raise PlatformError("busy", component_id)
 
     def uninstall_component(self, component_id):
-        self._check_management(component_id, "uninstall")
-        self.stop_component(component_id, persist=False)
-        record = self._record(component_id)
-        from polaris_platform.bootstrap import invalidate_plugin_modules
-        try:
-            invalidate_plugin_modules(record["manifest"], record["directory"], installations=self.export_installations())
-        except PlatformError:
-            pass  # Shared package entries remain loaded until host restart.
         with self._lock:
-            del self._records[component_id]
-            self._removed_installations.add(component_id)
-            self._persist()
-        return {"id": component_id, "state": "uninstalled"}
+            self._check_management(component_id, "uninstall")
+            record = self._record(component_id)
+            record["uninstalling"] = True
+        try:
+            self.stop_component(component_id, persist=False, _uninstall=True)
+            from polaris_platform.bootstrap import invalidate_plugin_modules
+            try:
+                invalidate_plugin_modules(record["manifest"], record["directory"], installations=self.export_installations())
+            except PlatformError:
+                pass  # Shared package entries remain loaded until host restart.
+            with self._lock:
+                from polaris_platform.persistence import write_json
+                previous_autostart = record["autostart"]
+                record["autostart"] = False
+                try:
+                    if self._storage is not None:
+                        write_json(self._storage, self.export_installations())
+                except Exception:
+                    record["autostart"] = previous_autostart
+                    raise
+                was_removed = component_id in self._removed_installations
+                self._removed_installations.add(component_id)
+                try:
+                    if self._storage is not None:
+                        write_json(self._storage.with_name("removed-installations.json"), sorted(self._removed_installations))
+                except Exception:
+                    if not was_removed:
+                        self._removed_installations.discard(component_id)
+                    raise
+                # The tombstone commits removal. An old installation record is
+                # ignored at bootstrap and can be cleaned on the next persist.
+                del self._records[component_id]
+                if self._storage is not None:
+                    try:
+                        write_json(self._storage, self.export_installations())
+                    except OSError:
+                        logging.getLogger(__name__).warning("Could not clean up uninstalled component record", exc_info=True)
+            return {"id": component_id, "state": "uninstalled"}
+        finally:
+            with self._lock:
+                record.pop("uninstalling", None)
 
     def install_directory(self, path, replace=False):
         if _active.get() is not None:
@@ -396,6 +440,8 @@ class Runtime(Component):
     def start_component(self, component_id):
         with self._lock:
             record = self._record(component_id)
+            if record.get("uninstalling"):
+                raise PlatformError("busy", component_id)
             if record["state"] == "running":
                 return self.status(component_id)
             if record["state"] in ("starting", "stopping"):
@@ -439,11 +485,15 @@ class Runtime(Component):
             self.refresh_all()
             raise
 
-    def stop_component(self, component_id, force=False, persist=True):
-        record = self._record(component_id)
-        if record["state"] in ("installed", "stopped"):
-            return self.status(component_id)
+    def stop_component(self, component_id, force=False, persist=True, _uninstall=False):
         with self._lock:
+            record = self._record(component_id)
+            if record.get("uninstalling") and not _uninstall:
+                raise PlatformError("busy", component_id)
+            if record["state"] in ("installed", "stopped"):
+                return self.status(component_id)
+            if record["state"] == "starting":
+                raise PlatformError("busy", component_id)
             if persist:
                 record["autostart"] = False
                 self._persist()

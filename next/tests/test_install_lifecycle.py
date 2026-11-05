@@ -1,9 +1,12 @@
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import sys
+import threading
 import unittest
+from unittest.mock import patch
 from polaris_platform.bootstrap import build, default_config, from_file
 from polaris_platform.component import Component
 from polaris_platform.protocol import PlatformError
@@ -137,6 +140,168 @@ class InstallationLifecycleTests(unittest.TestCase):
         self.runtime.start_component('direct')
         self.assertEqual(self.runtime.uninstall_component('direct')['state'], 'uninstalled')
         self.assertIn('direct', self.runtime.removed_installations())
+
+    def test_stop_rejects_component_while_start_is_in_progress(self):
+        entered, release = threading.Event(), threading.Event()
+        errors = []
+
+        class SlowStart(Component):
+            def start(self, port):
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError('start was not released')
+                super().start(port)
+
+        manifest = dict(id='slow', name='Slow', version='1', platformApi=1,
+                        entry=dict(mode='inprocess', factory='slow:create'))
+        self.runtime.install(manifest, SlowStart)
+
+        def start():
+            try:
+                self.runtime.start_component('slow')
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=start)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(5))
+            with self.assertRaises(PlatformError) as failure:
+                self.runtime.stop_component('slow')
+            self.assertEqual(failure.exception.code, 'busy')
+            self.assertEqual(self.runtime.status('slow')['state'], 'starting')
+        finally:
+            release.set()
+            thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(self.runtime.status('slow')['state'], 'running')
+        self.runtime.stop_component('slow')
+
+    def test_uninstall_prevents_concurrent_restart_and_management(self):
+        entered, release = threading.Event(), threading.Event()
+        errors = []
+        directory = self.plugin()
+        self.runtime.install_directory(directory)
+        self.runtime.start_component('plugin')
+        old = self.runtime.component_instance('plugin')
+
+        def pause(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('uninstall was not released')
+
+        def uninstall():
+            try:
+                self.runtime.uninstall_component('plugin')
+            except Exception as error:
+                errors.append(error)
+
+        with patch('polaris_platform.bootstrap.invalidate_plugin_modules', side_effect=pause):
+            thread = threading.Thread(target=uninstall)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                self.assertIsNone(old.port)
+                for action in (lambda: self.runtime.start_component('plugin'),
+                               lambda: self.runtime.stop_component('plugin'),
+                               lambda: self.runtime.uninstall_component('plugin')):
+                    with self.assertRaises(PlatformError) as failure:
+                        action()
+                    self.assertEqual(failure.exception.code, 'busy')
+            finally:
+                release.set()
+                thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertNotIn('plugin', [row['id'] for row in self.runtime.snapshot()])
+
+    def test_failed_install_persistence_leaves_no_record_or_identity(self):
+        directory = self.plugin()
+        with patch('polaris_platform.persistence.write_json', side_effect=OSError('disk full')):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                self.runtime.install_directory(directory)
+        self.assertNotIn('plugin', [row['id'] for row in self.runtime.snapshot()])
+        self.assertNotIn('plugin', self.runtime.authorization._identities)
+        restarted = build(default_config(), state_dir=self.base / 'state')
+        self.assertNotIn('plugin', [row['id'] for row in restarted.snapshot()])
+        self.runtime.install_directory(directory)
+        self.assertEqual(self.runtime.status('plugin')['state'], 'installed')
+
+    def test_failed_reinstall_preserves_tombstone_on_restart(self):
+        from polaris_platform.persistence import write_json
+        directory = self.plugin()
+        self.runtime.install_directory(directory)
+        self.runtime.uninstall_component('plugin')
+        writes = []
+
+        def fail_second_write(path, value):
+            writes.append(Path(path).name)
+            if len(writes) == 2:
+                raise OSError('disk full')
+            write_json(path, value)
+
+        with patch('polaris_platform.persistence.write_json', side_effect=fail_second_write):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                self.runtime.install_directory(directory)
+        self.assertEqual(writes, ['installations.json', 'removed-installations.json'])
+        self.assertIn('plugin', self.runtime.removed_installations())
+        self.assertNotIn('plugin', [row['id'] for row in self.runtime.snapshot()])
+        config = default_config()
+        config['components'].append({'directory': str(directory)})
+        # Bootstrap writes its own state, so use a snapshot to check the
+        # immediate restart without altering the subsequent persist scenario.
+        snapshot = self.base / 'restart-snapshot'
+        shutil.copytree(self.base / 'state', snapshot)
+        immediate = build(config, state_dir=snapshot)
+        self.assertNotIn('plugin', [row['id'] for row in immediate.snapshot()])
+        self.runtime._persist()
+        restarted = build(config, state_dir=self.base / 'state')
+        self.assertNotIn('plugin', [row['id'] for row in restarted.snapshot()])
+
+    def test_uninstall_write_failures_keep_recoverable_state(self):
+        from polaris_platform.persistence import write_json
+
+        for fail_at in (1, 2, 3):
+            with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as state:
+                directory = self.plugin()
+                data = directory / 'user-data.txt'
+                data.write_text('keep', encoding='utf-8')
+                runtime = build(default_config(), state_dir=state)
+                runtime.install_directory(directory)
+                runtime.start_component('plugin')
+                writes = []
+
+                def fail_write(path, value):
+                    writes.append(Path(path).name)
+                    if len(writes) == fail_at:
+                        raise OSError('disk full')
+                    write_json(path, value)
+
+                with patch('polaris_platform.persistence.write_json', side_effect=fail_write):
+                    if fail_at < 3:
+                        with self.assertRaisesRegex(OSError, 'disk full'):
+                            runtime.uninstall_component('plugin')
+                    else:
+                        with self.assertLogs('components.runtime', level='WARNING'):
+                            result = runtime.uninstall_component('plugin')
+                        self.assertEqual(result['state'], 'uninstalled')
+                self.assertEqual(data.read_text(encoding='utf-8'), 'keep')
+                installed = 'plugin' in [row['id'] for row in runtime.snapshot()]
+                self.assertEqual(installed, fail_at < 3)
+                if installed:
+                    self.assertEqual(runtime.status('plugin')['state'], 'stopped')
+                config = default_config()
+                config['components'].append({'directory': str(directory)})
+                restarted = build(config, state_dir=state)
+                self.assertEqual('plugin' in [row['id'] for row in restarted.snapshot()], fail_at < 3)
+                if installed:
+                    runtime.uninstall_component('plugin')
+                    self.assertNotIn('plugin', [row['id'] for row in runtime.snapshot()])
+                else:
+                    runtime._persist()
+                    again = build(config, state_dir=state)
+                    self.assertNotIn('plugin', [row['id'] for row in again.snapshot()])
 
     def test_bootstrap_configuration_can_update_foundation(self):
         config = default_config()
