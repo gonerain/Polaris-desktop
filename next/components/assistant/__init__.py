@@ -11,6 +11,7 @@ from polaris_platform.sdk import Component
 from .loop import AgentLoop, AgentResult
 from .model import configured_model, selected_provider, PROFILES, ModelError
 from .tools import ToolExecutor, operations
+from . import settings
 
 
 class _Turn:
@@ -46,6 +47,7 @@ class Assistant(Component):
         self._stopped = threading.Event()
         self._conversations = OrderedDict()
         self._busy = set()
+        self._settings_input = threading.local()
         self.presentation = None
         self.views = [dict(id='main',title='Polaris Agent',adapter='qt-quick-item',create='create_view',
                            release='release_view', permissions=[dict(name='reply', access='write'),
@@ -55,6 +57,7 @@ class Assistant(Component):
         self.operation('release_view', access='write')(self.release_view)
         self.operation('status', provides='polaris.agent.status@1')(self.status)
         self.operation('reply', access='write', provides='polaris.agent.reply@1')(self.reply)
+        self.operation('configure_model', access='write')(self.configure_model)
 
     def describe(self):
         result = super().describe()
@@ -64,7 +67,44 @@ class Assistant(Component):
                 'text':{'type':'string'},'conversation':{'type':'string'},'allowed':{'type':'array'}}})
         for name in ('create_view', 'release_view'):
             result['operations'][name] = dict(result['operations'][name], profile='qt-native')
+        result['operations']['configure_model'] = dict(result['operations']['configure_model'],
+            title='模型设置', humanOnly=True, modelCallable=False,
+            description='仅接受 Polaris Agent 本机视图中的模型设置保存动作。')
         return result
+
+    def configuration_status(self):
+        with self._lock:
+            return settings.snapshot(self.data_dir)
+
+    def configure_from_view(self, local_input, provider, api_key):
+        # The native input port validates the live, visible view and GUI thread.
+        # The extra marker makes ordinary calls fail even with a self/user grant.
+        self._settings_input.active = True
+        try:
+            result = local_input.call('configure_model', dict(provider=provider, api_key=api_key),
+                                      permissions=[(self.port.id, 'configure_model')])
+        finally:
+            self._settings_input.active = False
+        if self.presentation:
+            self.presentation.configuration_changed()
+        return result
+
+    def configure_model(self, provider, api_key, ctx):
+        origin = ctx.context
+        if (not getattr(self._settings_input, 'active', False) or not self.port
+                or origin.source != 'user' or origin.origin != self.port.id or origin.caller != self.port.id):
+            raise PlatformError('permission_denied', '模型设置只能从 Polaris Agent 本机视图保存')
+        with self._lock:
+            if self._stopped.is_set():
+                raise PlatformError('stale_instance', 'Polaris Agent 已停止')
+            if self._busy:
+                raise PlatformError('busy', '仍有对话正在回复，请完成后再保存模型设置')
+            try:
+                settings.save(self.data_dir, provider, api_key)
+            except ModelError as error:
+                raise PlatformError('invalid_settings', str(error)) from None
+            self.engine = None
+            return self.configuration_status()
 
     def create_view(self, view, parent, ctx):
         if view != 'main':
@@ -132,9 +172,6 @@ class Assistant(Component):
             raise PlatformError('invalid_params', '回调操作无效')
         if max_reply_chars is not None and (type(max_reply_chars) is not int or max_reply_chars < 16):
             raise PlatformError('invalid_params', '回复长度无效')
-        state = self.status()
-        if not state['ready']:
-            raise PlatformError('invalid_state', state['detail'])
         origin = ctx.context
         caller = origin.caller
         key = (origin.origin_installation, caller, conversation)
@@ -142,6 +179,10 @@ class Assistant(Component):
         with self._lock:
             if key in self._busy:
                 raise PlatformError('busy', '该会话正在回复')
+            state = self.status()
+            if not state['ready']:
+                raise PlatformError('invalid_state', state['detail'])
+            engine = self.engine
             snapshots = self._conversations.get(key, {})
             if turn in snapshots:
                 raise PlatformError('duplicate_turn', '本轮已处理')
@@ -152,9 +193,9 @@ class Assistant(Component):
             allowed = [row for row in allowed if row['target'] not in (caller, self.port.id, self.directory_id)]
             tools = ToolExecutor(ctx, allowed, self.directory_id, self.port.id, lease, caller)
             try:
-                result = self.engine.run(text, history, tools, lease)
+                result = engine.run(text, history, tools, lease)
             except ModelError as exc:
-                safe = getattr(self.engine, '_safe', str)
+                safe = getattr(engine, '_safe', str)
                 reply = tools.failure_reply(safe(exc))
                 result = AgentResult(reply, [{'role':'user', 'content':safe(text)}, {'role':'assistant', 'content':reply}])
             if lease.is_set():

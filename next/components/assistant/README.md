@@ -2,6 +2,10 @@
 
 模型配置、提示词、上下文和工具执行由本组件管理。普通聊天完成后直接返回；工具调用执行后将结果加入同一轮消息继续处理，没有固定的二次模型核对。
 
+在画布添加 Polaris Agent 后，点击聊天面板的“模型设置”，选择 DeepSeek、GLM 或 GLM 国际站并输入对应 API 密钥，保存后即可发送消息。已保存的密钥不会回显，输入留空会保留该服务的本机密钥。面板的“已配置，可发送”仅表示本地配置格式有效；保存不会连接服务验证密钥、账户权限或余额。发送失败后可以修改设置并继续使用，无需重启组件。
+
+模型设置只能通过本组件当前可见的本机视图保存，普通操作调用和后台调用均被拒绝。任一会话正在回复时暂不能保存，等待本轮结束后重试。保存服务或密钥会保留已有 `reasoning_effort`；该字段无效时会明确显示配置仍不可用。
+
 每轮最多 8 次模型请求、12 次工具调用，运行时间最多 300 秒，单次输出最多 4096 token。超过 6000 字符的工具结果提供预览和本轮引用，原始结果完整保留；使用 `read_result` 按 JSON Pointer 路径和范围读取。上下文超过预算时先收起较早结果，仍无法容纳时明确停止。
 
 首轮自动提供有界的授权工具目录，带完整参数的操作可直接调用，其余按需查询帮助。大结果中的数组可用 `select_result(result_ref, path?, where?, fields?, offset?, limit?)` 批量筛选与提取顶层字段；筛选只做 JSON 标量精确匹配，不执行表达式，也不再次调用业务操作。
@@ -14,6 +18,8 @@
 配置目录默认为用户数据目录下的 `polaris-assistant`。在 `model.json` 保存 `{"version":1,"provider":"bigmodel"}`，将对应密钥存入权限 0600 的 `bigmodel-api-key`。可选服务为 deepseek、bigmodel、zai；分别使用 `deepseek-api-key`、`bigmodel-api-key`、`zai-api-key`。
 
 启动环境变量 `POLARIS_AGENT_MODEL_PROVIDER` 优先选择服务；密钥环境变量分别为 `DEEPSEEK_API_KEY`、`ZHIPUAI_API_KEY`、`ZAI_API_KEY`，优先于密钥文件。默认 deepseek，bigmodel/zai 使用 GLM-5.3-Flash。
+
+设置窗口会提示服务和密钥的环境变量覆盖；在窗口保存的本机配置不会覆盖启动环境变量。配置与密钥通过临时文件原子写入，文件权限为 0600；写入失败会显示错误，不会报告保存成功。
 
 GLM 默认使用 `low` 推理强度；可在 `model.json` 加入 `"reasoning_effort":"high"` 或 `"max"` 处理复杂任务。思考仍开启。DeepSeek 默认强度保持 `max`。
 
