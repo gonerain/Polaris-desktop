@@ -1,0 +1,246 @@
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
+
+Rectangle {
+    id: root
+    objectName: "feishuBotView"
+    implicitWidth: 820; implicitHeight: 640
+    radius: 12
+    readonly property var hostTheme: parent && parent.polarisTheme !== undefined ? parent.polarisTheme : null
+    readonly property color surface: hostTheme && hostTheme.surface ? hostTheme.surface : "#202126"
+    readonly property color raised: hostTheme && hostTheme.surfaceRaised ? hostTheme.surfaceRaised : "#292a30"
+    readonly property color ink: hostTheme && hostTheme.text ? hostTheme.text : "#e9e9e5"
+    readonly property color muted: hostTheme && hostTheme.muted ? hostTheme.muted : "#a1a29d"
+    readonly property color accent: hostTheme && hostTheme.accent ? hostTheme.accent : "#afc7db"
+    readonly property color line: hostTheme && hostTheme.border ? hostTheme.border : "#3b3c43"
+    readonly property color errorInk: surface.hslLightness < 0.5 ? "#e7aaa5" : "#a33e38"
+    readonly property color onAccent: surface.hslLightness < 0.5 ? "#1c252e" : "#ffffff"
+    readonly property bool narrow: width < 620
+    property var snapshot: typeof feishuBot !== "undefined" && feishuBot ? JSON.parse(feishuBot.stateJson) : ({})
+    property string selectedChatId: ""
+    property string replyMessageId: ""
+    property string replyPreview: ""
+    readonly property var conversations: snapshot.conversations || []
+    readonly property var messages: (snapshot.messages || []).filter(function(message) {
+        return !!root.selectedChatId && message.chatId === root.selectedChatId
+    })
+    readonly property bool connected: snapshot.connectionState === "connected"
+    readonly property bool busy: !!snapshot.busy
+    color: surface
+
+    function messageTime(value) {
+        if (!value) return ""
+        if (typeof value === "number") return Qt.formatDateTime(new Date(value), "MM-dd hh:mm")
+        return String(value)
+    }
+    function chooseConversation(chatId) {
+        selectedChatId = chatId
+        recipient.text = chatId
+        replyMessageId = ""
+        replyPreview = ""
+        feishuBot.selectConversation(chatId)
+    }
+    function openSettings() {
+        robotName.text = snapshot.instanceName || ""
+        appId.text = snapshot.appId || ""
+        secret.clear()
+        settings.open()
+    }
+    function sendDraft() {
+        if (!send.enabled || draft.inputMethodComposing) return
+        feishuBot.sendMessage(recipient.text.trim(), draft.text, replyMessageId)
+    }
+
+    component ActionButton: Button {
+        id: action
+        property bool primary: false
+        implicitHeight: 32; implicitWidth: Math.max(54, contentItem.implicitWidth + 22)
+        leftPadding: 11; rightPadding: 11
+        hoverEnabled: true
+        contentItem: Text {
+            text: action.text; textFormat: Text.PlainText; font.pixelSize: 12; font.weight: Font.Medium
+            color: !action.enabled ? root.muted : action.primary ? root.onAccent : root.ink
+            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+        }
+        background: Rectangle {
+            radius: 7; opacity: action.enabled ? 1 : 0.5
+            color: action.primary ? root.accent : action.hovered || action.down ? root.raised : "transparent"
+            border.width: action.visualFocus ? 2 : 1
+            border.color: action.visualFocus ? root.accent : root.line
+        }
+    }
+    component Field: TextField {
+        id: field
+        implicitHeight: 36; leftPadding: 11; rightPadding: 11
+        color: root.ink; placeholderTextColor: root.muted; font.pixelSize: 13
+        selectionColor: root.accent; selectedTextColor: root.onAccent
+        background: Rectangle {
+            radius: 7; color: root.raised
+            border.width: field.activeFocus ? 2 : 1
+            border.color: field.activeFocus ? root.accent : root.line
+        }
+    }
+    component BodyLabel: Text {
+        color: root.muted; font.pixelSize: 12; textFormat: Text.PlainText; wrapMode: Text.Wrap
+    }
+
+    Connections {
+        target: feishuBot
+        function onMessageSent() {
+            draft.clear()
+            root.replyMessageId = ""
+            root.replyPreview = ""
+        }
+        function onChanged() {
+            if (root.snapshot.selectedChatId && root.snapshot.selectedChatId !== root.selectedChatId) {
+                root.selectedChatId = root.snapshot.selectedChatId
+                recipient.text = root.selectedChatId
+            }
+        }
+    }
+
+    ColumnLayout {
+        anchors.fill: parent; anchors.margins: root.width < 400 ? 12 : 20; spacing: 12
+        RowLayout {
+            Layout.fillWidth: true; spacing: 10
+            ColumnLayout {
+                Layout.fillWidth: true; spacing: 4
+                Text { objectName: "feishuIdentity"; Layout.fillWidth: true; text: root.snapshot.instanceName || "飞书机器人"; color: root.ink; textFormat: Text.PlainText; font.pixelSize: 19; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                BodyLabel { objectName: "feishuLocalConfiguration"; Layout.fillWidth: true; text: root.snapshot.configured ? "本地已配置" : "尚未配置机器人身份" }
+            }
+            ActionButton { objectName: "feishuConfigure"; text: "配置"; enabled: !root.busy; onClicked: root.openSettings() }
+        }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Rectangle { width: 7; height: 7; radius: 4; color: root.connected ? "#a6c8b6" : root.snapshot.connectionState === "error" ? root.errorInk : root.muted }
+            BodyLabel { objectName: "feishuConnectionState"; Layout.fillWidth: true; text: root.snapshot.connectionLabel || "未连接"; color: root.connected ? "#a6c8b6" : root.muted }
+            ActionButton { objectName: "feishuRefresh"; text: "刷新"; enabled: !root.busy; onClicked: feishuBot.refresh() }
+            ActionButton { objectName: "feishuConnect"; text: root.connected ? "断开" : "连接"; primary: !root.connected; enabled: !root.busy && !!root.snapshot.configured; onClicked: root.connected ? feishuBot.disconnectBot() : feishuBot.connectBot() }
+        }
+        Rectangle {
+            Layout.fillWidth: true; implicitHeight: errorText.implicitHeight + 18
+            visible: !!root.snapshot.lastError; color: root.raised; radius: 7; border.color: root.errorInk
+            Text { id: errorText; objectName: "feishuError"; anchors.fill: parent; anchors.margins: 9; text: root.snapshot.lastError || ""; textFormat: Text.PlainText; wrapMode: Text.WrapAnywhere; color: root.errorInk; font.pixelSize: 12 }
+        }
+        BodyLabel { objectName: "feishuNotice"; Layout.fillWidth: true; visible: !!root.snapshot.notice; text: root.snapshot.notice || ""; color: root.accent }
+        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
+        RowLayout {
+            Layout.fillWidth: true; Layout.fillHeight: true; spacing: 14
+            ColumnLayout {
+                Layout.preferredWidth: 178; Layout.fillHeight: true; visible: !root.narrow; spacing: 9
+                Text { text: "最近会话"; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
+                ListView {
+                    id: conversationList; objectName: "feishuConversations"
+                    Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 4
+                    model: root.conversations
+                    delegate: ItemDelegate {
+                        id: conversationRow
+                        required property var modelData
+                        objectName: "feishuConversation_" + modelData.chatId
+                        width: conversationList.width; height: 62
+                        onClicked: root.chooseConversation(modelData.chatId)
+                        background: Rectangle { radius: 7; color: conversationRow.modelData.chatId === root.selectedChatId || conversationRow.hovered ? root.raised : "transparent" }
+                        contentItem: Column {
+                            spacing: 6
+                            Text { width: parent.width; text: conversationRow.modelData.title || conversationRow.modelData.chatId; textFormat: Text.PlainText; color: root.ink; font.pixelSize: 12; elide: Text.ElideRight }
+                            Text { width: parent.width; text: conversationRow.modelData.lastText || "暂无消息"; textFormat: Text.PlainText; color: root.muted; font.pixelSize: 11; elide: Text.ElideRight }
+                        }
+                    }
+                    BodyLabel { anchors.fill: parent; anchors.topMargin: 18; visible: !root.conversations.length; text: "收到消息后，会话会显示在这里。" }
+                    ScrollBar.vertical: ScrollBar { }
+                }
+            }
+            Rectangle { visible: !root.narrow; Layout.fillHeight: true; implicitWidth: 1; color: root.line }
+            ColumnLayout {
+                Layout.fillWidth: true; Layout.fillHeight: true; spacing: 9
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text { text: "消息"; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
+                    BodyLabel { Layout.fillWidth: true; horizontalAlignment: Text.AlignRight; text: root.messages.length ? "最近 " + root.messages.length + " 条" : "" }
+                }
+                ComboBox {
+                    objectName: "feishuConversationPicker"; visible: root.narrow && root.conversations.length > 0
+                    Layout.fillWidth: true; textRole: "title"; model: root.conversations
+                    displayText: currentIndex >= 0 ? (root.conversations[currentIndex].title || root.conversations[currentIndex].chatId) : "选择会话"
+                    currentIndex: root.conversations.findIndex(function(row) { return row.chatId === root.selectedChatId })
+                    onActivated: function(index) { root.chooseConversation(root.conversations[index].chatId) }
+                    palette.text: root.ink; palette.buttonText: root.ink; palette.base: root.raised; palette.button: root.raised
+                }
+                ListView {
+                    id: messageList; objectName: "feishuMessages"
+                    Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 100; clip: true; spacing: 9
+                    model: root.messages
+                    delegate: Rectangle {
+                        id: messageRow
+                        required property var modelData
+                        width: messageList.width; height: messageBody.implicitHeight + 20
+                        radius: 8; color: root.raised
+                        ColumnLayout {
+                            id: messageBody; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; spacing: 7
+                            RowLayout {
+                                Layout.fillWidth: true
+                                BodyLabel { Layout.fillWidth: true; color: root.ink; text: ["outgoing", "outbound"].indexOf(messageRow.modelData.direction) >= 0 ? "机器人" : (messageRow.modelData.sender || "收到消息") }
+                                BodyLabel { text: root.messageTime(messageRow.modelData.createdAt); font.pixelSize: 10 }
+                            }
+                            Text { Layout.fillWidth: true; text: messageRow.modelData.text || "非文本消息"; textFormat: Text.PlainText; wrapMode: Text.WrapAnywhere; color: root.ink; font.pixelSize: 13 }
+                            ActionButton { objectName: "feishuReply_" + messageRow.modelData.messageId; text: "引用回复"; visible: !!messageRow.modelData.messageId; enabled: !root.busy; onClicked: { root.replyMessageId = messageRow.modelData.messageId; root.replyPreview = messageRow.modelData.text || "非文本消息"; draft.forceActiveFocus() } }
+                        }
+                    }
+                    BodyLabel { anchors.fill: parent; anchors.margins: 14; visible: !root.messages.length; text: root.selectedChatId ? "此会话暂无已记录消息。" : "选择最近会话，或在下方输入会话 ID。" }
+                    ScrollBar.vertical: ScrollBar { }
+                }
+                Field { id: recipient; objectName: "feishuRecipient"; Layout.fillWidth: true; placeholderText: "会话 ID（oc_…）"; enabled: !root.busy; onTextEdited: { root.selectedChatId = text.trim(); root.replyMessageId = ""; root.replyPreview = "" } }
+                Rectangle {
+                    Layout.fillWidth: true; implicitHeight: replyText.implicitHeight + 16; visible: !!root.replyMessageId; radius: 7; color: root.raised
+                    RowLayout {
+                        anchors.fill: parent; anchors.margins: 8
+                        Text { id: replyText; objectName: "feishuReplyPreview"; Layout.fillWidth: true; text: "引用：" + root.replyPreview; textFormat: Text.PlainText; color: root.muted; font.pixelSize: 12; maximumLineCount: 2; elide: Text.ElideRight; wrapMode: Text.WrapAnywhere }
+                        ActionButton { objectName: "feishuCancelReply"; text: "取消"; onClicked: { root.replyMessageId = ""; root.replyPreview = "" } }
+                    }
+                }
+                ScrollView {
+                    Layout.fillWidth: true; Layout.preferredHeight: root.height < 560 ? 66 : 88; clip: true
+                    TextArea {
+                        id: draft; objectName: "feishuDraft"; placeholderText: "输入要发送的消息"; wrapMode: TextEdit.Wrap; textFormat: TextEdit.PlainText; selectByMouse: true
+                        color: root.ink; placeholderTextColor: root.muted; font.pixelSize: 13; padding: 11
+                        background: Rectangle { radius: 7; color: root.raised; border.color: draft.activeFocus ? root.accent : root.line }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    BodyLabel { Layout.fillWidth: true; text: root.busy ? "正在处理…" : "点击发送后，消息将发送到指定飞书会话。" }
+                    ActionButton { id: send; objectName: "feishuSend"; text: root.replyMessageId ? "发送回复" : "发送"; primary: true; enabled: root.connected && root.snapshot.readable !== false && !root.busy && !!recipient.text.trim() && !!draft.text.trim(); onClicked: root.sendDraft() }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: settings; objectName: "feishuConfigurationDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent; width: Math.min(450, root.width - 24)
+        modal: true; padding: 20; closePolicy: Popup.CloseOnEscape
+        background: Rectangle { color: root.surface; radius: 12; border.color: root.line }
+        onClosed: secret.clear()
+        contentItem: ColumnLayout {
+            spacing: 12
+            Text { text: "机器人身份"; color: root.ink; font.pixelSize: 17; font.weight: Font.DemiBold }
+            BodyLabel { Layout.fillWidth: true; text: "填写飞书应用的凭据，保存后再连接机器人。" }
+            BodyLabel { text: "显示名称" }
+            Field { id: robotName; objectName: "feishuRobotName"; Layout.fillWidth: true; placeholderText: "例如：项目通知机器人" }
+            BodyLabel { text: "App ID" }
+            Field { id: appId; objectName: "feishuAppId"; Layout.fillWidth: true; placeholderText: "cli_…"; readOnly: !!root.snapshot.appId }
+            BodyLabel { Layout.fillWidth: true; visible: !!root.snapshot.appId; text: "此实例已绑定应用。配置其他机器人时，请创建新实例。" }
+            BodyLabel { text: "App Secret" }
+            Field { id: secret; objectName: "feishuAppSecret"; Layout.fillWidth: true; echoMode: TextInput.Password; placeholderText: root.snapshot.hasSecret ? "已保存；留空保留现有凭据" : "输入应用密钥" }
+            BodyLabel { Layout.fillWidth: true; text: "凭据保存在此机器人实例的本地配置中。连接成功后才会显示在线状态。" }
+            RowLayout {
+                Layout.fillWidth: true; Layout.topMargin: 5
+                Item { Layout.fillWidth: true }
+                ActionButton { objectName: "feishuCancelConfiguration"; text: "取消"; onClicked: settings.close() }
+                ActionButton { objectName: "feishuSaveConfiguration"; text: "保存"; primary: true; enabled: !root.busy && !!robotName.text.trim() && !!appId.text.trim() && (!!secret.text || !!root.snapshot.hasSecret); onClicked: { feishuBot.saveConfiguration(robotName.text.trim(), appId.text.trim(), secret.text); secret.clear(); settings.close() } }
+            }
+        }
+    }
+}

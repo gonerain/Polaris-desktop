@@ -2,7 +2,7 @@
 
 `next/official-components.json` 是本仓库维护的官方组件目录。它记录组件身份、入口、职责和**当前已声明**的能力，而非宣布所有操作已经稳定或通过替代实现认证。`platformApi: 1` 是组件接入协议版本，不是业务契约版本。未声明 `instances` 的清单按运行时默认策略为单实例；视图描述不代表允许创建多个组件实例或窗口。
 
-基础组件是 authorization、collaboration、runtime；桌面组件是 window、canvas、pet、manager、sources、mcp、assistant。它们与业务组件承担不同职责，宿主相关替代实现还需满足相应宿主接口。内置 assistant 是模型对话及授权工具执行组件；`org.polaris.agent` 是外部 Agent Bridge，二者不是同一组件。外部日程拥有任务数据；微信拥有账号和消息数据，目前还包含 Agent 编排，这部分边界有待迁入应用。微信单组件内部可有多个机器人，部分操作省略 `robot_id` 时使用界面当前选择；实例身份不能代替明确的机器人资源身份和授权。飞书目前只是 Linux 用户服务启动器，不是完整机器人组件。`org.example.text-tools` 是示例，不列为官方核心组件。
+基础组件是 authorization、collaboration、runtime；桌面组件是 window、canvas、pet、manager、sources、mcp、assistant。它们与业务组件承担不同职责，宿主相关替代实现还需满足相应宿主接口。内置 assistant 是模型对话及授权工具执行组件；`org.polaris.agent` 是外部 Agent Bridge，二者不是同一组件。外部日程拥有任务数据；微信拥有账号和消息数据，目前还包含 Agent 编排，这部分边界有待迁入应用。微信单组件内部可有多个机器人，部分操作省略 `robot_id` 时使用界面当前选择；实例身份不能代替明确的机器人资源身份和授权。`org.polaris.feishu` 是既有 Linux 用户服务启动器；新组件 `org.polaris.feishu-bot` 独立提供多实例机器人连接与消息能力，二者身份和数据分别管理。`org.example.text-tools` 是示例，不列为官方核心组件。
 
 目录的 `factory` 对应本仓内置 manifest 或所审外部清单；`factoryAliases` 记录观察到的其他入口，并不保证任意版本均可互换。外部仓库和当前本机安装不是此仓 CI 的输入：目录中的版本和声明是审计基线，必须在对应来源重新验证才能发布兼容承诺。外部仓库的工作树可能含未提交修改；它既不等于已发布版本，也不等于已安装副本。日程、微信和 Agent Bridge 工作树在此次审计时均有未提交修改，不能用这些修改推断已安装行为。
 

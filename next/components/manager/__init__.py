@@ -11,6 +11,7 @@ from polaris_platform.protocol import PlatformError
 class ManagerBridge(QObject):
     changed = Signal()
     completed = Signal(object)
+    instanceCreated = Signal(str)
     installationReady = Signal()
     installationCancelled = Signal()
     planReady = Signal()
@@ -113,6 +114,8 @@ class ManagerBridge(QObject):
     def installationPrompt(self):
         plan = self._installation_plan
         if not plan: return ''
+        if plan['action'] == 'destroy_instance':
+            return '删除实例“' + plan['name'] + '”？实例授权将清理，本地数据文件保留。'
         return ('覆盖安装' if plan['action'] == 'replace' else '卸载') + '“' + plan['name'] + '”？'
 
     @Property(bool, notify=changed)
@@ -167,7 +170,16 @@ class ManagerBridge(QObject):
         elif value is not None:
             self._notice = json.dumps(value, ensure_ascii=False, default=str)[:1200]
         if snapshot is not None:
-            records = [dict(item, name=item['manifest']['name'], manageable=item.get('manifest', {}).get('kind') != 'application' and item['id'] != getattr(self.runtime, 'management_component_id', 'manager') and item['id'] not in self.runtime.roles.values()) for item in snapshot]
+            records = []
+            for item in snapshot:
+                multiple = item['manifest'].get('instances', {}).get('mode') == 'multiple'
+                default = item.get('isDefault', True)
+                suffix = (' · 默认实例' if default else ' · 实例 ' + item.get('instanceId', item['id'])[:8]) if multiple else ''
+                records.append(dict(item, name=item['manifest']['name'] + suffix,
+                    canCreateInstance=multiple and item['manifest'].get('kind') != 'application',
+                    manageable=default and item.get('manifest', {}).get('kind') != 'application'
+                        and item['id'] != getattr(self.runtime, 'management_component_id', 'manager')
+                        and item['id'] not in self.runtime.roles.values()))
             self._data = json.dumps(records, ensure_ascii=False, default=str)
             self._permissions = json.dumps(decisions, ensure_ascii=False)
             if self._pending_plan:
@@ -182,6 +194,8 @@ class ManagerBridge(QObject):
                     if source is None or source['state'] != 'running' or source['instance'] != self._pending_plan['requesterInstance']:
                         self.cancelView()
         self.changed.emit()
+        if isinstance(value, dict) and '_instance_created' in value:
+            self.instanceCreated.emit(value['_instance_created'])
         if isinstance(value, dict) and '_view_plan' in value and self._pending_plan is not None:
             if all(row['authorized'] for row in self._pending_plan['permissions']):
                 self.confirmView()
@@ -202,10 +216,28 @@ class ManagerBridge(QObject):
     def lifecycle(self, target, action):
         self.submit(lambda: getattr(self.runtime, action + '_component')(target))
 
+    @Slot(str)
+    def createInstance(self, target):
+        def create():
+            source = self.runtime.status(target)
+            if (source['manifest'].get('instances', {}).get('mode') != 'multiple'
+                    or source['manifest'].get('kind') == 'application'):
+                raise ValueError('此组件不支持新建实例')
+            identity = self.runtime.create_instance(source['componentType'])
+            try:
+                self.runtime.start_instance(identity)
+            except Exception as error:
+                return {'_instance_created': identity, '_notice': '实例已创建，启动失败：' + str(error)}
+            return {'_instance_created': identity, '_notice': '新实例已启动，请打开其界面配置'}
+        self.submit(create, user_input=True)
+
     def _installation_record(self, target):
         return next((row for row in self.runtime.export_installations() if row['manifest']['id'] == target), None)
 
     def _check_manageable(self, target, action='uninstall'):
+        if any(row['id'] == target and not row.get('isDefault', True)
+               for row in self.runtime.snapshot()):
+            raise ValueError('这是独立实例，不能作为组件安装卸载')
         if any(row['id'] == target and row.get('manifest', {}).get('kind') == 'application'
                for row in self.runtime.snapshot()):
             raise ValueError('请在应用入口移除应用')
@@ -242,6 +274,19 @@ class ManagerBridge(QObject):
             return self._installation_confirmation(record, 'uninstall')
         self.submit(prepare, user_input=True)
 
+    @Slot(str)
+    def prepareDeleteInstance(self, target):
+        def prepare():
+            record = self.runtime.status(target)
+            if record.get('isDefault', True):
+                raise ValueError('默认实例不能单独删除')
+            if record['state'] not in ('installed', 'stopped', 'failed'):
+                raise ValueError('请先停止实例，再删除')
+            return {'_installation_plan': dict(action='destroy_instance', target=record['instanceId'],
+                name=record['manifest']['name'] + ' · ' + record['instanceId'][:8],
+                identity=record['instanceId'], installationId=record['installationId'])}
+        self.submit(prepare, user_input=True)
+
     @Slot()
     def cancelInstallation(self):
         self._installation_plan = None
@@ -254,6 +299,18 @@ class ManagerBridge(QObject):
         if plan is None: return
         self.cancelInstallation()
         def execute():
+            if plan['action'] == 'destroy_instance':
+                current = self.runtime.status(plan['target'])
+                if (current.get('isDefault', True) or current['instanceId'] != plan['identity']
+                        or current['installationId'] != plan['installationId']):
+                    raise ValueError('实例信息已变化，请重新选择')
+                try:
+                    self.runtime.destroy_instance(plan['target'])
+                except PlatformError as error:
+                    if error.code == 'instance_in_use':
+                        raise ValueError('实例仍被引用或正在使用，请先解除引用并停止实例') from None
+                    raise
+                return {'_notice': '实例已删除，本地数据文件保留'}
             current = self._installation_record(plan['target'])
             if (current is None or current['installationId'] != plan['identity']
                     or current.get('directory') != plan['directory']):

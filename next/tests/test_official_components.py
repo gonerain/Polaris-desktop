@@ -60,6 +60,25 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout), row['provides'])
 
+    def test_feishu_bot_manifest_and_capabilities(self):
+        import tempfile
+        from importlib import import_module
+        source = ROOT / 'plugins' / 'feishu'
+        row = next(item for item in CATALOG['components'] if item['id'] == 'org.polaris.feishu-bot')
+        manifest = json.loads((source / 'manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual((manifest['id'], manifest['version'], manifest['entry']['factory']),
+                         (row['id'], row['version'], row['factory']))
+        self.assertEqual(manifest['instances']['mode'], row['instancePolicy'])
+        sys.path.insert(0, str(source))
+        self.addCleanup(sys.path.remove, str(source))
+        with tempfile.TemporaryDirectory() as directory:
+            component = import_module('polaris_feishu_bot').FeishuBot(
+                {'instanceId': 'test-instance', 'dataDir': directory})
+            description = component.describe()
+        for group in ('operations', 'events'):
+            declared = {name: meta['provides'] for name, meta in description[group].items() if 'provides' in meta}
+            self.assertEqual(row['provides'][group], declared)
+
     def test_declared_contracts_have_explicit_major_version(self):
         for row in CATALOG['components']:
             for group in ('operations', 'events'):

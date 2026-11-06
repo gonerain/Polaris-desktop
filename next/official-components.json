@@ -290,6 +290,33 @@
         "events": {}
       },
       "maturity": "launcher only; incomplete"
+    },
+    {
+      "id": "org.polaris.feishu-bot",
+      "group": "external",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "polaris_feishu_bot:create",
+      "factoryAliases": [],
+      "source": "next/plugins/feishu",
+      "manifest": null,
+      "instancePolicy": "multiple",
+      "viewPolicy": "main",
+      "responsibility": "飞书机器人连接、消息与卡片交互",
+      "dataOwnership": "实例独立配置及消息记录",
+      "provides": {
+        "operations": {
+          "status": "polaris.feishu.status@1",
+          "read_messages": "polaris.feishu.read-messages@1",
+          "read_card_actions": "polaris.feishu.read-card-actions@1",
+          "send": "polaris.feishu.send@1",
+          "reply": "polaris.feishu.reply@1",
+          "send_card": "polaris.feishu.send-card@1",
+          "update_card": "polaris.feishu.update-card@1"
+        },
+        "events": {}
+      },
+      "maturity": "initial; capability replacement not certified"
     }
   ]
 }

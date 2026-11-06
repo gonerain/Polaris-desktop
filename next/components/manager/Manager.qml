@@ -208,7 +208,7 @@ Pane {
         }
     }
     FolderDialog { id: folder; title: '选择组件目录'; onAccepted: manager.loadDirectory(selectedFolder.toString()) }
-    Connections { target: manager; function onPlanReady() { viewPlan.open() } function onPlanCancelled() { viewPlan.close() } }
+    Connections { target: manager; function onInstanceCreated(identity) { root.selectedId = identity } function onPlanReady() { viewPlan.open() } function onPlanCancelled() { viewPlan.close() } }
     SettingsDialog {
         id: viewPlan; objectName: 'viewPermissionDialog'; title: '确认能力权限'; modal: true; anchors.centerIn: parent; width: Math.min(580, root.width - 48)
         onClosed: { if (manager) manager.cancelView() }
@@ -348,9 +348,16 @@ Pane {
                             }
                             Label { visible: root.current.manifest?.kind === 'application'; text: '请在应用入口移除应用'; color: root.muted; font.pixelSize: 12 }
                             RowLayout {
-                                SettingsButton { text: '启动'; primary: root.current.state !== 'running'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'start') }
+                                visible: !!root.current.canCreateInstance
+                                SettingsButton { objectName: 'createComponentInstance'; text: '新建实例'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.createInstance(root.current.id) }
+                                Label { Layout.fillWidth: true; text: '新实例使用独立配置'; wrapMode: Text.Wrap; color: root.muted; font.pixelSize: 12 }
+                            }
+                            Label { visible: root.current.isDefault === false; text: '此实例可独立启动和停止'; color: root.muted; font.pixelSize: 12 }
+                            SettingsButton { objectName: 'deleteComponentInstance'; text: '删除实例'; visible: root.current.isDefault === false; danger: true; flat: true; enabled: manager && !manager.busy && ['installed', 'stopped', 'failed'].indexOf(root.current.state) >= 0; onClicked: manager.prepareDeleteInstance(root.current.id) }
+                            RowLayout {
+                                SettingsButton { objectName: 'startComponentInstance'; text: '启动'; primary: root.current.state !== 'running'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'start') }
                                 SettingsButton { objectName: 'uninstallComponent'; text: '卸载'; flat: true; danger: true; enabled: !!root.current.id && root.current.manageable && manager && !manager.busy; onClicked: manager.prepareUninstall(root.current.id) }
-                                SettingsButton { text: '停止'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'stop') }
+                                SettingsButton { objectName: 'stopComponentInstance'; text: '停止'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'stop') }
                                 Repeater { model: root.viewActions(root.current)
                                     SettingsButton { required property var modelData; text: modelData.label; enabled: !!root.subjectId && manager && !manager.busy
                                         onClicked: manager.prepareView(root.subjectId, root.current.id, modelData.operation) }

@@ -551,6 +551,14 @@ class Canvas(Presentation):
             finished()
             raise
 
+    @staticmethod
+    def _instance_suffix(component):
+        if component['manifest'].get('instances', {}).get('mode') != 'multiple':
+            return ''
+        if component.get('isDefault', True):
+            return ' · 默认实例'
+        return ' · 实例 ' + component.get('instanceId', component['id'])[:8]
+
     def refresh_views(self):
         self.available_views = []
         if self.user_access is not None:
@@ -559,7 +567,7 @@ class Canvas(Presentation):
                     continue
                 for descriptor in component.get('description', {}).get('views', []):
                     if descriptor.get('adapter') == 'qt-quick-item':
-                        self.available_views.append(dict(target=component.get('instanceId', component['id']), stableInstanceId=component.get('instanceId'), componentName=component['manifest']['name'],
+                        self.available_views.append(dict(target=component.get('instanceId', component['id']), stableInstanceId=component.get('instanceId'), componentName=component['manifest']['name'] + self._instance_suffix(component),
                             title=descriptor.get('title', descriptor['id']), descriptor=descriptor))
         self.actions.viewsChanged.emit()
 
@@ -585,6 +593,7 @@ class Canvas(Presentation):
         if stable_id:
             target = stable_id
         declared = None
+        current = None
         if self.user_access is not None:
             current = self.user_access.status(target)
             declared = next((view for view in current.get('description', {}).get('views', []) if view.get('id') == view_id), None)
@@ -662,7 +671,7 @@ class Canvas(Presentation):
                         break
                 if found:
                     break
-            record = dict(mountId=mount_id, layoutId=layout_id, target=target, stableInstanceId=stable_id, view=view_id, title=str(descriptor.get('title', target)),
+            record = dict(mountId=mount_id, layoutId=layout_id, target=target, stableInstanceId=stable_id, view=view_id, title=str(descriptor.get('title', target)) + (self._instance_suffix(current) if current else ''),
                           create=create, release=release, bound=bound, release_bound=release_bound, context=context, handle=None,
                           state='pending', error='', container=None, item=None, client=client, cancelled=False,
                           preferredSize=(card_width, card_height),
