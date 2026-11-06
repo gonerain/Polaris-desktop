@@ -1,6 +1,6 @@
 # 飞书机器人组件
 
-原生组件 `org.polaris.feishu-bot` 使用官方 `lark-channel-sdk==1.4.0`，支持多个机器人实例。每个实例拥有独立 App ID、凭据文件、消息数据库、游标和 SDK 子进程。通过组件管理器新建实例，在组件界面配置并连接；接入步骤见 [SETUP.md](SETUP.md)。
+原生组件 `org.polaris.feishu-bot` 使用官方 `lark-channel-sdk==1.4.0` 与注册 SDK `lark-oapi==1.7.5`，支持多个机器人实例。每个实例拥有独立 App ID、凭据文件、消息数据库、游标和 SDK 子进程。通过组件管理器新建实例，在组件界面扫码创建或关联已有机器人；接入步骤见 [SETUP.md](SETUP.md)。
 
 ## 功能与接口
 

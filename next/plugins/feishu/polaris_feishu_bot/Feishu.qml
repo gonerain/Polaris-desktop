@@ -25,6 +25,9 @@ Rectangle {
     readonly property var messages: (snapshot.messages || []).filter(function(message) {
         return !!root.selectedChatId && message.chatId === root.selectedChatId
     })
+    readonly property var registration: snapshot.registration || ({state: "idle"})
+    readonly property bool registering: ["waiting", "scanned", "creating", "connecting"].indexOf(registration.state) >= 0
+    readonly property string registrationLabel: ({idle: "扫码接入飞书", waiting: "等待扫码确认", scanned: "已扫码，请在飞书中确认", creating: "正在创建机器人", connecting: "已保存，正在连接", complete: "机器人已接入", expired: "二维码已过期", cancelled: "已取消扫码", error: "扫码接入未完成"})[registration.state] || "扫码接入飞书"
     readonly property bool connected: snapshot.connectionState === "connected"
     readonly property bool busy: !!snapshot.busy
     color: surface
@@ -109,14 +112,15 @@ Rectangle {
                 Text { objectName: "feishuIdentity"; Layout.fillWidth: true; text: root.snapshot.instanceName || "飞书机器人"; color: root.ink; textFormat: Text.PlainText; font.pixelSize: 19; font.weight: Font.DemiBold; elide: Text.ElideRight }
                 BodyLabel { objectName: "feishuLocalConfiguration"; Layout.fillWidth: true; text: root.snapshot.configured ? "本地已配置" : "尚未配置机器人身份" }
             }
-            ActionButton { objectName: "feishuConfigure"; text: "配置"; enabled: !root.busy; onClicked: root.openSettings() }
+            ActionButton { objectName: "feishuConfigure"; text: root.snapshot.configured ? "配置" : "关联已有机器人"; enabled: !root.busy && !root.registering; onClicked: root.openSettings() }
         }
         RowLayout {
             Layout.fillWidth: true; spacing: 8
             Rectangle { width: 7; height: 7; radius: 4; color: root.connected ? "#a6c8b6" : root.snapshot.connectionState === "error" ? root.errorInk : root.muted }
             BodyLabel { objectName: "feishuConnectionState"; Layout.fillWidth: true; text: root.snapshot.connectionLabel || "未连接"; color: root.connected ? "#a6c8b6" : root.muted }
+            ActionButton { objectName: "feishuCancelRegistration"; text: "取消扫码"; visible: root.registering; enabled: !root.busy; onClicked: feishuBot.cancelRegistration() }
             ActionButton { objectName: "feishuRefresh"; text: "刷新"; enabled: !root.busy; onClicked: feishuBot.refresh() }
-            ActionButton { objectName: "feishuConnect"; text: root.connected ? "断开" : "连接"; primary: !root.connected; enabled: !root.busy && !!root.snapshot.configured; onClicked: root.connected ? feishuBot.disconnectBot() : feishuBot.connectBot() }
+            ActionButton { objectName: "feishuConnect"; visible: !root.registering; text: root.connected ? "断开" : "连接"; primary: !root.connected; enabled: !root.busy && !!root.snapshot.configured; onClicked: root.connected ? feishuBot.disconnectBot() : feishuBot.connectBot() }
         }
         Rectangle {
             Layout.fillWidth: true; implicitHeight: errorText.implicitHeight + 18
@@ -125,8 +129,44 @@ Rectangle {
         }
         BodyLabel { objectName: "feishuNotice"; Layout.fillWidth: true; visible: !!root.snapshot.notice; text: root.snapshot.notice || ""; color: root.accent }
         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }
+        ScrollView {
+            objectName: "feishuOnboarding"; visible: !root.snapshot.configured
+            Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+            contentWidth: availableWidth
+            ColumnLayout {
+                width: parent.width; spacing: 16
+                Item { Layout.preferredHeight: 6 }
+                Text { Layout.fillWidth: true; visible: !root.registering; text: "用飞书扫码，创建你的机器人"; textFormat: Text.PlainText; wrapMode: Text.Wrap; font.pixelSize: root.narrow ? 19 : 23; font.weight: Font.DemiBold; color: root.ink }
+                BodyLabel { Layout.fillWidth: true; visible: !root.registering; text: "在飞书官方页面确认创建。完成后，凭据会保存到此实例并自动连接。" }
+                Rectangle {
+                    Layout.fillWidth: true; implicitHeight: onboardingContent.implicitHeight + 32
+                    radius: 10; color: root.raised; border.color: root.line
+                    ColumnLayout {
+                        id: onboardingContent; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 16; spacing: 13
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { objectName: "feishuRegistrationState"; Layout.fillWidth: true; text: root.registrationLabel; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: root.ink; font.pixelSize: 15; font.weight: Font.DemiBold }
+                        }
+                        Rectangle {
+                            Layout.alignment: Qt.AlignHCenter; implicitWidth: Math.min(320, root.width - 64); implicitHeight: implicitWidth
+                            visible: !!root.registration.qrImageSource; color: "white"; radius: 6
+                            Image { objectName: "feishuRegistrationQr"; anchors.centerIn: parent; width: root.registration.qrModules ? root.registration.qrModules * Math.max(1, Math.floor((parent.width - 12) / root.registration.qrModules)) : parent.width - 12; height: width; sourceSize.width: width; sourceSize.height: height; source: root.registration.qrImageSource || ""; fillMode: Image.PreserveAspectFit; smooth: false; asynchronous: false }
+                        }
+                        BodyLabel { objectName: "feishuRegistrationMessage"; Layout.fillWidth: true; visible: !!root.registration.message; text: root.registration.message || ""; color: root.registration.state === "error" ? root.errorInk : root.muted }
+                        BodyLabel { Layout.fillWidth: true; visible: root.registration.state === "waiting" || root.registration.state === "scanned"; text: "请使用手机飞书扫码，并在官方页面完成确认。" }
+                        ActionButton { objectName: "feishuRegistrationBrowser"; text: "在浏览器中打开官方页面"; visible: !!root.registration.verificationUrl; enabled: !root.busy; onClicked: feishuBot.openRegistrationLink() }
+                        Flow {
+                            Layout.fillWidth: true; spacing: 9
+                            ActionButton { objectName: "feishuStartRegistration"; text: root.registration.state === "expired" ? "刷新二维码" : ["error", "cancelled"].indexOf(root.registration.state) >= 0 ? "重新扫码" : "扫码创建机器人"; primary: true; visible: !root.registering; enabled: !root.busy; onClicked: feishuBot.startRegistration() }
+                        }
+                    }
+                }
+                BodyLabel { Layout.fillWidth: true; visible: !root.registering; text: "已有应用？使用右上角“关联已有机器人”填写 App ID 和 App Secret。" }
+                Item { Layout.preferredHeight: 10 }
+            }
+        }
         RowLayout {
-            Layout.fillWidth: true; Layout.fillHeight: true; spacing: 14
+            Layout.fillWidth: true; Layout.fillHeight: true; spacing: 14; visible: !!root.snapshot.configured
             ColumnLayout {
                 Layout.preferredWidth: 178; Layout.fillHeight: true; visible: !root.narrow; spacing: 9
                 Text { text: "最近会话"; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }

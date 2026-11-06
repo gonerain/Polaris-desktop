@@ -17,6 +17,16 @@ if __name__ != '__main__':
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 else:
     import json
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'plugins/feishu'))
+    def qr_image_source(url, with_modules=False):
+        import base64, io, qrcode, qrcode.image.svg
+        code = qrcode.QRCode(box_size=8, border=4)
+        code.add_data(url)
+        code.make(fit=True)
+        stream = io.BytesIO()
+        code.make_image(image_factory=qrcode.image.svg.SvgPathImage).save(stream)
+        source = 'data:image/svg+xml;base64,' + base64.b64encode(stream.getvalue()).decode()
+        return (source, code.modules_count + 8) if with_modules else source
     from PySide6.QtCore import QObject, Property, Signal, Slot, QUrl, QMetaObject, QPointF, Qt
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtQuick import QQuickView
@@ -33,12 +43,24 @@ else:
             self.calls = []
             self.state = dict(instanceName=name, appId='', hasSecret=False, configured=False,
                 connectionState='disconnected', connectionLabel='未连接', busy=False, lastError='', notice='',
-                conversations=[], messages=[])
+                conversations=[], messages=[], registration=dict(state='idle', verificationUrl='', qrImageSource='', message='', expiresAt=0))
         @Property(str, notify=changed)
         def stateJson(self): return json.dumps(self.state)
         def update(self, **values):
             self.state.update(values)
             self.changed.emit()
+        @Slot()
+        def startRegistration(self):
+            self.calls.append(('startRegistration',))
+            url = 'https://open.feishu.cn/registration?mock=' + 'long-mock-url-' * 34
+            source, modules = qr_image_source(url, with_modules=True)
+            self.update(registration=dict(state='waiting', verificationUrl=url, qrImageSource=source, qrModules=modules, message='请扫码并确认', expiresAt=9999999999))
+        @Slot()
+        def cancelRegistration(self):
+            self.calls.append(('cancelRegistration',))
+            self.update(registration=dict(state='cancelled', verificationUrl='', qrImageSource='', message='', expiresAt=0))
+        @Slot()
+        def openRegistrationLink(self): self.calls.append(('browser',))
         @Slot(str, str, str)
         def saveConfiguration(self, name, app_id, secret):
             self.calls.append(('save', name, app_id, bool(secret)))
@@ -97,6 +119,37 @@ else:
                 messages=[dict(messageId='om_test', chatId='oc_test', sender='小林', text='<b>普通文本</b>', createdAt='10:20', direction='incoming')])
             QTest.qWait(20)
             self.click('feishuConversation_oc_test')
+
+        def test_scan_creation_is_explicit_cancel_retry_and_success(self):
+            self.assertTrue(self.control('feishuStartRegistration').isVisible())
+            self.assertEqual(self.bridge.calls, [])
+            self.click('feishuStartRegistration')
+            self.assertEqual(self.control('feishuRegistrationState').property('text'), '等待扫码确认')
+            self.assertTrue(self.control('feishuRegistrationQr').isVisible())
+            self.click('feishuRefresh')
+            self.assertEqual(len([row for row in self.bridge.calls if row[0] == 'startRegistration']), 1)
+            capture = os.environ.get('POLARIS_FEISHU_CAPTURE')
+            if capture:
+                Path(capture).mkdir(parents=True, exist_ok=True)
+                QTest.qWait(100)
+                self.window.grabWindow().save(str(Path(capture) / 'feishu-scan-waiting.png'))
+                self.window.resize(380, 640)
+                QTest.qWait(30)
+                self.window.grabWindow().save(str(Path(capture) / 'feishu-scan-narrow.png'))
+            self.click('feishuCancelRegistration')
+            self.assertFalse(self.control('feishuRegistrationQr').isVisible())
+            self.assertEqual(self.bridge.state['registration']['state'], 'cancelled')
+            self.bridge.update(registration=dict(state='expired', verificationUrl='', qrImageSource='', message='二维码已过期', expiresAt=0))
+            self.assertEqual(self.control('feishuStartRegistration').property('text'), '刷新二维码')
+            self.click('feishuStartRegistration')
+            self.bridge.update(registration=dict(state='error', verificationUrl='', qrImageSource='', message='官方注册暂不可用，请重试', expiresAt=0))
+            self.assertEqual(self.control('feishuStartRegistration').property('text'), '重新扫码')
+            self.click('feishuStartRegistration')
+            self.bridge.update(configured=True, appId='cli_from_mock', hasSecret=True, connectionState='connected',
+                registration=dict(state='complete', verificationUrl='', qrImageSource='', message='已完成', expiresAt=0))
+            self.assertFalse(self.control('feishuOnboarding').isVisible())
+            self.assertTrue(self.control('feishuMessages').isVisible())
+            self.assertFalse(any(row[0] == 'send' for row in self.bridge.calls))
 
         def test_configuration_masks_secret_and_does_not_claim_connection(self):
             self.assertEqual(self.bridge.calls, [])

@@ -294,7 +294,7 @@
     {
       "id": "org.polaris.feishu-bot",
       "group": "external",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "platformApi": 1,
       "factory": "polaris_feishu_bot:create",
       "factoryAliases": [],

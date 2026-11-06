@@ -8,10 +8,11 @@ from polaris_platform.protocol import PlatformError
 from polaris_platform.sdk import Component
 from .store import Store
 from .transport import WorkerTransport
+from .registration import RegistrationController
 
 
 class FeishuBot(Component):
-    def __init__(self, instance_context, transport_factory=None):
+    def __init__(self, instance_context, transport_factory=None, registration_transport_factory=None):
         super().__init__()
         self.instance_id = instance_context['instanceId']
         self.store = Store(instance_context['dataDir'])
@@ -27,6 +28,7 @@ class FeishuBot(Component):
         self._human_contexts = set()
         self._view_action = threading.local()
         self.presentation = None
+        self.registration = RegistrationController(self, registration_transport_factory or WorkerTransport)
         self.views = [dict(id='main', title='飞书机器人', adapter='qt-quick-item',
             create='create_view', release='release_view', preferredSize=dict(width=760, height=600),
             permissions=[dict(name=name, access='read') for name in ('status', 'read_messages')])]
@@ -40,12 +42,14 @@ class FeishuBot(Component):
                            applicationBinding='instance')(handler)
         for name, handler in [('configure', self.configure), ('connect', self.connect),
                               ('disconnect', self.disconnect), ('prepare_action', self.prepare_action),
+                              ('start_registration', self.start_registration), ('cancel_registration', self.cancel_registration),
+                              ('registration_checkpoint', self.registration_checkpoint),
                               ('create_view', self.create_view), ('release_view', self.release_view)]:
             self.operation(name, access='write')(handler)
 
     def describe(self):
         value = super().describe()
-        for name in ('configure', 'connect', 'disconnect', 'prepare_action'):
+        for name in ('configure', 'connect', 'disconnect', 'prepare_action', 'start_registration', 'cancel_registration', 'registration_checkpoint'):
             value['operations'][name].update(humanOnly=True, modelCallable=False)
         for name in ('create_view', 'release_view'):
             value['operations'][name]['profile'] = 'qt-native'
@@ -69,6 +73,8 @@ class FeishuBot(Component):
             threading.Thread(target=resume, daemon=True, name='feishu-resume').start()
 
     def stop(self):
+        self.registration.cancel()
+        self.registration.owners.clear()
         with self._lock:
             self._stopped = True
             self._generation += 1
@@ -115,6 +121,7 @@ class FeishuBot(Component):
         app_id = self._text(app_id, 'App ID', 200)
         if not isinstance(secret, str) or len(secret) > 2048:
             raise PlatformError('invalid_params', 'App Secret 格式无效')
+        self.registration.cancel()
         with self._network_lock:
             previous = self.store.configuration()
             if previous['appId'] and previous['appId'] != app_id:
@@ -187,6 +194,7 @@ class FeishuBot(Component):
 
     def disconnect(self, ctx):
         self._human(ctx)
+        self.registration.cancel()
         config = self.store.configuration()
         config['desiredConnected'] = False
         self.store.configure(config)
@@ -278,13 +286,14 @@ class FeishuBot(Component):
         self._view_action.active = True
         try:
             return local_input.call('prepare_action', dict(operation=operation, params=params),
-                permissions=[(self.port.id, 'prepare_action'), (self.port.id, operation)])['ticket']
+                permissions=[(self.port.id, 'prepare_action'), (self.port.id, operation)]
+                    + ([(self.port.id, 'registration_checkpoint')] if operation == 'start_registration' else []))['ticket']
         finally:
             self._view_action.active = False
 
     def prepare_action(self, operation, params, ctx):
         self._check()
-        if not getattr(self._view_action, 'active', False) or operation not in ('configure', 'connect', 'disconnect', 'send'):
+        if not getattr(self._view_action, 'active', False) or operation not in ('configure', 'connect', 'disconnect', 'send', 'start_registration', 'cancel_registration'):
             raise PlatformError('permission_denied', '操作必须来自当前本机界面')
         ticket = uuid4().hex
         with self._lock:
@@ -305,6 +314,34 @@ class FeishuBot(Component):
         finally:
             with self._lock:
                 self._human_contexts.discard(context.request_id)
+
+    def start_registration(self, name, owner_id, ctx):
+        self._human(ctx)
+        name = self._text(name, '机器人名称', 100)
+        owner_id = self._text(owner_id, '本机视图标识', 128)
+        if owner_id not in self.registration.owners:
+            raise PlatformError('stale_view', '本机视图已关闭，请重新打开')
+        return self.registration.start(name, owner_id, ctx.context)
+
+    def cancel_registration(self, owner_id, ctx):
+        self._human(ctx)
+        return self.registration.cancel(owner_id)
+
+    def registration_checkpoint(self, session_id, ctx):
+        return self.registration.checkpoint(session_id, ctx)
+
+    def register_registration_owner(self, owner_id, validator):
+        with self._lock:
+            self._check()
+            self.registration.owners[owner_id] = validator
+
+    def registration_snapshot(self, owner_id):
+        return self.registration.snapshot(owner_id)
+
+    def cancel_registration_owner(self, owner_id):
+        with self._lock:
+            self.registration.owners.pop(owner_id, None)
+        self.registration.cancel(owner_id)
 
     def create_view(self, view, parent, ctx):
         self._check()

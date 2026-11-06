@@ -4,6 +4,7 @@ from pathlib import Path
 import threading
 from uuid import uuid4
 from PySide6.QtCore import QObject, Signal, Slot, Property, QUrl, QTimer
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtQml import QQmlComponent, QQmlContext, qmlContext, qmlEngine
 from shiboken6 import isValid
 from polaris_platform.protocol import PlatformError
@@ -19,6 +20,7 @@ class BotBridge(QObject):
         super().__init__(parent)
         self.component, self.ctx, self.local_input = component, ctx, local_input
         self.identity = component.port.id
+        self.owner_id = uuid4().hex
         self.closed = threading.Event()
         self._polling = False
         self._busy = False
@@ -27,7 +29,9 @@ class BotBridge(QObject):
         self._readable = False
         self._state = dict(instanceName='飞书机器人', appId='', hasSecret=False, configured=False,
             connectionState='disconnected', connectionLabel='未连接', lastError='', notice='',
-            busy=False, readable=False, conversations=[], messages=[], selectedChatId='')
+            busy=False, readable=False, conversations=[], messages=[], selectedChatId='',
+            registration=dict(state='idle', verificationUrl='', qrImageSource='', message='', expiresAt=0))
+        self.component.register_registration_owner(self.owner_id, self._validate_registration_owner)
         self.completed.connect(self._complete)
         self.timer = QTimer(self)
         self.timer.setInterval(1200)
@@ -49,6 +53,7 @@ class BotBridge(QObject):
                 status = dict(value['status'])
                 backend_error = status.pop('lastError', '')
                 self._state.update(status)
+                self._state['registration'] = value['registration']
                 if backend_error:
                     self._state['lastError'] = backend_error
                 self._readable = True
@@ -80,7 +85,8 @@ class BotBridge(QObject):
                 self._messages = []
                 self._cursor = 0
                 self._readable = False
-                self._state.update(messages=[], conversations=[], selectedChatId='', readable=False)
+                self._state.update(messages=[], conversations=[], selectedChatId='', readable=False,
+                    registration=dict(state='idle', verificationUrl='', qrImageSource='', message='', expiresAt=0))
         self._state['connectionLabel'] = {'disconnected': '未连接', 'connecting': '连接中',
             'connected': '已连接', 'error': '连接异常'}.get(self._state['connectionState'], '未连接')
         self.changed.emit()
@@ -105,12 +111,56 @@ class BotBridge(QObject):
                     cursor = result['nextCursor']
                     if len(result['items']) < 500:
                         break
-                value = dict(kind='refresh', status=status, messages=messages, cursor=cursor)
+                registration = self._registration_snapshot()
+                value = dict(kind='refresh', status=status, messages=messages, cursor=cursor, registration=registration)
             except Exception as error:
+                self.component.cancel_registration_owner(self.owner_id)
                 value = dict(kind='refresh', error=self._error(error))
             if not self.closed.is_set() and isValid(self):
                 self.completed.emit(value)
         threading.Thread(target=work, daemon=True).start()
+
+    def _validate_registration_owner(self):
+        if self.closed.is_set():
+            raise PlatformError('stale_view', '扫码视图已经关闭')
+        self.ctx.call(self.identity, 'status', {})
+        self.ctx.call(self.identity, 'read_messages', {'limit': 1})
+
+    def _registration_snapshot(self):
+        from .registration import is_registration_url
+        raw = self.component.registration_snapshot(self.owner_id)
+        state = raw.get('state', 'idle')
+        value = dict(state=state, verificationUrl='', qrImageSource='', message=raw.get('message', ''),
+                     expiresAt=raw.get('expiresAt', 0))
+        url = raw.get('verificationUrl', '')
+        if state in ('waiting', 'scanned', 'creating') and url and is_registration_url(url):
+            value['verificationUrl'] = url
+            source = raw.get('qrDataUrl', '')
+            if (isinstance(source, str) and source.startswith('data:image/svg+xml;base64,')
+                    and len(source) <= 2_000_000):
+                value['qrImageSource'] = source
+                modules = raw.get('qrModules', 0)
+                if type(modules) is int and 21 <= modules <= 185:
+                    value['qrModules'] = modules
+        return value
+
+    @Slot()
+    def startRegistration(self):
+        if self.closed.is_set():
+            return
+        self.component.register_registration_owner(self.owner_id, self._validate_registration_owner)
+        self._action('start_registration', dict(name=self._state['instanceName'], owner_id=self.owner_id))
+
+    @Slot()
+    def cancelRegistration(self):
+        self._action('cancel_registration', dict(owner_id=self.owner_id))
+
+    @Slot()
+    def openRegistrationLink(self):
+        from .registration import is_registration_url
+        url = self._state['registration'].get('verificationUrl', '')
+        if not self.closed.is_set() and is_registration_url(url):
+            QDesktopServices.openUrl(QUrl(url))
 
     def _action(self, operation, params):
         if self.closed.is_set() or self._busy:
@@ -162,6 +212,8 @@ class BotBridge(QObject):
     def close(self):
         self.closed.set()
         self.timer.stop()
+        self.component.cancel_registration_owner(self.owner_id)
+        self._state['registration'] = dict(state='cancelled', verificationUrl='', qrImageSource='', message='', expiresAt=0)
         self.local_input.close()
 
 

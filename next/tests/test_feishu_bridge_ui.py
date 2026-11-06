@@ -40,6 +40,35 @@ else:
             return {'success': True, 'messageId': 'om_fake_' + str(len(self.requests))}
         def close(self): self.closed = True
 
+    import base64, io, qrcode, qrcode.image.svg
+    MOCK_REGISTRATIONS = []
+    for _index in range(2):
+        _url = 'https://open.feishu.cn/registration?mock=' + str(_index) + 'long-mock-url-' * 34
+        _qr = qrcode.QRCode(box_size=8, border=4)
+        _qr.add_data(_url)
+        _qr.make(fit=True)
+        _stream = io.BytesIO()
+        _qr.make_image(image_factory=qrcode.image.svg.SvgPathImage).save(_stream)
+        MOCK_REGISTRATIONS.append((_url, 'data:image/svg+xml;base64,' + base64.b64encode(_stream.getvalue()).decode(), _qr.modules_count + 8))
+
+    class FakeRegistration:
+        counter = 0
+        def __init__(self, callback):
+            self.callback = callback
+            self.url, self.qr_source, self.modules = MOCK_REGISTRATIONS[FakeRegistration.counter % 2]
+            FakeRegistration.counter += 1
+            self.requests = []
+            self.closed = False
+        def request(self, operation, params=None, timeout=35):
+            self.requests.append((operation, dict(params or {})))
+            if operation == 'registration_start':
+                self.callback('registration', dict(state='waiting', verificationUrl=self.url,
+                    expiresAt=time.time() + 600, message='请扫码确认', qrDataUrl=self.qr_source, qrModules=self.modules))
+                return {'started': True}
+            return {}
+        def emit(self, **payload): self.callback('registration', payload)
+        def close(self): self.closed = True
+
     def find(item, name):
         if item.objectName() == name: return item
         for child in item.childItems():
@@ -58,13 +87,19 @@ else:
         def setUp(self):
             self.temporary = tempfile.TemporaryDirectory()
             self.directory = Path(self.temporary.name)
+            self.registration_sessions = []
+            def registration_factory(callback):
+                session = FakeRegistration(callback)
+                self.registration_sessions.append(session)
+                return session
             self.runtime = build(default_config(), state_dir=self.directory / 'runtime')
             self.runtime.install(dict(id='viewer', name='查看者', version='1', platformApi=1,
                 entry={'mode': 'inprocess'}), Component)
             self.runtime.start_component('viewer')
             self.runtime.install(dict(id='bot-fixture', name='飞书机器人测试', version='1', platformApi=1,
                 entry={'mode': 'inprocess'}, instances={'mode': 'multiple'}),
-                lambda instance_context: FeishuBot(instance_context, transport_factory=FakeTransport))
+                lambda instance_context: FeishuBot(instance_context, transport_factory=FakeTransport,
+                    registration_transport_factory=registration_factory))
             self.runtime.start_component('bot-fixture')
             self.first = self.runtime.status('bot-fixture')['instanceId']
             self.second = self.runtime.create_instance('bot-fixture')
@@ -72,6 +107,7 @@ else:
             (self.directory / 'Root.qml').write_text('import QtQuick\nRectangle { width: 820; height: 640 }')
             self.windows = []
             self.views = {}
+            self.handles = {}
             for identity in (self.first, self.second):
                 for operation in ('create_view', 'release_view', 'status', 'read_messages'):
                     self.runtime.grant('viewer', identity, operation)
@@ -87,6 +123,7 @@ else:
                 item.setWidth(820)
                 item.setHeight(640)
                 self.views[identity] = (component, item, bridge)
+                self.handles[identity] = result['handle']
             self.wait(lambda: all(not view[2]._polling for view in self.views.values()))
         def call(self, target, operation, params=None):
             return self.runtime.client('viewer').call(target, operation, params,
@@ -126,6 +163,78 @@ else:
                 self.qt.processEvents()
                 QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
             self.temporary.cleanup()
+
+        def start_scan(self, identity=None):
+            identity = identity or self.first
+            component, item, bridge = self.views[identity]
+            self.click(identity, 'feishuStartRegistration')
+            self.wait(lambda: not bridge._busy and json.loads(bridge.stateJson)['registration']['state'] == 'waiting')
+            return component, item, bridge, self.registration_sessions[-1]
+
+        def test_registration_cancel_failure_retry_and_success_from_qml(self):
+            component, item, bridge, session = self.start_scan()
+            self.assertTrue(json.loads(bridge.stateJson)['registration']['qrImageSource'].startswith('data:image/svg+xml;base64,'))
+            self.assertFalse(json.loads(self.views[self.second][2].stateJson)['registration']['verificationUrl'])
+            bridge.refresh()
+            self.wait(lambda: not bridge._polling)
+            self.assertEqual(len(self.registration_sessions), 1)
+            self.click(self.first, 'feishuCancelRegistration')
+            self.wait(lambda: not bridge._busy and session.closed)
+            self.assertFalse(component.status()['configured'])
+            component, item, bridge, failed = self.start_scan()
+            failed.emit(state='error', message='扫码创建失败，请重试')
+            bridge.refresh()
+            self.wait(lambda: json.loads(bridge.stateJson)['registration']['state'] == 'error')
+            self.assertEqual(find(item, 'feishuStartRegistration').property('text'), '重新扫码')
+            component, item, bridge, success = self.start_scan()
+            success.emit(state='credentials', client_id='cli_scanned_mock', client_secret='mock-registration-secret', verifiedFeishu=True)
+            self.wait(lambda: component.status()['configured'] and component.status()['connectionState'] == 'connected')
+            bridge.refresh()
+            self.wait(lambda: json.loads(bridge.stateJson)['configured'])
+            self.assertEqual(component.status()['appId'], 'cli_scanned_mock')
+            self.assertNotIn('mock-registration-secret', bridge.stateJson)
+            self.assertEqual([row[0] for row in component._transport.requests], ['connect'])
+            self.assertFalse(self.views[self.second][0].status()['configured'])
+            self.assertFalse(find(item, 'feishuOnboarding').isVisible())
+
+        def test_registration_qr_works_with_different_qrcode_already_loaded(self):
+            import types
+            from unittest.mock import patch
+            loaded = types.ModuleType('qrcode')
+            loaded.__file__ = '/unrelated/application/qrcode/__init__.py'
+            with patch.dict(sys.modules, {'qrcode': loaded}):
+                component, item, bridge, session = self.start_scan()
+                self.assertTrue(json.loads(bridge.stateJson)['registration']['qrImageSource'])
+                self.assertIs(sys.modules['qrcode'], loaded)
+                self.click(self.first, 'feishuCancelRegistration')
+                self.wait(lambda: not bridge._busy and session.closed)
+
+        def test_close_pending_scan_cancels_only_its_owner_and_discards_late_credentials(self):
+            component, item, bridge, first_session = self.start_scan()
+            other_component, other_item, other_bridge, second_session = self.start_scan(self.second)
+            component.presentation.release(self.handles[self.first])
+            self.assertTrue(first_session.closed)
+            self.assertFalse(second_session.closed)
+            self.assertNotEqual(first_session.url, second_session.url)
+            self.assertNotEqual(first_session.qr_source, second_session.qr_source)
+            first_session.emit(state='credentials', client_id='cli_late', client_secret='mock-late-secret', verifiedFeishu=True)
+            self.qt.processEvents()
+            self.assertFalse(component.status()['configured'])
+            self.assertIsNone(component._transport)
+            self.assertEqual(other_component.registration_snapshot(other_bridge.owner_id)['state'], 'waiting')
+
+        def test_view_read_revocation_rejects_late_scan_success_before_next_refresh(self):
+            component, item, bridge, session = self.start_scan()
+            bridge.timer.stop()
+            self.runtime.revoke('viewer', self.first, 'read_messages')
+            session.emit(state='credentials', client_id='cli_revoked', client_secret='mock-revoked-secret', verifiedFeishu=True)
+            self.wait(lambda: session.closed)
+            self.assertFalse(component.status()['configured'])
+            self.assertIsNone(component._transport)
+            bridge.refresh()
+            self.wait(lambda: not bridge._polling)
+            self.assertFalse(json.loads(bridge.stateJson)['registration']['verificationUrl'])
+            self.assertNotIn('mock-revoked-secret', bridge.stateJson)
 
         def test_local_native_configuration_and_send_are_async_and_instance_scoped(self):
             component, item, bridge = self.configure_first()

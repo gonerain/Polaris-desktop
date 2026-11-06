@@ -63,8 +63,22 @@ class SDKSession:
         self.factory = channel_factory
         self.emit = emit
         self.channel = None
+        self.registration_task = None
+        self.registration_epoch = None
 
     async def handle(self, operation, params):
+        if operation == 'registration_start':
+            from .registration import run_registration
+            await self.cancel_registration()
+            epoch = self.registration_epoch = object()
+            def emit(payload):
+                if self.registration_epoch is epoch:
+                    self.emit('registration', payload)
+            self.registration_task = asyncio.create_task(run_registration(emit, params.get('name', '飞书机器人')))
+            return {'started': True}
+        if operation == 'registration_cancel':
+            await self.cancel_registration()
+            return {'cancelled': True}
         if operation == 'connect':
             await self.close()
             from lark_channel import LogLevel
@@ -118,7 +132,15 @@ class SDKSession:
             raise result.error if isinstance(result.error, Exception) else SDKFailure(result.error)
         return {'success': True, 'messageId': result.message_id or ''}
 
+    async def cancel_registration(self):
+        self.registration_epoch = None
+        task, self.registration_task = self.registration_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def close(self):
+        await self.cancel_registration()
         channel, self.channel = self.channel, None
         if channel is not None:
             await channel.disconnect()
@@ -170,3 +192,7 @@ if __name__ == '__main__':
         from lark_channel.ws.client import loop as ws_loop
         if not ws_loop.is_running() and not ws_loop.is_closed():
             ws_loop.close()
+        registration_ws = sys.modules.get('lark_oapi.ws.client')
+        registration_loop = getattr(registration_ws, 'loop', None)
+        if registration_loop is not None and not registration_loop.is_running() and not registration_loop.is_closed():
+            registration_loop.close()
