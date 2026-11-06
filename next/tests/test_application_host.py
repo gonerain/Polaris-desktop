@@ -63,6 +63,62 @@ class ApplicationHostTests(unittest.TestCase):
         self.host.importJson(json.dumps(self.app.as_dict()))
         self.assertFalse(self.host.error)
 
+    def test_contract_candidates_require_version_access_and_instance_opt_in_and_keep_legacy(self):
+        from polaris_platform.component import Component
+        source = Path(self.temporary.name) / 'package'
+        source.mkdir()
+        (source / 'Main.qml').write_text('import QtQuick\nItem {}')
+        requirements = {'echo': dict(contract='demo.echo@1', access='read')}
+        manifest = dict(id='demo.contract-app', name='Contract app', version='1',
+                        entry=dict(adapter='qt-quick', file='Main.qml'), requires=requirements)
+        def install_package():
+            (source / 'polaris-application.json').write_text(json.dumps(manifest))
+            self.host.installDirectory(str(source))
+            self.assertFalse(self.host.error, self.host.error)
+            return self.host.store.load(self.host._selected)
+        for identity, operation, metadata in [
+                ('compatible', 'otherName', dict(provides='demo.echo@1', applicationBinding='instance')),
+                ('wrongVersion', 'echo', dict(provides='demo.echo@2', major=2, applicationBinding='instance')),
+                ('wrongAccess', 'echo', dict(provides='demo.echo@1', access='write', applicationBinding='instance')),
+                ('noOptIn', 'echo', dict(provides='demo.echo@1')),
+                ('unavailable', 'echo', dict(provides='demo.echo@1', applicationBinding='instance',
+                                           requires={'missing': 'demo.missing@1'}))]:
+            component = Component()
+            component.operation(operation, **metadata)(lambda params, context: params)
+            self.runtime.install(dict(id=identity, name=identity, version='1', platformApi=1,
+                                      entry=dict(mode='inprocess')), lambda c=component: c)
+            self.runtime.start_component(identity)
+        contract_app = install_package()
+        self.assertFalse(self.runtime.status('unavailable')['description']['operations']['echo']['available'])
+        rows = json.loads(self.host.connectionsJson)
+        self.assertEqual([(row['instanceId'], row['operation']) for row in rows[0]['candidates']],
+                         [(self.runtime.status('compatible')['instanceId'], 'otherName')])
+        compatible_id = self.runtime.status('compatible')['instanceId']
+        self.host.bindInstance('echo', compatible_id, 'otherName')
+        self.assertFalse(self.host.error, self.host.error)
+        component = self.runtime.component_instance('compatible')
+        component.operation('otherName', provides='demo.echo@1', applicationBinding='instance',
+                            requires={'missing': 'demo.missing@1'})(lambda params, context: params)
+        from polaris_platform.protocol import PlatformError
+        with self.assertRaises(PlatformError) as caught:
+            self.host._verify_binding(self.host.store.load(contract_app.id), 'echo')
+        self.assertEqual(caught.exception.code, 'application_binding_unavailable')
+        manifest['id'] = 'demo.legacy-app'
+        manifest['requires'] = {'echo': dict(componentType='provider', operation='echo', major=1, access='read')}
+        legacy = install_package()
+        before = dict(legacy.package)
+        rows = json.loads(self.host.connectionsJson)
+        self.assertEqual([row['instanceId'] for row in rows[0]['candidates']],
+                         [self.runtime.status('provider')['instanceId']])
+        self.host.bindInstance('echo', self.runtime.status('provider')['instanceId'], 'echo')
+        self.assertFalse(self.host.error, self.host.error)
+        self.host.close()
+        self.host.configure(self.temporary.name)
+        restored = self.host.store.load(legacy.id)
+        self.assertEqual(restored.package, before)
+        self.assertEqual(self.host.packages.load_verified(restored)['requires'], manifest['requires'])
+        self.assertEqual(self.host.store.load(contract_app.id).id, contract_app.id)
+
     def test_import_is_validated_durable_and_never_grants(self):
         self.import_app()
         self.assertEqual(len(json.loads(self.host.applicationsJson)), 1)
@@ -94,6 +150,28 @@ class ApplicationHostTests(unittest.TestCase):
         self.assertFalse(self.runtime.authorization.scope(self.app.id, True))
         self.runtime.revoke(self.app.id, 'provider', 'echo')
         self.assertFalse(self.runtime.authorization.scope(self.app.id))
+
+    def test_schema_one_generic_stop_cancels_pending_approval_and_hold(self):
+        self.import_app()
+        self.assertEqual(self.host.store.load(self.app.id).as_dict()['schemaVersion'], 1)
+        holds = []
+        self.host._hold = lambda reason, active: holds.append(active)
+        def request(port, definition, flow, callback, validate=None):
+            return self.bridge.request_application(definition, flow, callback, validate)
+        with patch('polaris_platform.desktop.management_control.ManagementControlPort.request_application', request):
+            self.host.run('echo', '{}')
+            self.wait(lambda: not self.bridge.busy and self.bridge._pending_plan is not None)
+            self.assertEqual(self.host.state, 'approval')
+            self.runtime.stop_component(self.app.id)
+            self.qt.processEvents()
+            self.assertFalse(self.host.busy)
+            self.assertFalse(self.host._approval_tokens)
+            self.assertFalse(holds[-1])
+            self.bridge.confirmView()
+            self.qt.processEvents()
+        self.assertFalse(self.calls)
+        self.assertFalse(self.runtime.authorization.scope(self.app.id))
+        self.assertEqual(self.runtime.status(self.app.id)['state'], 'stopped')
 
     def test_cancelled_or_stale_approval_cannot_execute(self):
         self.import_app()

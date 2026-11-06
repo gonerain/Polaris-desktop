@@ -146,6 +146,67 @@ else:
             self.click('studioClear')
             self.assertEqual(root.property('characters'), 0)
 
+        def test_application_uses_common_runtime_lifecycle_and_owned_data(self):
+            from polaris_platform.application import Application
+            status = self.runtime.status(self.app_id)
+            self.assertEqual(status['state'], 'running')
+            self.assertEqual(status['componentType'], 'org.example.text-studio')
+            self.assertEqual(status['instanceId'], self.app_id)
+            component = self.runtime.application_component(self.app_id)
+            self.assertIsInstance(component, Component)
+            self.assertIsInstance(component, Application)
+            self.assertEqual(self.runtime.component_data_directory(self.app_id),
+                             self.host.application_data_directory(self.app_id))
+            self.runtime.stop_component(self.app_id)
+            self.qt.processEvents()
+            self.assertFalse(self.view.bridge.active)
+            self.assertFalse(self.view.root.isVisible())
+            self.assertEqual(self.runtime.status(self.app_id)['state'], 'stopped')
+            json.loads(self.host.connectionsJson)
+            self.assertEqual(self.runtime.status(self.app_id)['state'], 'stopped')
+            self.host.select(self.app_id)
+            self.assertTrue(self.view.bridge.active)
+            self.assertEqual(self.runtime.status(self.app_id)['state'], 'running')
+
+        def test_queued_old_stop_cannot_close_reopened_application(self):
+            stopper = threading.Thread(target=lambda: self.runtime.stop_component(self.app_id))
+            stopper.start()
+            stopper.join(3)
+            self.assertFalse(stopper.is_alive())
+            self.host.select(self.app_id)
+            self.qt.processEvents()
+            self.assertTrue(self.view.bridge.active)
+            self.assertEqual(self.runtime.status(self.app_id)['state'], 'running')
+
+        def test_contract_replacement_uses_other_type_and_local_operation(self):
+            replacement = Component()
+            replacement.operation('normalize', provides='org.example.text.tidy@1',
+                                  applicationBinding='instance')(
+                lambda params, context: dict(text='replacement:' + params['text'], origin=context.origin))
+            self.runtime.install(dict(id='third.party.text', name='Alternative text', version='1',
+                platformApi=1, entry={'mode': 'inprocess'}), lambda: replacement)
+            self.runtime.start_component('third.party.text')
+            rows = json.loads(self.host.connectionsJson)
+            tidy = next(row for row in rows if row['alias'] == 'tidy')
+            self.assertEqual(tidy['candidates'][0]['operation'], '整理文本')
+            alternate = next(row for row in tidy['candidates'] if row['operation'] == 'normalize')
+            self.connect('tidy')
+            self.runtime.grant(self.app_id, self.stable, '整理文本')
+            self.host.bindInstance('tidy', alternate['instanceId'], alternate['operation'])
+            self.assertFalse(self.host.error, self.host.error)
+            self.assertFalse(self.runtime.authorization.scope(self.app_id))
+            binding = self.host.store.load(self.app_id).bindings['tidy']
+            self.assertEqual(binding['operation'], 'normalize')
+            self.assertEqual(binding['instanceId'], alternate['instanceId'])
+            capture = os.environ.get('POLARIS_APPLICATION_CAPTURE')
+            if capture:
+                Path(capture).mkdir(parents=True, exist_ok=True)
+                QTest.qWait(60)
+                self.window.grabWindow().save(str(Path(capture) / 'application-connections.png'))
+            self.view.bridge.call('tidy', {'text': 'hello'}, 'alternative')
+            self.approve()
+            self.assertEqual(json.loads(self.host.result), dict(text='replacement:hello', origin=self.app_id))
+
         def test_two_instances_and_revoke_require_fresh_confirmation(self):
             second = self.runtime.create_instance('org.example.text-tools')
             self.runtime.start_instance(second)

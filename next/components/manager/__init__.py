@@ -167,7 +167,7 @@ class ManagerBridge(QObject):
         elif value is not None:
             self._notice = json.dumps(value, ensure_ascii=False, default=str)[:1200]
         if snapshot is not None:
-            records = [dict(item, name=item['manifest']['name'], manageable=item['id'] != getattr(self.runtime, 'management_component_id', 'manager') and item['id'] not in self.runtime.roles.values()) for item in snapshot]
+            records = [dict(item, name=item['manifest']['name'], manageable=item.get('manifest', {}).get('kind') != 'application' and item['id'] != getattr(self.runtime, 'management_component_id', 'manager') and item['id'] not in self.runtime.roles.values()) for item in snapshot]
             self._data = json.dumps(records, ensure_ascii=False, default=str)
             self._permissions = json.dumps(decisions, ensure_ascii=False)
             if self._pending_plan:
@@ -206,6 +206,9 @@ class ManagerBridge(QObject):
         return next((row for row in self.runtime.export_installations() if row['manifest']['id'] == target), None)
 
     def _check_manageable(self, target, action='uninstall'):
+        if any(row['id'] == target and row.get('manifest', {}).get('kind') == 'application'
+               for row in self.runtime.snapshot()):
+            raise ValueError('请在应用入口移除应用')
         options = self.runtime.management_options(target) if hasattr(self.runtime, 'management_options') else {}
         if options.get(action) is False or target == getattr(self.runtime, 'management_component_id', 'manager') or target in self.runtime.roles.values():
             raise ValueError('此组件需在退出后通过启动配置更改')

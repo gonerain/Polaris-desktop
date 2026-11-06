@@ -26,6 +26,21 @@ class ApplicationPackageTest(unittest.TestCase):
     def write_manifest(self):
         (self.source / 'polaris-application.json').write_text(json.dumps(self.manifest))
 
+    def test_contract_requirements_validate_and_preserve_preference(self):
+        self.manifest['requires'] = {'echo': {'contract': 'demo.text.echo@1', 'access': 'read',
+                                             'preferredComponentType': 'demo.provider'}}
+        self.write_manifest()
+        app = self.packages.install(self.source)
+        self.assertEqual(self.packages.load_verified(app)['requires'], self.manifest['requires'])
+        for change in ({'contract': 'echo'}, {'access': 'admin'}, {'preferredComponentType': ''},
+                       {'operation': 'echo'}, {'major': 2}, {'label': ''}, {'label': 3}):
+            original = dict(self.manifest['requires']['echo'])
+            self.manifest['requires']['echo'].update(change)
+            self.write_manifest()
+            with self.assertRaises(PlatformError):
+                self.packages.install(self.source)
+            self.manifest['requires']['echo'] = original
+
     def test_snapshot_identity_persistence_and_change_detection(self):
         first = self.packages.install(self.source)
         second = self.packages.install(self.source)

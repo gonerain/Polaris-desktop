@@ -2,19 +2,21 @@
 import json
 import threading
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal, Slot, Property, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtCore import QThread
 
-from ..application import Application, ApplicationStore
-from ..protocol import PlatformError
+from ..application import Application, ApplicationDefinition, ApplicationStore
+from ..protocol import PlatformError, capability
 from .management_control import ManagementControlPort
 
 
 class ApplicationHost(QObject):
     changed = Signal()
     finished = Signal(int, str, str)
+    applicationStopped = Signal(str, str)
 
     def __init__(self, runtime, hold=None):
         super().__init__()
@@ -22,6 +24,8 @@ class ApplicationHost(QObject):
         self.store = None
         self.packages = None
         self._views = {}
+        self._component_epochs = {}
+        self._active_epochs = {}
         self._view_parent = None
         self._presentation_active = False
         self._deliveries = {}
@@ -36,6 +40,7 @@ class ApplicationHost(QObject):
         self._run_title = ''
         self._closed = False
         self.finished.connect(self._finish)
+        self.applicationStopped.connect(self._runtime_stopped)
 
     def configure(self, directory):
         self.store = ApplicationStore(Path(directory) / 'applications') if directory is not None else None
@@ -44,9 +49,9 @@ class ApplicationHost(QObject):
         self.packages = ApplicationPackageStore(Path(directory) / 'application-packages') if directory is not None else None
         if self.store:
             for definition in self._definitions():
-                app = Application.from_dict(definition)
+                app = ApplicationDefinition.from_dict(definition)
                 try:
-                    self.runtime.register_application_principal(app.id, restore=True)
+                    self._ensure_application(app, restore=True)
                     self.runtime.register_application_bindings(app.id, [binding['instanceId'] for binding in app.bindings.values()])
                 except PlatformError as error:
                     # Definitions and existing references remain intact; the
@@ -126,7 +131,7 @@ class ApplicationHost(QObject):
                 raise PlatformError('application_storage_unavailable', '应用存储目录尚未就绪')
             if self._state in ('running', 'approval'):
                 raise PlatformError('application_busy', '请等待当前应用操作完成')
-            app = Application.from_dict(json.loads(source))
+            app = ApplicationDefinition.from_dict(json.loads(source))
             # Validate entirely before writing or registering any principal.
             if any(item['applicationId'] == app.id for item in self.store.list()):
                 raise PlatformError('application_exists', '此应用身份已存在，请使用新的 applicationId')
@@ -139,8 +144,9 @@ class ApplicationHost(QObject):
                 raise PlatformError('application_identity_reserved', '此应用身份已登记，不能通过导入接管')
             registered = False
             try:
-                self.runtime.register_application_principal(app.id)
+                self._ensure_application(app)
                 registered = True
+                self.runtime.start_application(app.id)
                 client = self.runtime.application_client(app.id)
                 for alias, binding in app.bindings.items():
                     status = self.runtime.status(binding['target'])
@@ -186,13 +192,15 @@ class ApplicationHost(QObject):
         try:
             if not isinstance(params, dict):
                 raise PlatformError('invalid_application_input', '输入应为对象')
-            execution = Application.from_dict(app.as_dict())
+            execution = ApplicationDefinition.from_dict(app.as_dict())
             if alias is not None:
                 execution.flows = {'__application_call__': [{'alias': alias, 'input': 'previous'}]}
                 flow = '__application_call__'
             if flow not in execution.flows:
                 raise PlatformError('application_flow_missing', flow)
-            self.runtime.register_application_principal(app.id)
+            self._ensure_application(app)
+            self.runtime.start_application(app.id)
+            self._active_epochs[app.id] = self._component_epochs.get(app.id)
             self._generation += 1
             generation = self._generation
             if delivery is not None:
@@ -267,10 +275,40 @@ class ApplicationHost(QObject):
             bridge.deliver(view_generation, request_id, result, error)
         self.changed.emit()
 
+    def _ensure_application(self, app, restore=False):
+        entry = {'id': 'main', 'adapter': 'qt-quick'} if app.package else None
+        metadata = {}
+        if app.package:
+            try:
+                manifest = self.packages.load_verified(app)['manifest']
+                metadata = dict(component_type=manifest['id'], version=manifest['version'])
+            except PlatformError:
+                pass  # Broken packages retain their identity and remain removable.
+        return self.runtime.ensure_application(app, restore=restore, entry_view=entry,
+            data_directory=self.application_data_directory(app.id), **metadata,
+            factory=lambda: self._create_application(app, entry))
+
+    def _create_application(self, app, entry):
+        epoch = uuid4().hex
+        self._component_epochs[app.id] = epoch
+        return Application(definition=app, entry_view=entry,
+            on_stop=lambda: self.applicationStopped.emit(app.id, epoch))
+
     def _stop_application(self, application_id):
+        try:
+            self.runtime.stop_application(application_id)
+        except PlatformError as error:
+            if error.code != 'unknown_application':
+                raise
+        self._runtime_stopped(application_id)
+
+    @Slot(str, str)
+    def _runtime_stopped(self, application_id, epoch=None):
+        if epoch is not None and self._active_epochs.get(application_id) != epoch:
+            return  # A queued stop from an older run cannot close a reopened view.
         view = self._views.get(application_id)
         if view is not None:
-            view.bridge.set_active(False)
+            view.set_active(False)
         if self._run_app == application_id:
             self._deliveries.pop(self._generation, None)
             self._generation += 1
@@ -284,6 +322,7 @@ class ApplicationHost(QObject):
         if self._run_app == application_id:
             self._state, self._result, self._error = 'idle', '', ''
             self._hold('application', False)
+        self.changed.emit()
 
     @Slot()
     def revoke(self):
@@ -291,7 +330,7 @@ class ApplicationHost(QObject):
             self._local_input()
             app = self.store.load(self._selected)
             self._stop_application(app.id)
-            self.runtime.register_application_principal(app.id, restore=True)
+            self._ensure_application(app, restore=True)
             self.runtime.revoke_application_authority(app.id)
             self._notice = ''
             self._feedback = '已撤销此应用的全部授权；再次执行时需重新确认'
@@ -306,7 +345,7 @@ class ApplicationHost(QObject):
             self._local_input()
             app = self.store.load(self._selected)
             self._stop_application(app.id)
-            self.runtime.register_application_principal(app.id, restore=True)
+            self._ensure_application(app, restore=True)
             # Remove authority before deleting anything. A partial failure can
             # retain a visible definition/reference, but never hidden grants.
             self.runtime.revoke_application_authority(app.id)
@@ -333,6 +372,8 @@ class ApplicationHost(QObject):
 
     def close(self):
         self._closed = True
+        for definition in self._definitions():
+            self._stop_application(definition['applicationId'])
         self._generation += 1
         for session in tuple(self._sessions):
             session.stop()
@@ -367,7 +408,7 @@ class ApplicationHost(QObject):
             verified = self.packages.load_verified(app)
             package_id = verified['manifest']['id']
             for existing in self._definitions():
-                previous = Application.from_dict(existing)
+                previous = ApplicationDefinition.from_dict(existing)
                 if previous.package:
                     try:
                         previous_id = self.packages.load_verified(previous)['manifest']['id']
@@ -375,7 +416,7 @@ class ApplicationHost(QObject):
                         continue  # A broken old package cannot block unrelated installs.
                     if previous_id == package_id:
                         raise PlatformError('application_exists', '此应用已安装，当前版本暂不支持就地更新')
-            self.runtime.register_application_principal(app.id)
+            self._ensure_application(app)
             try:
                 self.runtime.register_application_bindings(app.id, [])
                 self.store.save(app)
@@ -394,6 +435,20 @@ class ApplicationHost(QObject):
             self._notice = str(error)
         self.changed.emit()
 
+    @staticmethod
+    def _matches_requirement(status, operation, metadata, requirement):
+        if (metadata.get('available', True) is False
+                or metadata.get('applicationBinding') != 'instance'
+                or metadata.get('access', 'read') != requirement['access']):
+            return False
+        if 'contract' in requirement:
+            from ..contracts import contract_version
+            return (metadata.get('provides') == requirement['contract']
+                    and metadata.get('major', 1) == contract_version(requirement['contract']))
+        return (status['componentType'] == requirement['componentType']
+                and operation == requirement['operation']
+                and metadata.get('major', 1) == requirement['major'])
+
     def _verify_binding(self, app, alias):
         verified = self.packages.load_verified(app)
         requirement = verified['requires'].get(alias)
@@ -404,16 +459,12 @@ class ApplicationHost(QObject):
             raise PlatformError('application_binding_missing', '请先连接组件能力：' + alias)
         status = self.runtime.status(binding['target'])
         metadata = status.get('description', {}).get('operations', {}).get(binding['operation'], {})
-        if (status['componentType'] != requirement['componentType']
-                or binding['operation'] != requirement['operation']
-                or metadata.get('major', 1) != requirement['major']
-                or metadata.get('access', 'read') != requirement['access']
-                or metadata.get('applicationBinding') != 'instance'
+        if (not self._matches_requirement(status, binding['operation'], metadata, requirement)
                 or status['installationId'] != binding['installationId']
                 or status['instanceId'] != binding['instanceId']):
             raise PlatformError('application_binding_unavailable', '原组件连接已不可用，请重新选择：' + alias)
-        handle = self.runtime.application_client(app.id).bind(binding['target'], binding['operation'])
-        if list(handle.semantic) != list(binding['semantic']):
+        semantic = capability(status['instanceId'], 'operation', binding['operation'], metadata)
+        if status['state'] != 'running' or list(semantic) != list(binding['semantic']):
             raise PlatformError('application_binding_unavailable', '组件能力已变化，请重新选择：' + alias)
         return binding
 
@@ -428,22 +479,27 @@ class ApplicationHost(QObject):
             for alias, requirement in requirements.items():
                 binding = app.bindings.get(alias)
                 candidates = []
-                for status in self.runtime.list_instances(requirement['componentType']):
-                    metadata = status.get('description', {}).get('operations', {}).get(requirement['operation'], {})
-                    if (status['state'] == 'running' and metadata.get('applicationBinding') == 'instance'
-                            and metadata.get('major', 1) == requirement['major']
-                            and metadata.get('access', 'read') == requirement['access']):
-                        label = status['manifest']['name'] + (' · 默认实例' if status.get('isDefault') else ' · 实例 ' + status['instanceId'][:8])
-                        candidates.append(dict(instanceId=status['instanceId'], label=label))
+                for status in self.runtime.list_instances():
+                    if status['state'] != 'running':
+                        continue
+                    for operation, metadata in status.get('description', {}).get('operations', {}).items():
+                        if self._matches_requirement(status, operation, metadata, requirement):
+                            label = status['manifest']['name'] + (' · 默认实例' if status.get('isDefault') else ' · 实例 ' + status['instanceId'][:8])
+                            label += ' · ' + operation
+                            preferred = status['componentType'] == requirement.get('preferredComponentType')
+                            candidates.append(dict(instanceId=status['instanceId'], operation=operation,
+                                                   label=label, preferred=preferred))
+                candidates.sort(key=lambda item: not item['preferred'])
                 selected, issue = -1, ''
                 if binding:
                     try:
                         self._verify_binding(app, alias)
                         selected = next((index for index, candidate in enumerate(candidates)
-                                         if candidate['instanceId'] == binding['instanceId']), -1)
+                                         if candidate['instanceId'] == binding['instanceId']
+                                         and candidate['operation'] == binding['operation']), -1)
                     except Exception:
                         issue = '原实例不可用，请重新选择'
-                rows.append(dict(alias=alias, operation=requirement['operation'], componentType=requirement['componentType'],
+                rows.append(dict(alias=alias, label=requirement.get('label', alias), contract=requirement.get('contract', ''), operation=requirement.get('operation', requirement.get('contract')), componentType=requirement.get('componentType', ''),
                                  candidates=candidates, selected=selected, issue=issue))
             return json.dumps(rows, ensure_ascii=False)
         except Exception:
@@ -454,7 +510,8 @@ class ApplicationHost(QObject):
         self.changed.emit()
 
     @Slot(str, str)
-    def bindInstance(self, alias, instance_id):
+    @Slot(str, str, str)
+    def bindInstance(self, alias, instance_id, operation=None):
         try:
             self._local_input()
             app = self.store.load(self._selected)
@@ -462,11 +519,16 @@ class ApplicationHost(QObject):
             if requirement is None:
                 raise PlatformError('application_alias_missing', alias)
             status = self.runtime.status(instance_id)
-            if status['instanceId'] != instance_id or status['componentType'] != requirement['componentType']:
+            matches = [name for name, meta in status.get('description', {}).get('operations', {}).items()
+                       if self._matches_requirement(status, name, meta, requirement)]
+            if operation is None and len(matches) == 1:
+                operation = matches[0]
+            if status['instanceId'] != instance_id or operation not in matches:
                 raise PlatformError('application_binding_unavailable', '请选择匹配的组件实例')
-            handle = self.runtime.application_client(app.id).bind(instance_id, requirement['operation'])
+            self.runtime.start_application(app.id)
+            handle = self.runtime.application_client(app.id).bind(instance_id, operation)
             candidate = dict(target=instance_id, instanceId=instance_id, installationId=status['installationId'],
-                             operation=requirement['operation'], semantic=list(handle.semantic))
+                             operation=operation, semantic=list(handle.semantic))
             previous = dict(app.bindings)
             app.bindings[alias] = candidate
             self._verify_binding(app, alias)
@@ -517,6 +579,12 @@ class ApplicationHost(QObject):
             if app.id not in self._views:
                 from .application_view import ApplicationView
                 self._views[app.id] = ApplicationView(self, app, verified['entry'], self._view_parent)
+            if self._presentation_active:
+                if self.runtime.status(app.id)['state'] != 'running':
+                    self._runtime_stopped(app.id)
+                self._ensure_application(app, restore=True)
+                self.runtime.start_application(app.id)
+                self._active_epochs[app.id] = self._component_epochs.get(app.id)
             self._views[app.id].set_active(self._presentation_active)
         except Exception as error:
             self._stop_application(self._selected)
@@ -530,7 +598,9 @@ class ApplicationHost(QObject):
 
     def call_alias(self, bridge, alias, params, request_id):
         self._local_input()
-        if (not self._presentation_active or bridge.application_id != self._selected
+        if (not self._presentation_active
+                or self.runtime.status(bridge.application_id)['state'] != 'running'
+                or bridge.application_id != self._selected
                 or self._views.get(self._selected) is None
                 or self._views[self._selected].bridge is not bridge):
             raise PlatformError('application_inactive', '此应用当前未打开')

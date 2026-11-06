@@ -4,6 +4,7 @@ import inspect
 import sys
 import threading
 from .component import Component as BaseComponent
+from .application import Application as BaseApplication
 from .protocol import PlatformError, _dispatched
 from .transport import _Peer
 
@@ -40,6 +41,10 @@ class Component(BaseComponent):
     def resume_task(self, name):
         context = self.port.resume_task(name)
         return _LocalContext(self.port, context) if context is not None else None
+
+
+class Application(BaseApplication, Component):
+    """Application component with the SDK's plain keyword operation handlers."""
 
 
 class _RemoteContext:

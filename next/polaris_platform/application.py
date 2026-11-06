@@ -5,9 +5,10 @@ from uuid import UUID, uuid4
 
 from .persistence import read_json, write_json
 from .protocol import PlatformError
+from .component import Component
 
 
-class Application:
+class ApplicationDefinition:
     """Durable composition with no component lifecycle, using only its own explicit grants.
 
     Bindings pin installation identity and a stable component instance. ``target``
@@ -121,13 +122,50 @@ class Application:
         return ApplicationSession(self, client, context, inspect_instance)
 
 
+class Application(ApplicationDefinition, Component):
+    """A component with an application entry and durable instance definition.
+
+    The legacy title/bindings constructor remains supported. New hosts pass an
+    ApplicationDefinition and let Runtime own the ordinary component lifecycle.
+    """
+    kind = 'application'
+
+    def __init__(self, title=None, bindings=None, config=None, flows=None, pages=None,
+                 application_id=None, package=None, *, definition=None,
+                 entry_view=None, on_stop=None):
+        Component.__init__(self)
+        if isinstance(title, ApplicationDefinition):
+            definition = title
+        if definition is not None:
+            value = definition.as_dict()
+            title, bindings, config = value['title'], value['bindings'], value['config']
+            flows, pages = value['flows'], value['pages']
+            application_id, package = value['applicationId'], value.get('package')
+        ApplicationDefinition.__init__(self, 'Application' if title is None else title, bindings, config,
+                                       flows, pages, application_id, package)
+        self.entry_view = deepcopy(entry_view)
+        self._on_stop = on_stop
+        if entry_view is not None:
+            self.views = [deepcopy(entry_view)]
+
+    @property
+    def definition(self):
+        return ApplicationDefinition.from_dict(self.as_dict())
+
+    def stop(self):
+        was_started = self.port is not None
+        Component.stop(self)
+        if was_started and self._on_stop is not None:
+            self._on_stop()
+
+
 class ApplicationSession:
     def __init__(self, application, client, context, inspect_instance):
         # Sessions retain a snapshot; edits require opening a new session.
         if (client.id != application.id or context.origin != application.id
                 or context.origin_installation != application.id):
             raise PlatformError('application_identity_mismatch', 'An application requires its own registered authorization principal')
-        self.application = Application.from_dict(application.as_dict())
+        self.application = ApplicationDefinition.from_dict(application.as_dict())
         self._client, self._context = client, context
         self._inspect = inspect_instance
         self.closed = False
@@ -198,7 +236,7 @@ class ApplicationStore:
         path = self._path(application_id)
         if not path.exists():
             raise PlatformError('application_missing', application_id)
-        application = Application.load(path)
+        application = ApplicationDefinition.load(path)
         if application.id != application_id:
             raise PlatformError('invalid_application', 'Application file identity does not match its name')
         return application

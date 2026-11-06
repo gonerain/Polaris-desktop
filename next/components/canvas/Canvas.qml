@@ -249,13 +249,17 @@ Rectangle {
                     ColumnLayout {
                         required property var modelData
                         Layout.fillWidth: true; spacing: 5
-                        Text { textFormat: Text.PlainText; text: modelData.operation; color: colors.ink; font.pixelSize: 13 }
+                        Text { textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap; text: modelData.label; color: colors.ink; font.pixelSize: 13
+                            ToolTip.visible: connectionLabelHover.hovered && !!modelData.contract
+                            ToolTip.text: modelData.contract
+                            HoverHandler { id: connectionLabelHover }
+                        }
                         ComboBox {
                             objectName: 'applicationBinding_' + modelData.alias
                             Layout.fillWidth: true; textRole: 'label'
                             model: [{label: modelData.issue || '选择组件实例', instanceId: ''}].concat(modelData.candidates)
                             currentIndex: modelData.selected + 1
-                            onActivated: function(index) { if (index > 0) canvasRoot.appHost.bindInstance(modelData.alias, modelData.candidates[index - 1].instanceId) }
+                            onActivated: function(index) { if (index > 0) canvasRoot.appHost.bindInstance(modelData.alias, modelData.candidates[index - 1].instanceId, modelData.candidates[index - 1].operation) }
                             palette.text: colors.ink; palette.buttonText: colors.ink; palette.base: colors.panel; palette.button: colors.panel
                         }
                         Text { text: modelData.candidates.length ? '' : '请先安装并启动提供此能力的组件'; visible: text.length > 0; color: colors.muted; font.pixelSize: 12 }

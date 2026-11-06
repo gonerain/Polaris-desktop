@@ -346,6 +346,7 @@ Pane {
                                 visible: root.current.state === 'failed' && !!root.current.error
                                 text: visible ? '启动失败：' + (root.current.error.message || root.current.error) : ''
                             }
+                            Label { visible: root.current.manifest?.kind === 'application'; text: '请在应用入口移除应用'; color: root.muted; font.pixelSize: 12 }
                             RowLayout {
                                 SettingsButton { text: '启动'; primary: root.current.state !== 'running'; enabled: !!root.current.id && manager && !manager.busy; onClicked: manager.lifecycle(root.current.id, 'start') }
                                 SettingsButton { objectName: 'uninstallComponent'; text: '卸载'; flat: true; danger: true; enabled: !!root.current.id && root.current.manageable && manager && !manager.busy; onClicked: manager.prepareUninstall(root.current.id) }

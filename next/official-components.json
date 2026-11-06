@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "scope": "Observed declarations, not a compatibility certification. External entries require independent source verification.",
+  "components": [
+    {
+      "id": "authorization",
+      "group": "foundation",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.authorization:create_authorization",
+      "factoryAliases": [],
+      "source": "bundled",
+      "manifest": "components/authorization/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "none",
+      "responsibility": "授权及授权记录",
+      "dataOwnership": "授权策略与授权记录",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "collaboration",
+      "group": "foundation",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.collaboration:create_collaboration",
+      "factoryAliases": [],
+      "source": "bundled",
+      "manifest": "components/collaboration/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "none",
+      "responsibility": "能力发现和协作目录",
+      "dataOwnership": "运行时注册的能力目录",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "runtime",
+      "group": "foundation",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.runtime:create_runtime",
+      "factoryAliases": [],
+      "source": "bundled",
+      "manifest": "components/runtime/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "none",
+      "responsibility": "组件安装、实例及生命周期管理",
+      "dataOwnership": "安装、实例和任务记录",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "window",
+      "group": "desktop",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.window:create_window",
+      "factoryAliases": [
+        "polaris_platform.desktop:create_window"
+      ],
+      "source": "bundled",
+      "manifest": "components/window/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "host (no declared view)",
+      "responsibility": "原生窗口与视图承载",
+      "dataOwnership": "运行中的原生窗口",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "canvas",
+      "group": "desktop",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.canvas:create_canvas",
+      "factoryAliases": [
+        "polaris_platform.desktop:create_canvas"
+      ],
+      "source": "bundled",
+      "manifest": "components/canvas/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "main (host presentation)",
+      "responsibility": "画布及视图摆放",
+      "dataOwnership": "画布布局与展示状态",
+      "provides": {
+        "operations": {
+          "status": "polaris.canvas.status@1",
+          "show": "polaris.canvas.show@1"
+        },
+        "events": {
+          "dismissed": "polaris.canvas.dismissed@1"
+        }
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "pet",
+      "group": "desktop",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.pet:create_pet",
+      "factoryAliases": [
+        "polaris_platform.desktop:create_pet"
+      ],
+      "source": "bundled",
+      "manifest": "components/pet/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "main (host presentation)",
+      "responsibility": "桌宠呈现与交互",
+      "dataOwnership": "桌宠状态",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "manager",
+      "group": "desktop",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.manager:create_manager",
+      "factoryAliases": [
+        "polaris_platform.desktop:create_manager"
+      ],
+      "source": "bundled",
+      "manifest": "components/manager/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "main",
+      "responsibility": "组件管理界面",
+      "dataOwnership": "管理视图状态",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "sources",
+      "group": "desktop",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.sources:create_sources",
+      "factoryAliases": [
+        "polaris_platform.desktop:create_sources"
+      ],
+      "source": "bundled",
+      "manifest": "components/sources/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "none",
+      "responsibility": "插件源管理",
+      "dataOwnership": "插件源及其修订记录",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "mcp",
+      "group": "desktop",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "components.mcp:create",
+      "factoryAliases": [
+        "polaris_mcp:create"
+      ],
+      "source": "bundled",
+      "manifest": "components/mcp/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "none",
+      "responsibility": "MCP 接入",
+      "dataOwnership": "MCP 接入配置",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified"
+    },
+    {
+      "id": "assistant",
+      "group": "desktop",
+      "version": "0.2.1",
+      "platformApi": 1,
+      "factory": "components.assistant:create",
+      "factoryAliases": [
+        "polaris_assistant:create"
+      ],
+      "source": "bundled",
+      "manifest": "components/assistant/manifest.json",
+      "instancePolicy": "single (default)",
+      "viewPolicy": "main",
+      "responsibility": "模型对话及授权工具执行",
+      "dataOwnership": "模型配置及对话状态",
+      "provides": {
+        "operations": {
+          "status": "polaris.agent.status@1",
+          "reply": "polaris.agent.reply@1"
+        },
+        "events": {}
+      },
+      "maturity": "declared; replacement not certified",
+      "observedInstallationSource": "plugin source revision"
+    },
+    {
+      "id": "org.polaris.weixin",
+      "group": "external",
+      "version": "0.3.0",
+      "platformApi": 1,
+      "factory": "polaris_weixin:create",
+      "factoryAliases": [],
+      "source": "https://github.com/gonerain/Polaris-weixin.git",
+      "manifest": null,
+      "instancePolicy": "single (default)",
+      "viewPolicy": "main",
+      "responsibility": "微信连接、收发与机器人管理；现含 Agent 编排",
+      "dataOwnership": "机器人账号、消息及设置",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "observed; external contract not verified in this repository"
+    },
+    {
+      "id": "org.polaris.schedule",
+      "group": "external",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "polaris_schedule:create",
+      "factoryAliases": [],
+      "source": "https://github.com/gonerain/Polaris-schedule.git",
+      "manifest": null,
+      "instancePolicy": "single (default)",
+      "viewPolicy": "main",
+      "responsibility": "本地日程和任务",
+      "dataOwnership": "日程任务",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "observed; external contract not verified in this repository"
+    },
+    {
+      "id": "org.polaris.agent",
+      "group": "external",
+      "version": "0.2.1",
+      "platformApi": 1,
+      "factory": "polaris_agent:create",
+      "factoryAliases": [],
+      "source": "https://github.com/gonerain/Polaris-agent.git",
+      "manifest": null,
+      "instancePolicy": "single (default)",
+      "viewPolicy": "main",
+      "responsibility": "Agent Bridge 会话与交互桥接",
+      "dataOwnership": "桥接会话与设置",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "observed; external contract not verified in this repository"
+    },
+    {
+      "id": "org.polaris.feishu",
+      "group": "external",
+      "version": "0.1.0",
+      "platformApi": 1,
+      "factory": "polaris_feishu:create",
+      "factoryAliases": [],
+      "source": "local launcher; repository not established",
+      "manifest": null,
+      "instancePolicy": "single (default)",
+      "viewPolicy": "none",
+      "responsibility": "Linux 用户服务启动器，不实现机器人",
+      "dataOwnership": "服务运行状态",
+      "provides": {
+        "operations": {},
+        "events": {}
+      },
+      "maturity": "launcher only; incomplete"
+    }
+  ]
+}

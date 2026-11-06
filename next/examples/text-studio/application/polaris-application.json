@@ -1,1 +1,23 @@
-{"id":"org.example.text-studio","name":"文本工作室","version":"1.0.0","entry":{"adapter":"qt-quick","file":"Main.qml"},"requires":{"tidy":{"componentType":"org.example.text-tools","operation":"整理文本","major":1,"access":"read"},"keywords":{"componentType":"org.example.text-tools","operation":"统计词频","major":1,"access":"read"}}}
+{
+  "id": "org.example.text-studio",
+  "name": "文本工作室",
+  "version": "1.0.0",
+  "entry": {
+    "adapter": "qt-quick",
+    "file": "Main.qml"
+  },
+  "requires": {
+    "tidy": {
+      "contract": "org.example.text.tidy@1",
+      "access": "read",
+      "preferredComponentType": "org.example.text-tools",
+      "label": "整理文本"
+    },
+    "keywords": {
+      "contract": "org.example.text.keywords@1",
+      "access": "read",
+      "preferredComponentType": "org.example.text-tools",
+      "label": "词频统计"
+    }
+  }
+}

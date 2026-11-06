@@ -8,7 +8,7 @@ import stat
 import tempfile
 from uuid import uuid4
 
-from .application import Application
+from .application import ApplicationDefinition
 from .protocol import PlatformError
 
 
@@ -44,8 +44,22 @@ def _manifest(root):
     if not isinstance(requirements, dict):
         _invalid('Requirements must be an alias map')
     for alias, requirement in requirements.items():
-        if (not isinstance(alias, str) or not alias or not isinstance(requirement, dict)
-                or set(requirement) != {'componentType', 'operation', 'major', 'access'}
+        if not isinstance(alias, str) or not alias or not isinstance(requirement, dict):
+            _invalid('Invalid capability requirement')
+        if 'contract' in requirement:
+            from .contracts import contract_version
+            try:
+                contract_version(requirement['contract'])
+            except PlatformError:
+                _invalid('Invalid capability contract')
+            if (set(requirement) - {'contract', 'access', 'preferredComponentType', 'label'}
+                    or requirement.get('access') not in ('read', 'write')
+                    or ('label' in requirement and
+                        (not isinstance(requirement['label'], str) or not requirement['label'].strip()))
+                    or ('preferredComponentType' in requirement and
+                        (not isinstance(requirement['preferredComponentType'], str) or not requirement['preferredComponentType']))):
+                _invalid('Invalid capability requirement')
+        elif (set(requirement) != {'componentType', 'operation', 'major', 'access'}
                 or any(not isinstance(requirement[k], str) or not requirement[k] for k in ('componentType', 'operation'))
                 or type(requirement['major']) is not int or requirement['major'] < 1
                 or requirement['access'] not in ('read', 'write')):
@@ -98,7 +112,7 @@ class ApplicationPackageStore:
             snapshot = temporary / 'snapshot'
             digest = _tree_digest(snapshot)
             manifest = _manifest(snapshot)
-            app = Application(manifest['name'], application_id=application_id,
+            app = ApplicationDefinition(manifest['name'], application_id=application_id,
                               package={'snapshot': application_id, 'digest': digest})
             os.rename(snapshot, self.directory / application_id)
             return app
@@ -106,7 +120,7 @@ class ApplicationPackageStore:
             shutil.rmtree(temporary, ignore_errors=True)
 
     def load_verified(self, app):
-        if not isinstance(app, Application) or not app.package:
+        if not isinstance(app, ApplicationDefinition) or not app.package:
             _invalid('Application has no package')
         root = self.directory / app.id
         if root.is_symlink() or not root.is_dir():
@@ -122,7 +136,7 @@ class ApplicationPackageStore:
                 'requires': manifest['requires'], 'manifest': manifest}
 
     def remove(self, app):
-        if not isinstance(app, Application) or not app.package or app.package['snapshot'] != app.id:
+        if not isinstance(app, ApplicationDefinition) or not app.package or app.package['snapshot'] != app.id:
             _invalid('Application has no package')
         root = self.directory / app.id
         if root.is_symlink():

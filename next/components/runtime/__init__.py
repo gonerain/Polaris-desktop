@@ -137,7 +137,6 @@ class Runtime(Component):
         super().__init__()
         self._lock = RLock()
         self._records = {}
-        self._application_principals = {}
         self._application_contexts = {}
         self._application_ids = set()
         self._instance_storage = None
@@ -229,7 +228,7 @@ class Runtime(Component):
         with self._lock:
             return [{"manifest": dict(r["manifest"]), "installationId": r["installation"],
                      "directory": r["directory"], "autostart": r["autostart"], "trustedBindings": r["trustedBindings"]}
-                    for r in self._records.values() if r.get('isDefault', True)]
+                    for r in self._records.values() if r.get('isDefault', True) and not r.get('applicationOwned')]
 
     def import_installations(self, records, factory_resolver):
         if _active.get() is not None:
@@ -239,6 +238,8 @@ class Runtime(Component):
 
     def replace_component(self, component_id, manifest, factory):
         """Trusted update, retaining installation identity through a public control API."""
+        if self._record(self._address(component_id)).get("applicationOwned"):
+            raise PlatformError("application_management_required", "Manage application packages through the application host")
         component_id = self._address(component_id)
         if _active.get() is not None:
             raise PlatformError("permission_denied", "Replacement requires trusted user management")
@@ -284,6 +285,8 @@ class Runtime(Component):
                 ("Directory replacement of trusted control bindings requires a new bootstrap" if injected else None)}
 
     def _check_management(self, component_id, action="replace"):
+        if self._record(component_id).get("applicationOwned"):
+            raise PlatformError("application_management_required", "Manage application packages through the application host")
         if _active.get() is not None:
             raise PlatformError("permission_denied", "Installation changes require trusted user management")
         options = self.management_options(component_id)
@@ -294,6 +297,8 @@ class Runtime(Component):
 
     def uninstall_component(self, component_id):
         component_id = self._address(component_id)
+        if self._record(component_id).get("applicationOwned"):
+            raise PlatformError("application_management_required", "Remove applications through the application host")
         with self._lock:
             if not self._record(component_id).get('isDefault', True):
                 raise PlatformError('invalid_params', 'Uninstall requires a component type')
@@ -523,7 +528,7 @@ class Runtime(Component):
             rows = [dict(instanceId=key, componentType=r['componentType'],
                          installationId=r['packageInstallation'], config=deepcopy(r['config']),
                          autostart=r['autostart'])
-                    for key, r in self._records.items() if not r.get('isDefault', True)]
+                    for key, r in self._records.items() if not r.get('isDefault', True) and not r.get('applicationOwned')]
             write_json(self._instance_storage, dict(version=1, instances=rows,
                                                      retired=sorted(self._retired_instances),
                                                      applicationBindings={k: sorted(v) for k, v in self._application_bindings.items()}))
@@ -646,8 +651,12 @@ class Runtime(Component):
     def component_data_directory(self, component_id):
         """Trusted assembly location; each component owns its data beneath it."""
         record = self._record(component_id)
+        if record.get('applicationOwned') and record.get('applicationDataDirectory'):
+            return Path(record['applicationDataDirectory'])
         if self._state_dir is None:
             return None
+        if record.get('applicationOwned'):
+            return self._state_dir / 'application-data' / record['installation']
         directory = 'components' if record.get('isDefault', True) else 'component-instances'
         return self._state_dir / directory / record['installation']
 
@@ -680,6 +689,8 @@ class Runtime(Component):
             if record["state"] in ("starting", "stopping"):
                 raise PlatformError("busy", component_id)
             record.update(state="starting", instance=uuid4().hex, error=None, generations={}, published={})
+            if record.get("applicationOwned"):
+                self._application_contexts[component_id] = set()
         try:
             component = self.prepare(component_id)
             if component_id == self.roles.get("collaboration"):
@@ -732,6 +743,8 @@ class Runtime(Component):
                 record["autostart"] = False
                 self._persist() if record.get("isDefault", True) else self._persist_instances()
             record["state"] = "stopping"
+            if record.get("applicationOwned"):
+                self._application_contexts[component_id] = set()
             self.collaboration.withdraw(component_id)
         self.refresh_all()
         try:
@@ -762,34 +775,91 @@ class Runtime(Component):
         if instance is not None and record["instance"] != instance:
             return
         record.update(state="failed", error=str(error) if error else "Process exited")
+        if record.get("applicationOwned"):
+            self._application_contexts[component_id] = set()
         self.collaboration.withdraw(component_id)
         self.refresh_all()
 
-    def register_application_principal(self, application_id, *, restore=False):
-        """Register an application-owned authority identity, never a provider."""
+    def ensure_application(self, definition, *, factory=None, entry_view=None, restore=False,
+                           component_type=None, version=None, data_directory=None):
+        """Restore a definition as an ordinary component, preserving its UUID."""
         if _active.get() is not None:
             raise PlatformError('permission_denied', 'Application registration requires trusted management')
-        try:
-            if not isinstance(application_id, str) or UUID(application_id).hex != application_id:
-                raise ValueError()
-        except (ValueError, TypeError, AttributeError):
-            raise PlatformError('invalid_application', 'Application ID must be a canonical UUID') from None
+        from polaris_platform.application import Application, ApplicationDefinition
+        definition = ApplicationDefinition.from_dict(definition.as_dict())
+        identity = definition.id
+        if component_type is not None and (not isinstance(component_type, str) or not component_type):
+            raise PlatformError('invalid_application', 'Application type must be a nonempty string')
+        if version is not None and (not isinstance(version, str) or not version):
+            raise PlatformError('invalid_application', 'Application version must be a nonempty string')
+        data_directory = str(Path(data_directory).resolve()) if data_directory is not None else None
         with self._lock:
-            if application_id in self._retired_instances or application_id in self._records or any(r['installation'] == application_id for r in self._records.values()):
-                raise PlatformError('identity_collision', application_id)
-            if application_id not in self._application_principals:
-                if not restore and (self.authorization.scope(application_id) or self.authorization.scope(application_id, True)):
+            existing = self._records.get(identity)
+            if existing is not None and not existing.get('applicationOwned'):
+                raise PlatformError('identity_collision', identity)
+            if existing is None:
+                if identity in self._retired_instances or any(r['installation'] == identity for r in self._records.values()):
+                    raise PlatformError('identity_collision', identity)
+                if not restore and (self.authorization.scope(identity) or self.authorization.scope(identity, True)):
                     raise PlatformError('application_identity_reserved', 'Application ID already has authorization history')
-                self._application_principals[application_id] = uuid4().hex
-                self._application_contexts[application_id] = set()
-                self._application_ids.add(application_id)
-            self.authorization.bind_identity(application_id, application_id)
+                manifest = dict(id=identity, name=definition.title, version='1', platformApi=1,
+                                kind='application', entry=dict(mode='inprocess', factory='application'))
+                self._records[identity] = dict(manifest=manifest, factory=None, installation=identity,
+                    instance=None, state='installed', component=None, error=None, directory=None,
+                    autostart=False, trustedBindings=False, componentType=identity,
+                    isDefault=True, config={}, applicationOwned=True)
+                self._application_ids.add(identity)
+                self._application_contexts[identity] = set()
+                self.authorization.bind_identity(identity, identity)
+            record = self._records[identity]
+            record['definition'] = definition
+            record['manifest']['name'] = definition.title
+            if component_type is not None:
+                record['componentType'] = component_type
+            if version is not None:
+                record['manifest']['version'] = version
+            if data_directory is not None:
+                record['applicationDataDirectory'] = str(Path(data_directory).resolve())
+            record['factory'] = factory or (lambda: Application(definition=definition, entry_view=entry_view))
+        return identity
+
+    def start_application(self, application_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application lifecycle requires trusted management')
+        if application_id not in self._application_ids or application_id not in self._records:
+            raise PlatformError('unknown_application', application_id)
+        return self.start_component(application_id)
+
+    def stop_application(self, application_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application lifecycle requires trusted management')
+        if application_id not in self._application_ids or application_id not in self._records:
+            raise PlatformError('unknown_application', application_id)
+        return self.stop_component(application_id)
+
+    def application_component(self, application_id):
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application host access requires trusted management')
+        if application_id not in self._application_ids or application_id not in self._records:
+            raise PlatformError('unknown_application', application_id)
+        return self.component_instance(application_id)
+
+    def register_application_principal(self, application_id, *, restore=False):
+        """Compatibility entry: register and start an ordinary application."""
+        if _active.get() is not None:
+            raise PlatformError('permission_denied', 'Application registration requires trusted management')
+        from polaris_platform.application import ApplicationDefinition
+        if application_id not in self._records:
+            self.ensure_application(ApplicationDefinition('Application', application_id=application_id), restore=restore)
+        elif not self._records[application_id].get('applicationOwned'):
+            raise PlatformError('identity_collision', application_id)
+        self.start_application(application_id)
         return application_id
 
     def register_application_bindings(self, application_id, instance_ids):
         if _active.get() is not None:
             raise PlatformError('permission_denied', 'Application bindings require trusted management')
-        if application_id not in self._application_principals:
+        if application_id not in self._records or not self._records[application_id].get('applicationOwned'):
             raise PlatformError('unknown_application', application_id)
         if not isinstance(instance_ids, (list, tuple, set)) or any(not isinstance(i, str) for i in instance_ids):
             raise PlatformError('invalid_params', 'Instance references must be a list of IDs')
@@ -814,20 +884,23 @@ class Runtime(Component):
         if _active.get() is not None:
             raise PlatformError('permission_denied', 'Application revocation requires trusted management')
         with self._lock:
-            if application_id not in self._application_principals:
+            if application_id not in self._records or not self._records[application_id].get('applicationOwned'):
                 raise PlatformError('unknown_application', application_id)
             if not hasattr(self.authorization, 'forget_identity'):
                 raise PlatformError('unsupported_authorization', 'Authorization cannot retire identities safely')
             self.authorization.forget_identity(application_id)
             self.authorization.bind_identity(application_id, application_id)
-            self._application_principals[application_id] = uuid4().hex
+            was_running = self._records[application_id]['state'] == 'running'
             self._application_contexts[application_id] = set()
+        self.stop_component(application_id)
+        if was_running:
+            self.start_component(application_id)
 
     def unregister_application_principal(self, application_id):
         if _active.get() is not None:
             raise PlatformError('permission_denied', 'Application removal requires trusted management')
         with self._lock:
-            if application_id not in self._application_principals:
+            if application_id not in self._records or not self._records[application_id].get('applicationOwned'):
                 raise PlatformError('unknown_application', application_id)
             # Revoke all privileges before releasing the identity; no authority
             # is inherited if a deleted application is later recreated.
@@ -841,27 +914,22 @@ class Runtime(Component):
                 if previous is not None:
                     self._application_bindings[application_id] = previous
                 raise
-            del self._application_principals[application_id]
+        self.stop_component(application_id)
+        with self._lock:
+            del self._records[application_id]
             self._application_contexts.pop(application_id, None)
 
     def application_client(self, application_id):
         if _active.get() is not None:
             raise PlatformError('permission_denied', 'Application clients require trusted management')
-        with self._lock:
-            generation = self._application_principals.get(application_id)
-            if generation is None:
-                raise PlatformError('unknown_application', application_id)
-            return Client(self, application_id, generation)
+        if application_id not in self._records or not self._records[application_id].get('applicationOwned'):
+            raise PlatformError('unknown_application', application_id)
+        return self.client(application_id)
 
     def application_context(self, application_id):
-        if _active.get() is not None:
-            raise PlatformError('permission_denied', 'Application authority requires trusted management')
-        if application_id not in self._application_principals:
+        if application_id not in self._records or not self._records[application_id].get('applicationOwned'):
             raise PlatformError('unknown_application', application_id)
-        context = self._stamp(Context(application_id, application_id, 'user',
-                                      self.authorization.scope(application_id), origin_installation=application_id))
-        self._application_contexts[application_id].add(context.request_id)
-        return context
+        return self.user_context(application_id)
 
     def client(self, component_id):
         component_id = self._address(component_id)
@@ -869,10 +937,6 @@ class Runtime(Component):
         return Client(self, component_id, record["instance"])
 
     def validate_client(self, client):
-        if client.id in self._application_principals:
-            if self._application_principals[client.id] != client.instance:
-                raise PlatformError('stale_instance', client.id)
-            return
         record = self._record(client.id)
         if record["instance"] != client.instance or record["state"] not in ("running", "starting"):
             raise PlatformError("stale_instance", client.id)
@@ -912,10 +976,16 @@ class Runtime(Component):
         scope = self.authorization.scope(requester)
         if targets is not None:
             scope = frozenset(k for k in scope if k[0] in targets)
-        return self._stamp(Context(requester, requester, "user", scope, origin_installation=self._record(requester)["installation"]))
+        context = self._stamp(Context(requester, requester, "user", scope, origin_installation=self._record(requester)["installation"]))
+        if self._record(requester).get("applicationOwned"):
+            self.validate_client(self.client(requester))
+            self._application_contexts[requester].add(context.request_id)
+        return context
 
     def background_context(self, requester):
         requester = self._address(requester)
+        if self._record(requester).get("applicationOwned"):
+            raise PlatformError("application_background_unsupported", "Applications currently require foreground user input")
         if _active.get() is not None:
             raise PlatformError("scope_escalation", "Background authority is unavailable inside request handlers")
         return self._stamp(Context(requester, requester, "background", self.authorization.scope(requester, True), origin_installation=self._record(requester)["installation"]))
@@ -923,9 +993,8 @@ class Runtime(Component):
     def grant(self, requester, target, name, kind="operation", background=False, expected_key=None):
         if _active.get() is not None:
             raise PlatformError("permission_denied", "Only trusted user management can grant authority")
-        if requester not in self._application_principals:
-            requester = self._address(requester)
-            self._record(requester)
+        requester = self._address(requester)
+        self._record(requester)
         target = self._address(target)
         record = self.collaboration.describe_target(target)
         metadata = record["description"].get("operations" if kind == "operation" else "events", {}).get(name)
