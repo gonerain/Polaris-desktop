@@ -27,7 +27,7 @@ Rectangle {
     })
     readonly property var registration: snapshot.registration || ({state: "idle"})
     readonly property bool registering: ["waiting", "scanned", "creating", "connecting"].indexOf(registration.state) >= 0
-    readonly property string registrationLabel: ({idle: "扫码接入飞书", waiting: "等待扫码确认", scanned: "已扫码，请在飞书中确认", creating: "正在创建机器人", connecting: "已保存，正在连接", complete: "机器人已接入", expired: "二维码已过期", cancelled: "已取消扫码", error: "扫码接入未完成"})[registration.state] || "扫码接入飞书"
+    readonly property string registrationLabel: ({idle: "扫码接入飞书", waiting: "等待扫码确认", scanned: "已扫码，请在飞书中确认", creating: "正在创建机器人", connecting: "已保存，正在连接", complete: "机器人已接入", expired: "二维码已过期，可手动刷新", cancelled: "已取消扫码", error: "扫码接入未完成"})[registration.state] || "扫码接入飞书"
     readonly property bool connected: snapshot.connectionState === "connected"
     readonly property bool busy: !!snapshot.busy
     color: surface
@@ -157,6 +157,7 @@ Rectangle {
                         ActionButton { objectName: "feishuRegistrationBrowser"; text: "在浏览器中打开官方页面"; visible: !!root.registration.verificationUrl; enabled: !root.busy; onClicked: feishuBot.openRegistrationLink() }
                         Flow {
                             Layout.fillWidth: true; spacing: 9
+                            ActionButton { objectName: "feishuRefreshRegistration"; text: "刷新二维码"; visible: root.registering && !!root.registration.qrImageSource; enabled: !root.busy; onClicked: feishuBot.startRegistration() }
                             ActionButton { objectName: "feishuStartRegistration"; text: root.registration.state === "expired" ? "刷新二维码" : ["error", "cancelled"].indexOf(root.registration.state) >= 0 ? "重新扫码" : "扫码创建机器人"; primary: true; visible: !root.registering; enabled: !root.busy; onClicked: feishuBot.startRegistration() }
                         }
                     }

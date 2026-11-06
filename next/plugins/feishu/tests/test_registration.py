@@ -24,11 +24,11 @@ class SDKRegistrationTests(unittest.TestCase):
         if not loop.is_running() and not loop.is_closed():
             loop.close()
 
-    def scenario(self, polls, verify_success=True, begin=None):
+    def scenario(self, polls, verify_success=True, begin=None, init_prefix=(), begin_prefix=()):
         import httpx
         from lark_oapi.scene import registration as sdk
         records, urls, emitted = [], [], []
-        responses = deque([{'supported_auth_methods': ['client_secret']}, begin or {
+        responses = deque([*init_prefix, {'supported_auth_methods': ['client_secret']}, *begin_prefix, begin or {
             'device_code': 'private-device', 'verification_uri_complete': 'https://open.feishu.cn/page/cli?user_code=dummy',
             'expires_in': 500, 'interval': 0}, *polls])
         async def post(client, url, **kwargs):
@@ -38,7 +38,16 @@ class SDKRegistrationTests(unittest.TestCase):
             else:
                 records.append((url, parse_qs(kwargs['content'])))
                 data = responses.popleft()
-            return SimpleNamespace(status_code=200, json=lambda: data)
+                if isinstance(data, Exception):
+                    raise data
+            status_code = 200
+            if isinstance(data, tuple):
+                status_code, data = data
+            def raise_status():
+                if status_code >= 400:
+                    raise httpx.HTTPStatusError('private detail', request=httpx.Request('POST', url),
+                                                response=httpx.Response(status_code))
+            return SimpleNamespace(status_code=status_code, json=lambda: data, raise_for_status=raise_status)
         original = asyncio.sleep
         async def fast_sleep(_):
             await original(0)
@@ -80,6 +89,70 @@ class SDKRegistrationTests(unittest.TestCase):
         emitted, _ = self.scenario([], begin={'device_code': 'dummy', 'verification_uri_complete': 'https://evil.invalid/', 'expires_in': 500})
         self.assertEqual(emitted[-1]['state'], 'error')
 
+    def test_poll_network_timeout_retries_same_device_and_ignores_local_expiry(self):
+        import httpx
+        emitted, records = self.scenario([httpx.ReadTimeout('private detail'), (503, {}), (429, {}),
+            {'error': 'authorization_pending'},
+            {'client_id': 'cli_after_wait', 'client_secret': 'fake'}], begin={
+                'device_code': 'private-device',
+                'verification_uri_complete': 'https://open.feishu.cn/page/cli?user_code=dummy',
+                'expires_in': -1, 'interval': 0})
+        self.assertEqual(emitted[-1]['state'], 'credentials')
+        self.assertEqual(sum('verificationUrl' in row for row in emitted), 1)
+        polls = [params for url, params in records if url != 'verify' and params.get('action') == ['poll']]
+        self.assertEqual(len(polls), 5)
+        self.assertTrue(all(row['device_code'] == ['private-device'] for row in polls))
+        self.assertTrue(any('网络' in row.get('message', '') for row in emitted))
+        self.assertNotIn('private detail', json.dumps(emitted))
+
+    def test_initial_network_failures_retry_same_stage_before_one_qr(self):
+        import httpx
+        emitted, records = self.scenario([
+            {'client_id': 'cli_after_network', 'client_secret': 'fake'}],
+            init_prefix=[httpx.ReadTimeout('private init'), (503, {})],
+            begin_prefix=[httpx.ReadTimeout('private begin'), (429, {})])
+        self.assertEqual(emitted[-1]['state'], 'credentials')
+        self.assertEqual(sum('verificationUrl' in row for row in emitted), 1)
+        actions = [params['action'][0] for url, params in records if url != 'verify']
+        self.assertEqual(actions, ['init'] * 3 + ['begin'] * 3 + ['poll'])
+        self.assertTrue(any(row['state'] == 'creating' and '网络暂时未响应' in row.get('message', '') for row in emitted))
+        self.assertNotIn('private init', json.dumps(emitted))
+
+    def test_cancel_during_initial_network_retry_emits_no_late_qr(self):
+        import httpx
+        async def run():
+            emitted, calls = [], []
+            retrying = asyncio.Event()
+            async def post(client, url, **kwargs):
+                calls.append(1)
+                raise httpx.ReadTimeout('private detail')
+            def emit(value):
+                emitted.append(value)
+                retrying.set()
+            with patch.object(httpx.AsyncClient, 'post', new=post):
+                task = asyncio.create_task(run_registration(emit, 'Test'))
+                await retrying.wait()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                await asyncio.sleep(0)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(emitted), 1)
+            self.assertEqual(emitted[0]['state'], 'creating')
+            self.assertNotIn('verificationUrl', emitted[0])
+        asyncio.run(run())
+
+    def test_http_oauth_errors_keep_expired_and_denied_semantics(self):
+        for status_code, error, state in [(400, 'expired_token', 'expired'),
+                                           (400, 'access_denied', 'error'),
+                                           (403, 'access_denied', 'error')]:
+            with self.subTest(error=error):
+                emitted, records = self.scenario([(status_code, {'error': error})])
+                self.assertEqual(emitted[-1]['state'], state)
+                self.assertNotIn('qrDataUrl', emitted[-1])
+                self.assertNotIn('verificationUrl', emitted[-1])
+                self.assertEqual(sum('verificationUrl' in row for row in emitted), 1)
+
     def test_missing_brand_requires_fixed_feishu_auth_verification(self):
         emitted, records = self.scenario([{'client_id': 'cli_offline', 'client_secret': 'fake'}])
         self.assertEqual(emitted[-1]['state'], 'credentials')
@@ -87,14 +160,33 @@ class SDKRegistrationTests(unittest.TestCase):
         emitted, _ = self.scenario([{'client_id': 'cli_offline', 'client_secret': 'fake'}], verify_success=False)
         self.assertEqual(emitted[-1]['state'], 'error')
 
+    def test_credentials_verification_network_retry_uses_same_credentials(self):
+        import httpx
+        emitted, calls = [], []
+        async def register(**kwargs):
+            return {'client_id': 'cli_confirmed', 'client_secret': 'fake-secret'}
+        async def verify(app_id, secret):
+            calls.append((app_id, secret))
+            if len(calls) == 1:
+                raise httpx.ReadTimeout('private detail')
+        original = asyncio.sleep
+        async def fast_sleep(_):
+            await original(0)
+        with patch('polaris_feishu_bot.registration.asyncio.sleep', new=fast_sleep):
+            asyncio.run(run_registration(emitted.append, 'Test', register=register, verify=verify))
+        self.assertEqual(calls, [('cli_confirmed', 'fake-secret')] * 2)
+        self.assertEqual(emitted[-1]['state'], 'credentials')
+        self.assertTrue(any('网络暂时未响应' in row.get('message', '') for row in emitted))
+
     def test_cancel_timeout_and_url_allowlist(self):
         async def register(**kwargs):
             await asyncio.Event().wait()
         async def run():
             emitted = []
-            await run_registration(emitted.append, 'Test', timeout=.02, register=register)
-            self.assertEqual(emitted[-1]['state'], 'expired')
             task = asyncio.create_task(run_registration(emitted.append, 'Test', register=register))
+            await asyncio.sleep(.03)
+            self.assertFalse(task.done())
+            self.assertEqual(emitted, [])
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task

@@ -197,6 +197,35 @@ else:
             self.assertFalse(self.views[self.second][0].status()['configured'])
             self.assertFalse(find(item, 'feishuOnboarding').isVisible())
 
+        def test_registration_survives_old_lifetime_then_preserves_server_expired_qr(self):
+            from unittest.mock import patch
+            component, item, bridge, session = self.start_scan()
+            original_qr = json.loads(bridge.stateJson)['registration']['qrImageSource']
+            original_clock = time.monotonic
+            with patch('polaris_feishu_bot.registration.time.monotonic', side_effect=lambda: original_clock() + 7200):
+                current = component.registration_snapshot(bridge.owner_id)
+            self.assertEqual(current['state'], 'waiting')
+            self.assertEqual(current['qrDataUrl'], session.qr_source)
+            self.assertFalse(session.closed)
+            session.emit(state='expired', message='二维码已过期，请手动刷新')
+            bridge.refresh()
+            self.wait(lambda: json.loads(bridge.stateJson)['registration']['state'] == 'expired')
+            self.assertEqual(json.loads(bridge.stateJson)['registration']['qrImageSource'], original_qr)
+            self.assertTrue(find(item, 'feishuRegistrationQr').isVisible())
+            self.assertEqual(len(self.registration_sessions), 1)
+            component, item, bridge, fresh = self.start_scan()
+            fresh.emit(state='credentials', client_id='cli_after_refresh', client_secret='fake-secret', verifiedFeishu=True)
+            self.wait(lambda: component.status()['connectionState'] == 'connected')
+
+        def test_registration_success_after_old_lifetime_still_checks_authority(self):
+            from unittest.mock import patch
+            component, item, bridge, session = self.start_scan()
+            original_clock = time.monotonic
+            with patch('polaris_feishu_bot.registration.time.monotonic', side_effect=lambda: original_clock() + 7200):
+                session.emit(state='credentials', client_id='cli_late_valid', client_secret='fake-secret', verifiedFeishu=True)
+            self.wait(lambda: component.status()['connectionState'] == 'connected')
+            self.assertEqual(component.status()['appId'], 'cli_late_valid')
+
         def test_registration_qr_works_with_different_qrcode_already_loaded(self):
             import types
             from unittest.mock import patch

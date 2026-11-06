@@ -17,7 +17,7 @@ ADDONS = {
     'events': {'items': {'tenant': ['im.message.receive_v1']}},
     'callbacks': {'items': ['card.action.trigger']},
 }
-MAX_SECONDS = 600
+
 
 
 def is_registration_url(value):
@@ -50,6 +50,10 @@ def qr_data_url(value):
     return qr_image(value)[0]
 
 
+class RegistrationNetworkError(Exception):
+    pass
+
+
 class RegistrationError(Exception):
     def __init__(self, code):
         self.code = code
@@ -58,8 +62,8 @@ class RegistrationError(Exception):
 
 def failure_state(error):
     code = getattr(error, 'code', '')
-    if isinstance(error, asyncio.TimeoutError) or code in ('expired_token', 'invalid_grant', 'timeout'):
-        return 'expired', '二维码已过期，请重新开始'
+    if code == 'expired_token':
+        return 'expired', '飞书提示此二维码已过期，点击刷新二维码即可'
     if code == 'access_denied':
         return 'error', '飞书确认已拒绝，可重新开始'
     if code == 'unsupported_brand':
@@ -77,6 +81,8 @@ async def verify_feishu_credentials(app_id, secret):
     async with httpx.AsyncClient(timeout=8, follow_redirects=False) as client:
         response = await client.post('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
                                      json={'app_id': app_id, 'app_secret': secret})
+        if response.status_code in (408, 429, 500, 502, 503, 504):
+            raise RegistrationNetworkError()
         if response.status_code != 200:
             raise RegistrationError('credential_verification_failed')
         data = response.json()
@@ -86,22 +92,75 @@ async def verify_feishu_credentials(app_id, secret):
         # The token is never emitted, persisted, or logged.
 
 
-async def run_registration(emit, name, timeout=MAX_SECONDS, register=None, verify=None):
-    """Run the public SDK flow with cancellation and one bounded lifetime."""
+async def register_until_confirmed(**options):
+    """Use SDK request/response handling, but only the server expires a device code."""
+    import httpx
+    from lark_oapi.scene.registration import _AsyncFlow
+    class UserControlledFlow(_AsyncFlow):
+        async def _post(self, data):
+            from urllib.parse import urlencode
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                response = await client.post(self._base_url + '/oauth/v1/app/registration',
+                    content=urlencode(data), headers={'Content-Type': 'application/x-www-form-urlencoded'})
+                if response.status_code in (408, 429, 500, 502, 503, 504):
+                    raise RegistrationNetworkError()
+                payload = response.json()
+                # OAuth errors may use HTTP 400/403; preserve the SDK's semantic handling.
+                if isinstance(payload, dict) and isinstance(payload.get('error'), str) and payload['error']:
+                    return payload
+                response.raise_for_status()
+                return payload
+
+        async def _initial_request(self, data):
+            while True:
+                try:
+                    return await self._post(data)
+                except (httpx.TransportError, asyncio.TimeoutError, RegistrationNetworkError):
+                    self._notify_status('initial_network_retry')
+                    await asyncio.sleep(3)
+
+        async def run(self):
+            init = await self._initial_request({'action': 'init'})
+            if 'client_secret' not in (init.get('supported_auth_methods') or []):
+                raise RegistrationError('unsupported_auth_method')
+            begin = await self._initial_request(dict(action='begin', archetype='PersonalAgent',
+                auth_method='client_secret', request_user_info='open_id'))
+            device = begin['device_code']
+            self._on_qr_code(dict(url=self._build_qr_url(begin['verification_uri_complete']),
+                                 expire_in=begin.get('expires_in')))
+            interval = begin.get('interval', 5)
+            interval = max(1, interval) if type(interval) in (int, float) and 0 <= interval <= 300 else 5
+            while True:
+                try:
+                    response = await self._post({'action': 'poll', 'device_code': device})
+                except (httpx.TransportError, asyncio.TimeoutError, RegistrationNetworkError):
+                    self._notify_status('network_retry')
+                    await asyncio.sleep(max(interval, 1))
+                    continue
+                action, result = self._handle_poll_response(response, False)
+                if action == 'success':
+                    return result
+                if action == 'slow_down':
+                    interval = min(interval + 5, 300)
+                    self._notify_status('slow_down', interval)
+                await asyncio.sleep(interval)
+    return await UserControlledFlow(domain='https://accounts.feishu.cn',
+        lark_domain='https://accounts.larksuite.com', **options).run()
+
+
+async def run_registration(emit, name, register=None, verify=None):
+    """Wait until user cancellation or an explicit server result."""
     if register is None:
-        from lark_oapi import aregister_app
-        register = aregister_app
+        register = register_until_confirmed
     verify = verify or verify_feishu_credentials
     switched = False
     def qr(info):
         if not isinstance(info, dict) or not is_registration_url(info.get('url')):
             raise RegistrationError('invalid_response')
-        lifetime = info.get('expire_in', MAX_SECONDS)
-        if type(lifetime) is not int or lifetime <= 0:
-            raise RegistrationError('invalid_response')
+        lifetime = info.get('expire_in')
         image, modules = qr_image(info['url'])
         emit({'state': 'waiting', 'verificationUrl': info['url'], 'qrDataUrl': image, 'qrModules': modules,
-              'expiresAt': time.time() + min(lifetime, timeout),
+              'expiresAt': time.time() + lifetime if type(lifetime) in (int, float) and lifetime > 0 else 0,
               'message': '请用飞书扫码，并在官方确认页核对机器人权限及消息、卡片的长连接配置'})
     def status(info):
         nonlocal switched
@@ -111,6 +170,10 @@ async def run_registration(emit, name, timeout=MAX_SECONDS, register=None, verif
         if state == 'domain_switched':
             switched = True
             raise RegistrationError('unsupported_brand')
+        if state == 'initial_network_retry':
+            emit({'state': 'creating', 'message': '正在申请二维码，网络暂时未响应；将继续重试，可随时取消'})
+        if state == 'network_retry':
+            emit({'state': 'waiting', 'message': '网络暂时未响应，正在继续等待飞书确认；可手动刷新二维码'})
         if state in ('polling', 'slow_down'):
             emit({'state': 'waiting', 'message': '等待飞书确认' if state == 'polling' else '飞书要求放慢查询，正在等待确认'})
     async def perform():
@@ -129,15 +192,22 @@ async def run_registration(emit, name, timeout=MAX_SECONDS, register=None, verif
                 or not isinstance(secret, str) or not secret.strip() or len(secret) > 2048):
             raise RegistrationError('invalid_response')
         emit({'state': 'creating', 'message': '已确认，正在校验飞书应用凭据'})
-        await verify(app_id, secret)
+        import httpx
+        while True:
+            try:
+                await verify(app_id, secret)
+                break
+            except (httpx.TransportError, asyncio.TimeoutError, RegistrationNetworkError):
+                emit({'state': 'creating', 'message': '正在确认应用凭据，网络暂时未响应；将继续重试'})
+                await asyncio.sleep(3)
         emit({'state': 'credentials', 'client_id': app_id, 'client_secret': secret, 'verifiedFeishu': True})
     try:
-        await asyncio.wait_for(perform(), timeout=timeout)
+        await perform()
     except asyncio.CancelledError:
         raise
     except Exception as error:
         state, message = failure_state(error)
-        emit({'state': state, 'message': message, 'verificationUrl': '', 'qrDataUrl': '', 'qrModules': 0, 'expiresAt': 0})
+        emit({'state': state, 'message': message})
 
 
 class RegistrationController:
@@ -156,7 +226,7 @@ class RegistrationController:
         component = self.component
         with component._lock:
             if (component._stopped or self.current is not session or session['cancelled']
-                    or component.port is not session['port'] or time.monotonic() >= session['deadline']):
+                    or component.port is not session['port']):
                 return False
         try:
             validator = self.owners.get(session['owner'])
@@ -216,7 +286,7 @@ class RegistrationController:
                 raise PlatformError('already_configured', '当前实例已关联机器人；如需新机器人，请新建实例')
         self.cancel()
         session = dict(id=uuid4().hex, owner=owner, context=context, port=component.port,
-            name=name, deadline=time.monotonic() + MAX_SECONDS, cancelled=False,
+            name=name, cancelled=False,
             snapshot=dict(self.idle(), state='creating', message='正在向飞书申请二维码'), transport=None)
         with component._lock:
             self.current = session
@@ -245,8 +315,7 @@ class RegistrationController:
                 return self.idle()
             active = session['snapshot']['state'] in ('creating', 'waiting', 'connecting') and not session['cancelled']
         if active and not self._valid(session):
-            self.cancel(owner, '扫码接入已过期或本机授权已失效，请重新开始', expected_session=session,
-                        state='expired' if time.monotonic() >= session['deadline'] else 'cancelled')
+            self.cancel(owner, '本机授权已失效，请重新开始', expected_session=session)
         with component._lock:
             return dict(session['snapshot'])
 
@@ -266,8 +335,7 @@ class RegistrationController:
             with component._lock:
                 current = self.current is session
             if current:
-                self.cancel(session['owner'], '二维码已过期，请重新开始' if time.monotonic() >= session['deadline'] else '扫码接入已取消或本机授权已失效',
-                            expected_session=session, state='expired' if time.monotonic() >= session['deadline'] else 'cancelled')
+                self.cancel(session['owner'], '扫码接入已取消或本机授权已失效', expected_session=session)
             return
         state = payload.get('state') if isinstance(payload, dict) else None
         if state == 'credentials':
@@ -296,19 +364,12 @@ class RegistrationController:
                 modules = payload['qrModules']
                 if type(modules) is int and 21 <= modules <= 185:
                     snapshot['qrModules'] = modules
-            if 'expiresAt' in payload:
-                expires = payload['expiresAt']
-                if type(expires) not in (int, float) or not time.time() < expires <= time.time() + MAX_SECONDS + 5:
-                    if snapshot['state'] == 'waiting':
-                        snapshot.update(state='error', message='飞书返回的二维码有效期无效')
-                else:
-                    snapshot['expiresAt'] = expires
-                    session['deadline'] = min(session['deadline'], time.monotonic() + expires - time.time())
+            if type(payload.get('expiresAt')) in (int, float):
+                snapshot['expiresAt'] = payload['expiresAt']
             terminal = snapshot['state'] in ('error', 'expired')
             transport = session['transport'] if terminal else None
             if terminal:
                 session['transport'] = None
-                snapshot.update(verificationUrl='', qrDataUrl='', qrModules=0, expiresAt=0)
         self._retire(transport)
 
     def _finish(self, session, payload):

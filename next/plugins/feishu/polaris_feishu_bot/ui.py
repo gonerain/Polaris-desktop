@@ -133,7 +133,7 @@ class BotBridge(QObject):
         value = dict(state=state, verificationUrl='', qrImageSource='', message=raw.get('message', ''),
                      expiresAt=raw.get('expiresAt', 0))
         url = raw.get('verificationUrl', '')
-        if state in ('waiting', 'scanned', 'creating') and url and is_registration_url(url):
+        if state in ('waiting', 'scanned', 'creating', 'expired', 'error') and url and is_registration_url(url):
             value['verificationUrl'] = url
             source = raw.get('qrDataUrl', '')
             if (isinstance(source, str) and source.startswith('data:image/svg+xml;base64,')
