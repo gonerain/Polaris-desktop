@@ -110,7 +110,7 @@ export class BridgeClient extends EventEmitter {
         }
     }
     request(operation, params = {}) {
-        if (!this.ready) return Promise.reject(Error('Polaris Agent is disconnected'));
+        if (!this.ready) return Promise.reject(Error('Agent Bridge is disconnected'));
         const requestId = randomUUID();
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {

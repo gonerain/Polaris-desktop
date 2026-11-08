@@ -131,8 +131,7 @@ export async function sendDesktopMessage({ sessionId, text, mode, project, socke
     finally { clearTimeout(timer); socket?.destroy(); }
 }
 
-// Discard prompts, tool outputs and other conversation contents immediately.
-// Retain bounded run metadata and final replies; never prompts or tool outputs.
+// Retain only bounded user text from the same turn and final replies; discard tool output and reasoning.
 export function selectRunState(conversation) {
     if (!conversation || typeof conversation !== 'object') return null;
     let turns = conversation.turns;
@@ -147,7 +146,11 @@ export function selectRunState(conversation) {
     const runs = turns.slice(-100).filter(turn => typeof turn.turnId === 'string' && turn.turnId).map(turn => {
         const final = turn.status !== 'inProgress' && Array.isArray(turn.items)
             ? turn.items.findLast(item => item.type === 'agentMessage' && item.phase === 'final_answer' && typeof item.text === 'string') : null;
+        const input = Array.isArray(turn.params?.input)
+            ? turn.params.input.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text).join('\n') : undefined;
         return {turnId:turn.turnId, status:statuses[turn.status],
+            ...(['auto_review', 'human'].includes(turn.params?.approvalsReviewer) ? {approvalReviewer:turn.params.approvalsReviewer} : {}),
+            ...(input !== undefined ? {prompt:Array.from(input).slice(0,4000).join(''),promptTruncated:Array.from(input).length > 4000} : {}),
             ...(final ? {reply:Array.from(final.text).slice(0,8000).join(''),replyTruncated:Array.from(final.text).length > 8000} : {})};
     });
     return {busy:turns.some(turn => turn.status === 'inProgress'), runs};

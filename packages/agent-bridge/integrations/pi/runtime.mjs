@@ -89,20 +89,20 @@ export function install(pi, markSchema, Client = BridgeClient) {
         return client.request('session.mark', {sessionId});
     };
     pi.registerCommand('polaris', {
-        description: 'Polaris Agent: mark [name] explicitly marks this chat',
+        description: 'Agent Bridge: mark [name] explicitly marks this chat',
         handler: async (args, ctx) => {
             try {
                 const match = /^mark(?:\s+([\s\S]+))?$/.exec(args.trim());
                 if (match) {
                     await mark(match[1]);
-                    ctx.ui.notify('当前对话已标记到 Polaris Agent', 'info');
-                } else ctx.ui.notify(client?.ready ? 'Polaris Agent 已连接；/polaris mark [名称] 标记当前对话' : 'Polaris Agent 未连接', 'info');
+                    ctx.ui.notify('当前对话已标记到 Agent Bridge', 'info');
+                } else ctx.ui.notify(client?.ready ? 'Agent Bridge 已连接；/polaris mark [名称] 标记当前对话' : 'Agent Bridge 未连接', 'info');
             } catch (error) { ctx.ui.notify(error.message, 'error'); }
         },
     });
     pi.registerTool({
         name: 'mark_current', label: 'Mark current chat',
-        description: 'Mark this current chat in Polaris Agent only when the user explicitly asks to mark it. Never call for lifecycle notifications.',
+        description: 'Mark this current chat in Agent Bridge only when the user explicitly asks to mark it. Never call for lifecycle notifications.',
         parameters: markSchema,
         execute: async (_id, params) => ({content: [{type: 'text', text: JSON.stringify(await mark(params.name))}], details: {}}),
     });

@@ -1,6 +1,6 @@
 {
   "name": "polaris-agent-local",
-  "interface": { "displayName": "Polaris Agent Local" },
+  "interface": { "displayName": "Agent Bridge Local" },
   "plugins": [
     {
       "name": "polaris-agent",

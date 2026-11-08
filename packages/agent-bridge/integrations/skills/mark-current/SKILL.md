@@ -1,6 +1,6 @@
 ---
 name: mark-current
-description: Mark the current Codex chat in Polaris Agent when the user explicitly asks to mark this conversation, optionally with a name.
+description: Mark the current Codex chat in Agent Bridge when the user explicitly asks to mark this conversation, optionally with a name.
 ---
 Only invoke for an explicit user request to mark the current chat. Lifecycle reporting runs through hooks and never needs this skill.
 

@@ -93,7 +93,7 @@ Rectangle {
             AgentButton { objectName: "agentPluginSettings"; text: "Codex 插件"; onClicked: { pluginDialog.open(); agentModel.pluginAction(false) } }
             AgentButton { text: "刷新"; onClicked: agentModel.refresh() }
         }
-        Label { visible: root.sessions.length === 0; text: "暂无接入会话。启用 Polaris Agent 插件后，在 Pi 或 Codex 中打开新会话。"; wrapMode: Text.Wrap; color: "#737d8c"; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+        Label { visible: root.sessions.length === 0; text: "暂无接入会话。启用 Agent Bridge 插件后，在 Pi 或 Codex 中打开新会话。"; wrapMode: Text.Wrap; color: "#737d8c"; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
         ListView {
             id: list
             objectName: "agentSessions"

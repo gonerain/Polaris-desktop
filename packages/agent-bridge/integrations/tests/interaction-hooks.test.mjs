@@ -20,7 +20,7 @@ test('real PermissionRequest and remote question commands return native decision
  const directory=await mkdtemp(join(tmpdir(),'polaris-interaction-hook-')),plugin=join(directory,'plugin');
  await cp(fileURLToPath(new URL('../',import.meta.url)),plugin,{recursive:true});
  await writeFile(join(plugin,'codex/desktop-ipc.mjs'),`export const sendModes=['start','steer']; export async function sendDesktopMessage(){return {status:'available',state:{runs:[{turnId:'turn',status:'running'}]}};}`);
- const sockets=new Set(),frames=[];let kind='approval';
+ const sockets=new Set(),frames=[];let kind='approval',notificationOnly=false;
  const bridge=createServer(socket=>{
   sockets.add(socket);socket.on('close',()=>sockets.delete(socket));let raw='';
   socket.on('data',chunk=>{raw+=chunk;let i;while((i=raw.indexOf('\n'))>=0){
@@ -29,7 +29,7 @@ test('real PermissionRequest and remote question commands return native decision
    if(frame.type==='request'){
     let result={};
     if(frame.operation==='session.status')result={runs:[]};
-    if(frame.operation==='interaction.open'){kind=frame.params.kind;result={id:'request'};}
+    if(frame.operation==='interaction.open'){kind=frame.params.kind;result={id:'request',notificationOnly};}
     if(frame.operation==='interaction.status')result={state:'answered',answer:kind==='approval'?'deny':'Word'};
     socket.write(JSON.stringify({type:'response',requestId:frame.requestId,result})+'\n');
    }
@@ -51,6 +51,11 @@ test('real PermissionRequest and remote question commands return native decision
   const opened=frames.filter(f=>f.operation==='interaction.open');
   assert.equal(opened.length,2);assert.equal(opened[0].params.sessionId,sid);assert.equal(opened[0].params.runId,digest('turn'));
   assert.equal(frames.filter(f=>f.operation==='interaction.close').length,2);
+  notificationOnly=true;
+  const native=await execute(script,env,[],{hook_event_name:'PermissionRequest',session_id:sid,turn_id:'turn',cwd:directory,tool_name:'Bash',tool_input:{command:'pwd'}});
+  assert.deepEqual(native,{}); // No remote decision; native Codex approval continues.
+  assert.equal(frames.filter(f=>f.operation==='interaction.status').length,2);
+
  }finally{
   try{await execute(script,env,[],{hook_event_name:'SessionEnd',session_id:sid,cwd:directory});}catch{}
   for(const socket of sockets)socket.destroy();

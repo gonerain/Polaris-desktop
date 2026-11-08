@@ -259,7 +259,7 @@ class Presentation:
         root = self._notice.rootObject()
         if root is None:
             return
-        root.setProperty('noticeTitle', str(session.get('title') or session.get('sessionId') or 'Agent')[:120])
+        root.setProperty('noticeTitle', str(session.get('title') or session.get('sessionId') or 'Agent Bridge')[:120])
         root.setProperty('noticeState', '收到回复，完成状态未知' if run.get('status') == 'unknown' and run.get('reply')
                          else statuses.get(run.get('status'), '完成状态未知'))
         self._notice.resize(320, 86)

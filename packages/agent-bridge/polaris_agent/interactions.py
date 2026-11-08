@@ -20,8 +20,9 @@ class Interactions:
             raise ValueError('invalid interaction options')
         with self.store.transaction():
             row = self.store.require(session_id)
-            if not row['marked'] or not row['online'] or [row['adapter'], row['clientId']] != list(owner):
-                raise ValueError('session is not marked and online')
+            if (not row['online'] or [row['adapter'], row['clientId']] != list(owner) or
+                    not row['marked'] and row['adapter'].lower() != 'codex'):
+                raise ValueError('session is not online or belongs to another owner')
             if not any(r['id']==run_id and r['status']=='running' for r in row['runs']):
                 raise ValueError('interaction does not belong to an active run')
             self.expire()
@@ -31,12 +32,20 @@ class Interactions:
             request = dict(id=identity, sessionId=session_id, owner=list(owner), runId=run_id,
                 kind=kind, prompt=prompt, options=options, state='pending', createdAt=time.time(),
                 expiresAt=time.time()+timeout, responseToken=secrets.token_urlsafe(32), notificationStatus='waiting')
+            self.store.notify(row, 'interaction.opened', identity, requestId=identity,
+                              runId=run_id, kind=kind, prompt=prompt, options=options,
+                              expiresAt=request['expiresAt'], actionable=False)
+            # Observation is independent of control. Unmarked sessions never gain
+            # response credentials and must immediately keep their native UI flow.
+            if not row['marked']:
+                request.update(state='observed', responseToken='')
             self.store.requests[identity] = request
             # Retain recent outcomes for late hook polls, not an unlimited history.
             terminal = sorted((v for v in self.store.requests.values() if v['state'] != 'pending'), key=lambda r:r['createdAt'])
             for old in terminal[:-100]: self.store.requests.pop(old['id'], None)
             self.store.changed()
-            return dict(id=identity, state='pending', expiresAt=request['expiresAt'])
+            return dict(id=identity, state=request['state'], expiresAt=request['expiresAt'],
+                        notificationOnly=not row['marked'])
 
     def expire(self, session_id=None):
         changed = False

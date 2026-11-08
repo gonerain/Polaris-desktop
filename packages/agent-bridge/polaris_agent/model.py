@@ -28,9 +28,12 @@ class AgentStore:
         self.listeners = []
         self.notices = []
         self.storage_notice = ''
+        self.notification_export_pending = False
         self.rows = {}
         self.deliveries = {}
         self.requests = {}
+        self.notifications = {"version": 1, "id": uuid.uuid4().hex, "events": []}
+        migrate_notifications = False
         if self.path.exists():
             data = json.loads(self.path.read_text(encoding='utf-8'))
             if data.get('version') != 1 or not isinstance(data.get('sessions'), dict):
@@ -38,6 +41,24 @@ class AgentStore:
             self.rows = data['sessions']
             self.deliveries = data.get('deliveries', {})
             self.requests = data.get('requests', {})
+            self.notifications = data.get('notifications', self.notifications)
+            migrate_notifications = 'notifications' not in data
+            projection = self.path.with_name('notifications.json')
+            if migrate_notifications and projection.exists():
+                # A previous component version may have removed the primary copy
+                # while the consumer's established feed remains on disk.
+                recovered = json.loads(projection.read_text(encoding='utf-8'))
+                if (not isinstance(recovered, dict) or recovered.get('version') != 1 or
+                        not isinstance(recovered.get('id'), str) or not recovered['id'] or
+                        not isinstance(recovered.get('events'), list)):
+                    raise ValueError('invalid existing notification feed')
+                seen = set()
+                for sequence, event in enumerate(recovered['events'], 1):
+                    if (not isinstance(event, dict) or event.get('sequence') != sequence or
+                            not isinstance(event.get('id'), str) or not event['id'] or event['id'] in seen):
+                        raise ValueError('invalid existing notification feed')
+                    seen.add(event['id'])
+                self.notifications = recovered
         for request in self.requests.values():
             if request['state'] == 'pending': request.update(state='expired', responseToken='')
         for delivery in self.deliveries.values():
@@ -49,19 +70,27 @@ class AgentStore:
             row['online'] = False
             row['canSend'] = False
 
+        if self.path.exists():
+            if migrate_notifications:
+                # Persist the new source identity before exposing it to consumers.
+                self.save()
+            else:
+                try: self.export_notifications()
+                except OSError: self.notification_export_pending = True
+
     @contextmanager
     def transaction(self):
         with self.lock:
-            before = copy.deepcopy((self.rows, self.deliveries, self.notices, self.requests))
+            before = copy.deepcopy((self.rows, self.deliveries, self.notices, self.requests, self.notifications))
             try:
                 yield
             except Exception:
-                self.rows, self.deliveries, self.notices, self.requests = before
+                self.rows, self.deliveries, self.notices, self.requests, self.notifications = before
                 raise
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = json.dumps({'version': 1, 'sessions': self.rows, 'deliveries': self.deliveries, 'requests': self.requests}, ensure_ascii=False).encode()
+        data = json.dumps({'version': 1, 'sessions': self.rows, 'deliveries': self.deliveries, 'requests': self.requests, 'notifications': self.notifications}, ensure_ascii=False).encode()
         name = None
         try:
             with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as file:
@@ -70,9 +99,39 @@ class AgentStore:
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(name, self.path)
+            # A separate, token-free projection for explicitly enabled local consumers.
+            # Primary state is authoritative; failed exports are repaired on next save/start.
+            try:
+                self.export_notifications()
+            except OSError:
+                self.notification_export_pending = True
         finally:
             if name and os.path.exists(name):
                 os.unlink(name)
+
+    def export_notifications(self):
+        path = self.path.with_name('notifications.json')
+        name = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as file:
+                name = file.name
+                file.write(json.dumps(self.notifications, ensure_ascii=False).encode())
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(name, path)
+            self.notification_export_pending = False
+        finally:
+            if name and os.path.exists(name): os.unlink(name)
+
+    def notify(self, row, event, identity, **fields):
+        if row['adapter'].lower() != 'codex': return
+        key = hashlib.sha256(json.dumps([row['id'], event, identity]).encode()).hexdigest()
+        events = self.notifications['events']
+        if any(e['id'] == key for e in events): return
+        events.append(dict(id=key, sequence=len(events) + 1, event=event,
+                           sessionId=row['id'], nativeSessionId=row['sessionId'],
+                           adapter=row['adapter'], clientId=row['clientId'], title=row['title'],
+                           createdAt=time.time(), **fields))
 
     def changed(self):
         try:
@@ -130,7 +189,7 @@ class AgentStore:
                     row.update(online=False, canSend=False)
             self.changed()
 
-    def run_event(self, key, run_id, status=None, reply=None, detail='', reply_truncated=False):
+    def run_event(self, key, run_id, status=None, reply=None, detail='', reply_truncated=False, prompt=None, prompt_truncated=False):
         text(run_id, 'runId')
         if status not in (None, 'completed', 'failed', 'stopped', 'unknown'):
             raise ValueError('invalid run status')
@@ -141,6 +200,8 @@ class AgentStore:
                 run = {'id': run_id, 'status': 'running', 'reply': None, 'startedAt': time.time()}
                 row['runs'].append(run)
                 row['runs'] = row['runs'][-100:]
+            if isinstance(prompt, str):
+                run.update(prompt=prompt[:4000], promptTruncated=bool(prompt_truncated) or len(prompt) > 4000)
             previous_status = run['status']
             if status is not None and (previous_status == 'running' or
                     (previous_status in ('unknown', 'stopped') and status in ('completed', 'failed')) or
@@ -149,6 +210,10 @@ class AgentStore:
                 run.update(status=status, reply=reply if isinstance(reply, str) else None,
                            detail=str(detail)[:4096], replyTruncated=bool(reply_truncated),
                            endedAt=run.get('endedAt', time.time()) if previous_status == status else time.time())
+                if status in ('completed', 'failed', 'stopped'):
+                    self.notify(row, 'run.ended', [run_id, status], runId=run_id,
+                                status=status, prompt=run.get('prompt'), promptTruncated=run.get('promptTruncated', False),
+                                reply=run.get('reply'), replyTruncated=run.get('replyTruncated', False))
                 if row['marked'] and previous_status == 'running':
                     self.notices.append((dict(row), dict(run)))
             self.changed()

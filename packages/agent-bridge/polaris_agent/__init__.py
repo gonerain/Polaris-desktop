@@ -32,10 +32,15 @@ class Agent(Component):
         self.completions = None
         self.store.listeners.append(self._changed)
         for name in ('get', 'sessions', 'status', 'result', 'delivery', 'codex_plugin_status', 'requests'):
-            self.operation(name)(getattr(self, name))
+            metadata = (dict(provides='polaris.agent-bridge.' + name.replace('_', '-') + '@1',
+                             applicationBinding='instance')
+                        if name in ('sessions', 'status', 'result', 'delivery', 'requests') else {})
+            self.operation(name, **metadata)(getattr(self, name))
         for name in ('mark', 'unmark', 'send', 'create_view', 'release_view', 'codex_plugin_install', 'respond'):
-            self.operation(name, access='write')(getattr(self, name))
-        self.views = [{'id': 'main', 'adapter': 'qt-quick-item', 'title': 'Agent',
+            metadata = (dict(provides='polaris.agent-bridge.' + name.replace('_', '-') + '@1',
+                             applicationBinding='instance') if name in ('mark', 'unmark', 'send') else {})
+            self.operation(name, access='write', **metadata)(getattr(self, name))
+        self.views = [{'id': 'main', 'adapter': 'qt-quick-item', 'title': 'Agent Bridge',
             'create': 'create_view', 'release': 'release_view', 'permissions':
             [{'name': n, 'access': 'read'} for n in ('get', 'status', 'result', 'delivery', 'codex_plugin_status')] +
             [{'name': n, 'access': 'write'} for n in ('mark', 'unmark', 'send', 'codex_plugin_install')]}]
@@ -89,7 +94,10 @@ class Agent(Component):
         import copy
         with self._lock:
             return {'sessions': self.store.sessions(), 'deliveries': copy.deepcopy(list(self.store.deliveries.values())),
-                    'storageNotice': self.store.storage_notice, 'requests': self.requests()}
+                    'storageNotice': self.store.storage_notice, 'requests': self.requests(),
+                    'notificationFeed': {'path': str(self.store.path.with_name('notifications.json')),
+                        'pendingExport': self.store.notification_export_pending,
+                        'eventCount': len(self.store.notifications['events'])}}
 
     def _codex_plugin_sessions(self):
         return [{'sessionId': row['sessionId'], 'project': row.get('cwd', '')}
@@ -100,7 +108,7 @@ class Agent(Component):
 
     def codex_plugin_install(self):
         if self.port is None or self._gui_stop.is_set():
-            raise PlatformError('component_unavailable', 'Agent 组件未运行')
+            raise PlatformError('component_unavailable', 'Agent Bridge 组件未运行')
         return self.codex_plugin.install(sessions=self._codex_plugin_sessions())
 
     def sessions(self, marked=None, include_result=False):
@@ -170,7 +178,7 @@ class Agent(Component):
         session = {'type': 'string', 'description': 'sessions 返回的完整 id 字段；不是 sessionId、标题或后缀。先列出会话，按用户描述匹配，再传入 id。'}
         specifications = {
             'codex_plugin_status': ('查看 Codex 插件状态', '检查插件版本、安装、启用和本机依赖。', {}, []),
-            'codex_plugin_install': ('安装或更新 Codex 插件', '将随包插件复制到 Agent 稳定目录并调用 Codex 安装。需要用户明确授权。', {}, []),
+            'codex_plugin_install': ('安装或更新 Codex 插件', '将随包插件复制到 Agent Bridge 稳定目录并调用 Codex 安装。需要用户明确授权。', {}, []),
             'get': ('查看概况', '返回完整会话历史和投递记录；只需查询会话或回答时优先使用 sessions。', {}, []),
             'sessions': ('列出会话', '默认只返回会话摘要，不含历史正文。marked 可筛选标记状态；include_result=true 时批量附带每个会话最近已完成一轮的完整 result（没有则为 null），即使当前一轮正在运行。result.id 是精确轮次标识，result.historyIndex 是该轮在保留历史中的序号（从 1 开始）；runCount 是历史总条数，不能当成结果轮次。查询所有标记会话的最后回答可一次传 marked=true、include_result=true。',
                          {'marked': {'type': 'boolean'}, 'include_result': {'type': 'boolean'}}, []),
@@ -207,7 +215,7 @@ class Agent(Component):
         if view != 'main':
             raise PlatformError('missing_view', view)
         if self.port is None:
-            raise PlatformError('component_unavailable', 'Agent 组件未运行')
+            raise PlatformError('component_unavailable', 'Agent Bridge 组件未运行')
         if self._presentation is None:
             from .view import Presentation
             self._presentation = Presentation(self)

@@ -1,4 +1,4 @@
-// Select lifecycle metadata and the latest Stop reply; never read prompts or transcripts.
+// Retain bounded current-turn user text and final reply; never read transcripts or tool output.
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 
@@ -11,7 +11,10 @@ export function metadata(input) {
         !input.session_id.trim() || input.session_id.length > 256) throw new Error('Invalid hook');
     const reply = input.hook_event_name === 'Stop' && typeof input.last_assistant_message === 'string'
         ? clip(input.last_assistant_message, 8000) : undefined;
+    const prompt = input.hook_event_name === 'UserPromptSubmit' && typeof input.prompt === 'string'
+        ? clip(input.prompt, 4000) : undefined;
     const result = {
+        ...(prompt !== undefined ? {prompt, promptTruncated: prompt.length < input.prompt.length} : {}),
         ...(reply !== undefined ? {reply, replyTruncated: reply.length < input.last_assistant_message.length} : {}),
         event: input.hook_event_name,
         sessionId: input.session_id,
@@ -50,7 +53,7 @@ export class Session {
     }
     currentSnapshot() {
         this.snapshot();
-        if (!this.ownerUnavailable && this.runId) this.client.event('run.started', {sessionId:this.sessionId, runId:this.runId});
+        if (!this.ownerUnavailable && this.runId) this.client.event('run.started', {sessionId:this.sessionId, runId:this.runId, ...this.promptFields(this.knownRuns.get(this.runId))});
     }
     ownerResult(result) {
         this.ownerVerified = result.status === 'available';
@@ -63,21 +66,25 @@ export class Session {
             if (!this.knownRuns.has(run.id)) this.knownRuns.set(run.id, run);
         }
     }
+    promptFields(run) {
+        return typeof run?.prompt === 'string' ? {prompt:run.prompt, promptTruncated:run.promptTruncated === true} : {};
+    }
     hostState(state) {
         const latest = state.runs.at(-1);
         this.snapshot();
         for (const run of state.runs) {
             const id = digest(run.turnId), previous = this.knownRuns.get(id);
             if (!previous && run !== latest && id !== this.runId) continue;
+            const promptFields = this.promptFields(typeof previous?.prompt === 'string' ? previous : run);
             if (run.status === 'running') {
-                this.client.event('run.started', {sessionId:this.sessionId,runId:id});
+                this.client.event('run.started', {sessionId:this.sessionId,runId:id,...promptFields});
             } else if (previous?.status !== run.status || (!previous?.reply && run.reply)) {
                 const reply = run.reply ?? previous?.reply;
-                this.client.event('run.ended', {sessionId:this.sessionId,runId:id,status:run.status,
+                this.client.event('run.ended', {sessionId:this.sessionId,runId:id,status:run.status,...promptFields,
                     ...(typeof reply === 'string' ? {reply,replyTruncated:(run.reply !== undefined ? run.replyTruncated : previous?.replyTruncated) === true} : {})});
                 this.finished.add(id);
             }
-            this.knownRuns.set(id, {...previous,...run,id,status:run.status});
+            this.knownRuns.set(id, {...previous,...run,...promptFields,id,status:run.status});
         }
         const active = state.runs.findLast(run => run.status === 'running');
         this.runId = active ? digest(active.turnId) : '';
@@ -98,9 +105,9 @@ export class Session {
                 this.lastEnding = '';
             }
             this.runId = data.turn;
-            this.knownRuns.set(data.turn, {id:data.turn,status:'running'});
+            this.knownRuns.set(data.turn, {...this.knownRuns.get(data.turn),id:data.turn,status:'running',...this.promptFields(data)});
             this.snapshot();
-            this.client.event('run.started', {sessionId: this.sessionId, runId: this.runId});
+            this.client.event('run.started', {sessionId: this.sessionId, runId: this.runId, ...this.promptFields(this.knownRuns.get(this.runId))});
         } else if ((data.event === 'Stop' || data.event === 'Interrupt') && data.turn &&
             (data.turn === this.runId || (data.event === 'Stop' && data.turn === this.candidateTurn))) {
             const ending = {
@@ -113,7 +120,7 @@ export class Session {
             // contain a newer reply after another hook requested continuation.
             const fingerprint = JSON.stringify(ending);
             const previous = this.knownRuns.get(data.turn);
-            if (!['completed','failed','stopped'].includes(previous?.status)) this.knownRuns.set(data.turn, {id:data.turn,...ending});
+            if (!['completed','failed','stopped'].includes(previous?.status)) this.knownRuns.set(data.turn, {...previous,id:data.turn,...ending});
             if (fingerprint !== this.lastEnding) {
                 this.client.event('run.ended', ending);
                 this.lastEnding = fingerprint;

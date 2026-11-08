@@ -237,7 +237,7 @@ class Bridge:
                              event=='run.started' and request['runId']!=frame.get('runId'))):
                         request.update(state='expired',responseToken='')
             if event in ('run.started', 'run.ended'):
-                return self.store.run_event(key, frame.get('runId'), frame.get('status') if event == 'run.ended' else None, frame.get('reply'), frame.get('detail', ''), frame.get('replyTruncated', False))
+                return self.store.run_event(key, frame.get('runId'), frame.get('status') if event == 'run.ended' else None, frame.get('reply'), frame.get('detail', ''), frame.get('replyTruncated', False), prompt=frame.get('prompt'), prompt_truncated=frame.get('promptTruncated', False))
             raise ValueError('unknown event')
         if frame.get('type') != 'request':
             raise ValueError('invalid frame')

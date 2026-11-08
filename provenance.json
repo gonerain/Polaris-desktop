@@ -13,9 +13,9 @@
   },
   {
     "id": "org.polaris.agent",
-    "source": "installed snapshot",
-    "revision": "2f72fa989d85abe9e9de43be1f37d3617f706541b67bedaf4e665ddd9c1c5e2f",
-    "contentDigest": "907075757381e4c21ec9a819ee931afec70ef5512fa1241ff529c70f9f9f954a"
+    "source": "Polaris-agent working tree, notification recovery",
+    "revision": "406b371b2da4933ad281b25d8f79fc892c1e980b",
+    "contentDigest": "91efa73ae14dfcefbc3a5e7ca34e7652d482121bae1b5318af2de9dff6dfc060"
   },
   {
     "id": "assistant",

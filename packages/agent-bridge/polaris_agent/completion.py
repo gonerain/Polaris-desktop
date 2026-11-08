@@ -58,6 +58,12 @@ class Completions:
 
     def flush(self):
         with self.dispatch_lock:
+            # The token-free feed is a rebuildable projection of the durable journal.
+            # Retry a failed export even if no further host events arrive.
+            with self.store.lock:
+                if self.store.notification_export_pending:
+                    try: self.store.export_notifications()
+                    except OSError: pass
             self._flush_requests()
             self._flush()
 

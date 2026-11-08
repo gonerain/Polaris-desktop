@@ -2,10 +2,16 @@
 import { setTimeout as pause } from 'node:timers/promises';
 
 export async function waitForInteraction(client, state, data, signal) {
+    if (data.kind === 'approval') await state.refreshApprovalState?.();
     if (!client.ready || !state.ownerVerified || !state.runId ||
         (data.runId && data.runId !== state.runId)) throw Error('No verified active session');
     if (!['approval','question'].includes(data.kind) || typeof data.prompt !== 'string' ||
         !data.prompt.trim() || data.prompt.length > 1400) throw Error('Unsupported interaction');
+    // Automatic review remains entirely native: no human request, notification,
+    // response token, or hook decision is created by this adapter.
+    if (data.kind === 'approval' && state.knownRuns?.get(state.runId)?.approvalReviewer === 'auto_review') {
+        return {automatic: true};
+    }
     const boundRun=state.runId;
     const opened = await client.request('interaction.open', {
         sessionId:state.sessionId, runId:state.runId, kind:data.kind, prompt:data.prompt,
@@ -13,6 +19,7 @@ export async function waitForInteraction(client, state, data, signal) {
     });
     const deadline = Date.now()+110000;
     try {
+        if (opened.notificationOnly) throw Error('Notification recorded; answer in the native host');
         while (Date.now()<deadline && !signal?.aborted) {
             if (state.runId!==boundRun || !state.ownerVerified) throw Error('Session changed');
             const result=await client.request('interaction.status',{sessionId:state.sessionId,id:opened.id});

@@ -1,6 +1,6 @@
 // Short synchronous hook -> private local pipe -> persistent per-session bridge.
 import { createConnection, createServer } from 'node:net';
-import { mkdir, lstat, readFile } from 'node:fs/promises';
+import { mkdir, lstat, readFile, unlink } from 'node:fs/promises';
 import { join, isAbsolute, basename, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,7 @@ async function start(path, initial) {
             if (!stopped) state.ownerResult(result);
         } finally { probing = false; }
     };
+    state.refreshApprovalState = probe;
     client.on('connected', async () => {
         state.ownerVerified = false;
         state.ownerUnavailable = false;
@@ -160,7 +161,7 @@ async function start(path, initial) {
                     void (async () => {
                         if (!client.ready) await new Promise((resolve,reject) => {
                             const ready=()=>{clearTimeout(timer);resolve();};
-                            const timer=setTimeout(()=>{client.off('connected',ready);reject(Error('Polaris Agent is disconnected'));},4500);
+                            const timer=setTimeout(()=>{client.off('connected',ready);reject(Error('Agent Bridge is disconnected'));},4500);
                             client.once('connected',ready);
                         });
                         if (data.name) state.title = data.name;
@@ -179,14 +180,39 @@ async function start(path, initial) {
             buffer = '';
         });
     });
-    server.on('error', error => {
+    server.on('error', async error => {
+        if (error.code === 'EADDRINUSE' && process.platform !== 'win32') {
+            try {
+                const original = await lstat(path);
+                if (original.isSocket() && original.uid === process.getuid()) {
+                    try {
+                        await forward(path, {event:'Control', operation:'identity', sessionId:initial.sessionId});
+                    } catch (probeError) {
+                        if (probeError.code === 'ECONNREFUSED') {
+                            const current = await lstat(path);
+                            if (current.isSocket() && current.uid === process.getuid() &&
+                                current.dev === original.dev && current.ino === original.ino) {
+                                await unlink(path);
+                                server.listen(path);
+                                return;
+                            }
+                        }
+                    }
+                }
+            } catch (recoveryError) {
+                if (recoveryError.code === 'ENOENT') {
+                    server.listen(path);
+                    return;
+                }
+            }
+        }
         if (error.code === 'EADDRINUSE') process.send?.('existing');
         else process.send?.('failed');
         process.disconnect?.();
         client.stop();
         setTimeout(() => process.exit(0), 50);
     });
-    server.listen(path, () => {
+    server.on('listening', () => {
         // Keep checking an absent owner so reopening the chat recovers automatically.
         // Probe only this session; idle duration never expires a responsive owner.
         lease = setInterval(() => { void probe(); }, 15000);
@@ -194,6 +220,7 @@ async function start(path, initial) {
         process.send?.('ready');
         process.disconnect?.();
     });
+    server.listen(path);
 }
 
 async function launch(path, initial, script = fileURLToPath(import.meta.url)) {
@@ -254,7 +281,7 @@ try {
         process.stdin.setEncoding('utf8');
         for await (const chunk of (process.argv[2] === '--mark' ? [] : process.stdin)) {
             raw += chunk;
-            // Only selected metadata and a bounded Stop reply are forwarded; prompts are discarded.
+            // Forward only bounded current-turn text and selected lifecycle fields.
             if (Buffer.byteLength(raw) > 4 * 1024 * 1024) throw new Error('Hook too large');
         }
         let data;
