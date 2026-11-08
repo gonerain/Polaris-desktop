@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 2,
+  "name": "Polaris 官方目录",
+  "packages": [
+    {
+      "type": "component",
+      "path": "packages/schedule",
+      "summary": "日程与任务管理",
+      "author": "Polaris",
+      "icon": "assets/schedule.png",
+      "tags": [
+        "日程",
+        "效率"
+      ],
+      "readme": "docs/schedule.md"
+    },
+    {
+      "type": "component",
+      "path": "packages/weixin",
+      "summary": "连接微信并收发消息",
+      "author": "Polaris",
+      "icon": "assets/weixin.png",
+      "tags": [
+        "通讯"
+      ],
+      "readme": "docs/weixin.md"
+    },
+    {
+      "type": "component",
+      "path": "packages/agent-bridge",
+      "summary": "连接和管理 Agent 会话",
+      "author": "Polaris",
+      "icon": "assets/agent-bridge.png",
+      "tags": [
+        "Agent",
+        "开发"
+      ],
+      "readme": "docs/agent-bridge.md"
+    },
+    {
+      "type": "component",
+      "path": "packages/assistant",
+      "summary": "提供 Agent 模型与对话能力",
+      "author": "Polaris",
+      "icon": "assets/assistant.png",
+      "tags": [
+        "Agent"
+      ],
+      "readme": "docs/assistant.md"
+    },
+    {
+      "type": "component",
+      "path": "packages/feishu-bot",
+      "summary": "连接飞书并收发消息",
+      "author": "Polaris",
+      "icon": "assets/feishu-bot.png",
+      "tags": [
+        "通讯"
+      ],
+      "readme": "docs/feishu-bot.md"
+    },
+    {
+      "type": "component",
+      "path": "packages/text-tools",
+      "summary": "示例组件：文本整理和规则词频统计",
+      "author": "Polaris",
+      "icon": "assets/text-tools.png",
+      "tags": [
+        "示例",
+        "文本"
+      ],
+      "readme": "docs/text-tools.md"
+    },
+    {
+      "type": "application",
+      "path": "packages/feishu-agent",
+      "summary": "将飞书文字交给 Polaris Agent 并回复",
+      "author": "Polaris",
+      "icon": "assets/feishu-agent.png",
+      "tags": [
+        "Agent",
+        "通讯"
+      ],
+      "readme": "docs/feishu-agent.md"
+    },
+    {
+      "type": "application",
+      "path": "packages/text-studio",
+      "summary": "示例应用：双栏文本编辑与处理结果回填",
+      "author": "Polaris",
+      "icon": "assets/text-studio.png",
+      "tags": [
+        "示例",
+        "文本"
+      ],
+      "readme": "docs/text-studio.md"
+    }
+  ]
+}

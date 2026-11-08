@@ -1,0 +1,13 @@
+{
+  "id": "org.example.text-tools",
+  "name": "示例文本处理",
+  "version": "1.0.1",
+  "platformApi": 1,
+  "instances": {
+    "mode": "multiple"
+  },
+  "entry": {
+    "mode": "inprocess",
+    "factory": "text_tools:create"
+  }
+}

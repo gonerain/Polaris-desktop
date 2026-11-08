@@ -1,0 +1,168 @@
+{
+  "id": "org.polaris.feishu-agent",
+  "name": "飞书 Agent",
+  "version": "0.2.0",
+  "entry": {
+    "adapter": "qt-quick",
+    "file": "Main.qml",
+    "backend": "backend.py"
+  },
+  "requires": {
+    "feishuStatus": {
+      "contract": "polaris.feishu.status@1",
+      "access": "read",
+      "preferredComponentType": "org.polaris.feishu-bot",
+      "label": "飞书连接状态"
+    },
+    "feishuRead": {
+      "contract": "polaris.feishu.read-messages@1",
+      "access": "read",
+      "preferredComponentType": "org.polaris.feishu-bot",
+      "label": "读取飞书消息"
+    },
+    "feishuReply": {
+      "contract": "polaris.feishu.reply@1",
+      "access": "write",
+      "preferredComponentType": "org.polaris.feishu-bot",
+      "label": "回复飞书消息"
+    },
+    "agentStatus": {
+      "contract": "polaris.agent.status@1",
+      "access": "read",
+      "preferredComponentType": "assistant",
+      "label": "Agent 模型状态"
+    },
+    "agentReply": {
+      "contract": "polaris.agent.reply@1",
+      "access": "write",
+      "preferredComponentType": "assistant",
+      "label": "Agent 文本回复"
+    },
+    "scheduleGet": {
+      "contract": "polaris.schedule.get@1",
+      "access": "read",
+      "label": "日程 · 查看日程",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleTimeContext": {
+      "contract": "polaris.schedule.time-context@1",
+      "access": "read",
+      "label": "日程 · 时间信息",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleTasks": {
+      "contract": "polaris.schedule.tasks@1",
+      "access": "read",
+      "label": "日程 · 查询任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleAdd": {
+      "contract": "polaris.schedule.add@1",
+      "access": "write",
+      "label": "日程 · 新增任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleUpdate": {
+      "contract": "polaris.schedule.update@1",
+      "access": "write",
+      "label": "日程 · 更新任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleDelete": {
+      "contract": "polaris.schedule.delete@1",
+      "access": "write",
+      "label": "日程 · 删除任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleUndoDelete": {
+      "contract": "polaris.schedule.undo-delete@1",
+      "access": "write",
+      "label": "日程 · 恢复删除",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleAddSubtask": {
+      "contract": "polaris.schedule.add-subtask@1",
+      "access": "write",
+      "label": "日程 · 新增子任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleUpdateSubtask": {
+      "contract": "polaris.schedule.update-subtask@1",
+      "access": "write",
+      "label": "日程 · 更新子任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleDeleteSubtask": {
+      "contract": "polaris.schedule.delete-subtask@1",
+      "access": "write",
+      "label": "日程 · 删除子任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleReorder": {
+      "contract": "polaris.schedule.reorder@1",
+      "access": "write",
+      "label": "日程 · 调整排序",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleMoveOverdue": {
+      "contract": "polaris.schedule.move-overdue@1",
+      "access": "write",
+      "label": "日程 · 迁移逾期任务",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "scheduleOrganizeDay": {
+      "contract": "polaris.schedule.organize-day@1",
+      "access": "write",
+      "label": "日程 · 整理当日日程",
+      "preferredComponentType": "org.polaris.schedule"
+    },
+    "bridgeSessions": {
+      "contract": "polaris.agent-bridge.sessions@1",
+      "access": "read",
+      "label": "Agent Bridge · 查询会话",
+      "preferredComponentType": "org.polaris.agent"
+    },
+    "bridgeStatus": {
+      "contract": "polaris.agent-bridge.status@1",
+      "access": "read",
+      "label": "Agent Bridge · 查询状态",
+      "preferredComponentType": "org.polaris.agent"
+    },
+    "bridgeResult": {
+      "contract": "polaris.agent-bridge.result@1",
+      "access": "read",
+      "label": "Agent Bridge · 读取结果",
+      "preferredComponentType": "org.polaris.agent"
+    },
+    "bridgeDelivery": {
+      "contract": "polaris.agent-bridge.delivery@1",
+      "access": "read",
+      "label": "Agent Bridge · 查询投递",
+      "preferredComponentType": "org.polaris.agent"
+    },
+    "bridgeMark": {
+      "contract": "polaris.agent-bridge.mark@1",
+      "access": "write",
+      "label": "Agent Bridge · 标记会话",
+      "preferredComponentType": "org.polaris.agent"
+    },
+    "bridgeUnmark": {
+      "contract": "polaris.agent-bridge.unmark@1",
+      "access": "write",
+      "label": "Agent Bridge · 取消标记",
+      "preferredComponentType": "org.polaris.agent"
+    },
+    "bridgeSend": {
+      "contract": "polaris.agent-bridge.send@1",
+      "access": "write",
+      "label": "Agent Bridge · 发送任务",
+      "preferredComponentType": "org.polaris.agent"
+    },
+    "bridgeRequests": {
+      "contract": "polaris.agent-bridge.requests@1",
+      "access": "read",
+      "label": "Agent Bridge · 查询请求",
+      "preferredComponentType": "org.polaris.agent"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+[
+  {
+    "id": "org.polaris.schedule",
+    "source": "installed snapshot",
+    "revision": "09eaed35502b01d16832bcee6ee483abd8c053240d267331d535161917af7418",
+    "contentDigest": "f909ba26676e495074bc96fb009fda07467f343794a9e4428559433651176505"
+  },
+  {
+    "id": "org.polaris.weixin",
+    "source": "installed snapshot",
+    "revision": "4a31aa71ba94fd09cb9098f8f56e92470e1b9dcd226862b5298fbc955310c7ea",
+    "contentDigest": "dd1e70b7047552e088018347c0b482377933c092af53ff5946b188419d1dccb4"
+  },
+  {
+    "id": "org.polaris.agent",
+    "source": "installed snapshot",
+    "revision": "2f72fa989d85abe9e9de43be1f37d3617f706541b67bedaf4e665ddd9c1c5e2f",
+    "contentDigest": "907075757381e4c21ec9a819ee931afec70ef5512fa1241ff529c70f9f9f954a"
+  },
+  {
+    "id": "assistant",
+    "source": "installed snapshot",
+    "revision": "2f72fa989d85abe9e9de43be1f37d3617f706541b67bedaf4e665ddd9c1c5e2f",
+    "contentDigest": "e6e7f6a1bb4c3911c8ac7151b525c47977fc8089a3558b8219bccdb62df7fced"
+  },
+  {
+    "id": "org.polaris.feishu-bot",
+    "source": "installed snapshot",
+    "revision": null,
+    "contentDigest": "6aa7a952091cfdb513595d94e3a3a1983592fd66c47855050b129c1bae780da6"
+  },
+  {
+    "id": "org.example.text-tools",
+    "source": "workspace, version updated for published snapshot",
+    "revision": null,
+    "contentDigest": "e7915019f2b8c7d238f1552496b457465096b1e021b37831f1085651ac33f5c8"
+  },
+  {
+    "id": "org.polaris.feishu-agent",
+    "source": "workspace",
+    "revision": null,
+    "contentDigest": "a80cddbf39d843b190077c05378b3732968b085e32bcdb3234988cfb834b6acb"
+  },
+  {
+    "id": "org.example.text-studio",
+    "source": "workspace",
+    "revision": null,
+    "contentDigest": "a4d17f4596a20e54327b0564162b599eda9e70b6a2595e7fa58037db026ddd8e"
+  }
+]
