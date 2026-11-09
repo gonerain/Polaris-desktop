@@ -25,6 +25,8 @@ class CodexCLI(Component):
         self.transport_factory = transport_factory
         self.transport = None
         self.connection = 'stopped'
+        self.model_list = []
+        self.default_model = None
         self.error = ''
         self.active = None
         self.active_context = None
@@ -34,7 +36,7 @@ class CodexCLI(Component):
         self.views = [dict(id='main', title='Codex CLI', adapter='qt-quick-item', create='create_view', release='release_view', preferredSize=dict(width=760, height=600), permissions=[dict(name='get', access='read')])]
         for name in ('get', 'result'):
             self.operation(name, provides='polaris.codex-cli.' + name + '@1', applicationBinding='instance')(getattr(self, name))
-        for name in ('configure', 'send', 'new', 'compact', 'interrupt'):
+        for name in ('configure', 'set_model', 'send', 'new', 'compact', 'interrupt'):
             self.operation(name, access='write', provides='polaris.codex-cli.' + name + '@1', applicationBinding='instance')(getattr(self, name))
         for name in ('respond', 'create_view', 'release_view'):
             self.operation(name, access='write')(getattr(self, name))
@@ -45,6 +47,7 @@ class CodexCLI(Component):
         schemas = {
             'get': ({}, []), 'result': ({'turn_id': {'type': 'string'}}, ['turn_id']),
             'configure': ({'cwd': {'type': 'string'}}, ['cwd']),
+            'set_model': ({'model': {'type': 'string', 'description': '模型标识；空字符串使用 Codex 默认模型'}}, ['model']),
             'send': ({'text': {'type': 'string'}, 'mode': {'type': 'string', 'enum': ['start', 'steer']}}, ['text']),
             'new': ({}, []), 'compact': ({}, []), 'interrupt': ({}, []),
         }
@@ -86,6 +89,18 @@ class CodexCLI(Component):
             transport = self.transport_factory(self._message, self._exited)
             self.transport = transport
             try:
+                models = []
+                cursor = None
+                while True:
+                    response = transport.call('model/list', {'cursor': cursor})
+                    models.extend(response['data'])
+                    cursor = response.get('nextCursor')
+                    if not cursor:
+                        break
+                config = transport.call('config/read', {'cwd': self.data['cwd']})['config']
+                with self.lock:
+                    self.model_list = [dict(model=m['model'], displayName=m['displayName'], isDefault=m['isDefault']) for m in models]
+                    self.default_model = config.get('model') or next(m['model'] for m in models if m['isDefault'])
                 if self.data['threadId'] and self.data.get('hasTurns', False):
                     transport.call('thread/resume', {'threadId': self.data['threadId'], 'cwd': self.data['cwd']})
                 else:
@@ -131,7 +146,7 @@ class CodexCLI(Component):
 
     def get(self):
         with self.lock:
-            return dict(instanceId=self.instance_id, cwd=self.data['cwd'], threadId=self.data['threadId'], connection=self.connection, error=self.error, activeTurnId=self.active, turns=deepcopy(list(self.data['turns'].values())), requests=deepcopy(list(self.requests.values())))
+            return dict(instanceId=self.instance_id, cwd=self.data['cwd'], threadId=self.data['threadId'], connection=self.connection, error=self.error, model=self.data.get('model', ''), defaultModel=self.default_model, models=deepcopy(self.model_list), activeTurnId=self.active, turns=deepcopy(list(self.data['turns'].values())), requests=deepcopy(list(self.requests.values())))
 
     def result(self, turn_id):
         with self.lock:
@@ -159,6 +174,18 @@ class CodexCLI(Component):
                 raise
         return self.get()
 
+    def set_model(self, model):
+        if not isinstance(model, str):
+            raise PlatformError('invalid_params', '模型标识必须是字符串')
+        with self.command_lock:
+            self._ready()
+            if model and model not in {item['model'] for item in self.model_list}:
+                raise PlatformError('invalid_params', '模型不在 Codex 返回的列表中')
+            with self.lock:
+                self.data['model'] = model
+                self._save()
+        return {'model': model, 'defaultModel': self.default_model}
+
     def _ready(self):
         if self.connection != 'ready' or not self.transport:
             raise PlatformError('unavailable', self.error or 'Codex 尚未就绪')
@@ -181,6 +208,7 @@ class CodexCLI(Component):
                 payload['expectedTurnId'] = self.active
                 self.transport.call('turn/steer', payload)
                 return {'threadId': self.data['threadId'], 'turnId': self.active}
+            payload['model'] = self.data.get('model') or self.default_model
             self.active_context = ctx
             reply = self.transport.call('turn/start', payload)
             turn_id = reply['turn']['id']

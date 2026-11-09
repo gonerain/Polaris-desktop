@@ -1,8 +1,14 @@
 {
   "id": "org.polaris.codex-cli",
   "name": "Codex CLI",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "platformApi": 1,
-  "instances": {"mode": "multiple"},
-  "entry": {"mode": "inprocess", "factory": "polaris_codex_cli:create", "defer": "desktop"}
+  "instances": {
+    "mode": "multiple"
+  },
+  "entry": {
+    "mode": "inprocess",
+    "factory": "polaris_codex_cli:create",
+    "defer": "desktop"
+  }
 }

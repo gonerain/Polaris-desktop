@@ -15,6 +15,22 @@ Rectangle {
         Label { Layout.fillWidth: true; text: "状态：" + (snapshot.connection || "") + (snapshot.error ? " · " + snapshot.error : ""); wrapMode: Text.Wrap }
         Label { Layout.fillWidth: true; text: snapshot.notice || ""; color: "#b62e2e"; visible: text.length > 0; wrapMode: Text.Wrap }
         RowLayout {
+            Layout.fillWidth: true
+            Label { text: "模型" }
+            ComboBox {
+                id: modelPicker
+                Layout.fillWidth: true
+                property var options: { let list = [{model: "", displayName: "跟随 Codex 默认（" + (snapshot.defaultModel || "") + "）"}].concat(snapshot.models || []); if (snapshot.model && !list.some(x => x.model === snapshot.model)) list.push({model: snapshot.model, displayName: snapshot.model + "（当前列表未提供）"}); return list }
+                model: options
+                textRole: "displayName"
+                valueRole: "model"
+                currentIndex: Math.max(0, options.findIndex(x => x.model === (snapshot.model || "")))
+                enabled: snapshot.connection === "ready"
+                onActivated: codexBridge.action("set_model", JSON.stringify({model: currentValue}))
+            }
+            Label { text: snapshot.activeTurnId ? "下轮生效" : "" }
+        }
+        RowLayout {
             Button { text: "/new"; onClicked: codexBridge.action("new", "{}") }
             Button { text: "/compact"; onClicked: codexBridge.action("compact", "{}") }
             Button { text: "中断"; enabled: !!snapshot.activeTurnId; onClicked: codexBridge.action("interrupt", "{}") }

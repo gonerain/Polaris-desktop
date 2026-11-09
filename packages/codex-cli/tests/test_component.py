@@ -13,6 +13,8 @@ class FakeTransport:
         FakeTransport.instances.append(self)
     def call(self, method, params):
         self.calls.append((method, params))
+        if method == 'model/list': return {'data': [{'model': 'model-a', 'displayName': 'Model A', 'isDefault': True}, {'model': 'model-b', 'displayName': 'Model B', 'isDefault': False}], 'nextCursor': None}
+        if method == 'config/read': return {'config': {'model': None}}
         if method == 'thread/start': return {'thread': {'id': 'thread-' + str(len([c for c in self.calls if c[0] == method]))}}
         if method == 'turn/start':
             self.message({'method': 'turn/started', 'params': {'threadId': params['threadId'], 'turn': {'id': 'turn-1'}}})
@@ -58,8 +60,23 @@ class ComponentTests(unittest.TestCase):
             if other.connection == 'ready': break
             time.sleep(.01)
         self.assertEqual(other.get()['threadId'], 'thread-2')
-        self.assertEqual(FakeTransport.instances[-1].calls[0][0], 'thread/resume')
+        self.assertIn('thread/resume', [call[0] for call in FakeTransport.instances[-1].calls])
         other.stop()
+
+    def test_model_selection_applies_to_next_turn_and_persists(self):
+        self.c.set_model('model-b')
+        self.c.send('hello')
+        turn = next(params for method, params in self.c.transport.calls if method == 'turn/start')
+        self.assertEqual(turn['model'], 'model-b')
+        self.c.set_model('')
+        self.assertEqual(self.c.get()['model'], '')
+        self.c._message({'method': 'turn/completed', 'params': {'threadId': 'thread-1', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
+        self.c.send('second')
+        self.assertEqual([params for method, params in self.c.transport.calls if method == 'turn/start'][-1]['model'], 'model-a')
+        with self.assertRaises(PlatformError): self.c.set_model('missing')
+        self.c.set_model('model-b')
+        other = CodexCLI({'instanceId': 'instance', 'dataDir': self.temp.name}, FakeTransport)
+        self.assertEqual(other.data['model'], 'model-b')
 
     def test_disconnect_does_not_fabricate_completion(self):
         context = Context(); self.c.send('hello', ctx=context)
