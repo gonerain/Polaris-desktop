@@ -46,5 +46,11 @@
     "source": "workspace",
     "revision": null,
     "contentDigest": "a4d17f4596a20e54327b0564162b599eda9e70b6a2595e7fa58037db026ddd8e"
+  },
+  {
+    "id": "org.polaris.codex-cli",
+    "source": "Polaris Codex CLI component",
+    "revision": null,
+    "contentDigest": "ecb433761ec0e13a4b4b798e70b428f831ee95db17f2426a2b67f52b11fcd4b4"
   }
 ]

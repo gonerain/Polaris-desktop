@@ -94,6 +94,18 @@
         "文本"
       ],
       "readme": "docs/text-studio.md"
+    },
+    {
+      "type": "component",
+      "path": "packages/codex-cli",
+      "summary": "创建和管理 Codex CLI 会话",
+      "author": "Polaris",
+      "icon": "assets/codex-cli.png",
+      "tags": [
+        "Agent",
+        "开发"
+      ],
+      "readme": "docs/codex-cli.md"
     }
   ]
 }
