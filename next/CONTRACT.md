@@ -55,9 +55,9 @@ Trusted management can call `create_instance(componentType, config={})`, `list_i
 
 Applications may call only operations whose provider advertises `applicationBinding:'instance'` in the live operation metadata. This opt-in is the provider's assertion that its stable component instance fully identifies the intended resource boundary; missing or different declarations do not authorize Application use. Application definitions cannot declare this on a provider's behalf. The runtime checks the live metadata for every operation in an application-origin call chain, including nested calls; it does not change calls from non-application origins. Application-origin event subscriptions are not yet supported. Per-resource authorization is not supplied by this declaration.
 
-Applications are not component providers. Trusted management registers a durable application UUID with `register_application_principal(id)` and obtains its ordinary `application_client(id)` and explicitly scoped `application_context(id)`. New registration rejects IDs with prior grants; only restoration of a verified stored application uses `restore=True`. `register_application_bindings(id, instanceIds)` records references before a definition is installed, protecting instances from deletion. Unregistration revokes that application's grants and invalidates its clients and contexts. Application authority never uses canvas or runtime identity. Only user-authorized capability calls through that client's context are allowed.
+Packaged applications may expose explicitly declared `callbacks` as ordinary, authorized, instance-bindable write operations. Each callback declares a `contract` and object `parameters` schema, requires a backend entry, and dispatches to that backend's `handle`; it does not gain host management authority. An unavailable backend returns `completion_not_ready`. Trusted management registers a durable application UUID with `register_application_principal(id)` and obtains its ordinary `application_client(id)` and explicitly scoped `application_context(id)`. New registration rejects IDs with prior grants; only restoration of a verified stored application uses `restore=True`. `register_application_bindings(id, instanceIds)` records references before a definition is installed, protecting instances from deletion. Unregistration revokes that application's grants and invalidates its clients and contexts. Application authority never uses canvas or runtime identity. Only user-authorized capability calls through that client's context are allowed.
 
-Applications provide their own Qt Quick UI in a local directory. The first package manifest format has no `schemaVersion`: `polaris-application.json` declares `id`, `name`, `version`, `entry` (`adapter: "qt-quick"`, relative QML `file`) and `requires`, a map from aliases to `componentType`, `operation`, positive integer `major` and `access` (`read` or `write`). This developer manifest is distinct from the platform's schema 2 persisted application record. These are developer requirements, not grants; the user selects a stable component instance and authorizes each capability. The host validates live provider metadata and pins installation, instance and capability semantics. Each installation receives a new local application UUID, separate from the developer's type ID. The platform copies the package into a private snapshot, rejects symbolic links and path traversal, and verifies the snapshot before launch and capability calls. Removing a package removes its snapshot, while preserving application data; revocation and principal retirement are managed separately. A stopped application does not stop shared components.
+Applications provide their own Qt Quick UI in a local directory. The first package manifest format has no `schemaVersion`: `polaris-application.json` declares `id`, `name`, `version`, `entry` (`adapter: "qt-quick"`, relative QML `file`) and `requires`, a map from aliases to `componentType`, `operation`, positive integer `major` and `access` (`read` or `write`). This developer manifest is distinct from the platform's schema 2 persisted application record. These are developer requirements, not grants; the user selects a stable component instance and authorizes each capability. The host validates live provider metadata and pins installation, instance and capability semantics. Each installation receives a new local application UUID, separate from the developer's type ID. The platform copies the package into a private snapshot, rejects symbolic links and path traversal, and verifies the snapshot before launch and capability calls. Removing a package removes its snapshot, while preserving application data; revocation and principal retirement are managed separately. A stopped or removed application does not destroy its referenced platform component instances. Multiple applications may reference the same instance while retaining separate grants; single/multiple policies determine instance count only. Extension management is embedded in Canvas settings, while capability approvals remain in a persistent trusted Canvas overlay.
 
 The Qt Quick adapter runs trusted application QML/JavaScript in the desktop process; it is not a sandbox for untrusted code. Application capabilities use the application's ordinary Client and Context, never a Runtime management interface. Legacy schema 1 flow definitions remain readable for compatibility, but are not the normal application installation interface.
 
@@ -67,9 +67,9 @@ A provider may declare `views` entries using `{id, title, adapter:'qt-quick-item
 
 `create_view({view, parent: QQuickItem}, context)` returns `{handle: str, item: QQuickItem}`. The provider owns its QML, model, interaction bridge and view resources. It sets both QObject and visual parent of its item to the supplied parent and performs Qt operations on the GUI thread (`polaris_platform.desktop.GuiDispatcher` is the public dispatcher helper). `release_view({handle}, context)` disposes this view and returns `{released: bool}`; a released or already destroyed handle is harmless. Provider stop disposes its own remaining views. Disposing a canvas container or provider view does not stop the provider's business component.
 
-`canvas.mount({target, view:'main', descriptor?}, context)` invokes the provider's declared operations through its ordinary Client. It returns `{mountId, state:'pending'}`; attachment completes asynchronously and `canvas.status` exposes mount state. The canvas owns only the wrapper, geometry and collapsed state. `unmount({mountId})` releases a presentation, and `layout({mountId,x?,y?,width?,height?,collapsed?})` changes canvas placement. No provider-specific model or identifier belongs in the canvas.
+`canvas.mount({target, view:'main', descriptor?}, context)` invokes the provider's declared operations through its ordinary Client. It returns `{mountId, state:'pending'}`; attachment completes asynchronously and `canvas.status` exposes mount state. The canvas forwards the original caller context to its trusted built-in Workbench application, which owns the wrapper, geometry and collapsed state; Canvas remains the presentation host. `unmount({mountId})` releases a presentation, and `layout({mountId,x?,y?,width?,height?,collapsed?})` changes canvas placement. No provider-specific model or identifier belongs in the canvas.
 
-A view descriptor may include `preferredSize:{width,height}` in logical pixels. Canvas clamps these values to 240–1600 by 130–1200 for new mounts; missing or invalid dimensions use 380 by 340. Saved geometry takes precedence. The supplied parent may expose an optional `polarisTheme` object with `background`, `surface`, `surfaceRaised`, `border`, `text`, `muted`, and `accent` colors. Providers may bind to it and must supply their own fallback when absent.
+A view descriptor may include `preferredSize:{width,height}` in logical pixels. Canvas clamps these values to 240–1600 by 130–1200 for new mounts; missing or invalid dimensions use 380 by 340. Saved geometry takes precedence. Canvas size/theme and Workbench view layouts remain in the existing canvas layout file without migration. The supplied parent may expose an optional `polarisTheme` object with `background`, `surface`, `surfaceRaised`, `border`, `text`, `muted`, and `accent` colors. Providers may bind to it and must supply their own fallback when absent.
 
 A view descriptor may declare `instancePolicy:'single'` or `'multiple'`; missing means `multiple`. `single` is scoped to a stable component instance and view ID within the canvas. Reuse rechecks current permissions and requires the same origin, origin installation and source, with the previous scope contained in the current scope. Conflicting saved layouts remain intact and report a conflict. Removing a view releases its presentation and does not stop its component instance.
 
@@ -81,27 +81,35 @@ Pet initiates one canvas presentation session carrying its existing local user c
 
 Pet restores itself only for its own active session, using the retained authorization context. Canvas exit or window loss is observed as unavailable; a returning window instance may restore the pet without replaying business calls. Stopping the pet cancels its session/recovery and queued input, so later callbacks cannot revive it. Desktop startup grants only the exact configured initial capabilities for a new installation; existing installations retain user revocations. Pet owns its position file under its own component data directory.
 
-A native picker opens an explicit management approval scoped to the requesting installation and current instance. While this external dialog is pending, the initiating canvas session holds dismissal. Confirmation, cancellation, failure, or management closure resolves the token and releases the hold. Confirmation rechecks the requester instance and exact capability semantics before granting or invoking. Permission failures during status observation propagate as permission failures and do not manufacture a hidden-window state or finish a live session.
+A native picker opens an explicit management approval scoped to the requesting installation and current instance. The trusted approval overlay lives at the Canvas root and preserves the current application page. While it is pending, the initiating canvas session holds dismissal. Confirmation, cancellation, failure, or management closure resolves the token and releases the hold. Confirmation rechecks the requester instance and exact capability semantics before granting or invoking. Permission failures during status observation propagate as permission failures and do not manufacture a hidden-window state or finish a live session.
 
 ## 插件源
 
-一个仓库可以提供多个插件。仓库根目录声明 `polaris-source.json`：
+一个仓库可提供多个组件和应用。仓库根目录的 `polaris-source.json` 使用统一发布目录：
 
 ```json
 {
-  "schemaVersion": 1,
-  "name": "示例插件源",
-  "components": [{"path": "plugins/first"}, {"path": "plugins/second"}]
+  "schemaVersion": 2,
+  "name": "示例目录",
+  "packages": [
+    {"type": "component", "path": "packages/tool", "summary": "文本工具", "author": "示例", "icon": "assets/tool.png", "tags": ["工具"]},
+    {"type": "application", "path": "packages/editor", "summary": "文本编辑器", "author": "示例", "icon": "assets/editor.png"}
+  ]
 }
 ```
 
-每个目录提供现有格式的 `manifest.json`，其中 ID 在源内唯一，`platformApi` 为 `1`。组件路径必须在仓库内；越界路径、逃逸符号链接、重复 ID 和不支持的 API 均拒绝。索引只读取声明，不导入或执行组件代码。
+每个条目必须有 `type`（`component` 或 `application`）、`path`、`summary`、`author` 和 `icon`。可选 `tags`、`description`、`readme`、`screenshots` 和 `upstream`；标签和截图为字符串数组，其他字段为字符串。路径相对源根目录；图标、截图和文档须是包目录以外的文件。建议使用 256 像素 PNG 或 WebP 图标。条目的 ID、名称和版本只从包自身清单读取。应用包包含 `polaris-application.json`，组件包含 `manifest.json`。同类包 ID 在源内唯一，索引不会执行包代码。
 
-插件源组件 `sources` 通过公开只读操作 `sources`、`catalog` 提供源列表和组件目录。`catalog` 可传 `source_id`，返回行包含 `sourceId`、`revision`、`path`、`manifest`。添加源不自动安装组件。
+目录须包含安装所需的完整包文件；将索引、包和展示资源提交到 Git 后，可添加该仓库 URL 并选择分支、标签或 commit。旧版 schemaVersion 1 的 `components` / `applications` 仍可读取并映射到统一目录。源目录每项含 `type`、`path`、`manifest`、`contentDigest` 及声明的展示元数据；组件和应用内容摘要基于各自包目录，而非整个源的 revision。修改目录说明或展示资源不会改变包内容摘要。
 
-可信本机组件管理界面通过组件实例的 `local_source_control()` 调用：
+插件源组件通过公开只读操作 `sources`、`packages`、`catalog` 和 `application_catalog` 提供源、统一目录和原有分类目录。目录行包含 `sourceId`、`revision` 和上述包信息，添加源不自动安装包。
 
-- `sources()`、`catalog(source_id=None)`：读取源和插件。
+画布设置中的可信扩展管理界面通过组件实例的 `local_source_control()` 调用：
+
+- `sources()`、`packages(source_id=None)`、`catalog(source_id=None)`、`application_catalog(source_id=None)`：读取源、统一包目录和分类目录。
+- `application_path(source_id, application_id, expected_revision)`：取得指定源 revision 的应用包快照路径；revision 改变时拒绝，应用安装和更新使用现有应用包流程。
+- `installation_origin(component_id)`：读取仍与当前安装身份及目录匹配的组件来源（含安装时 `contentDigest`），否则返回空值。
+- `archive_sources(source_ids, migration)`：按迁移标识一次性将指定源标为历史，保留来源记录及安装快照；无指定源时的分类目录和统一目录不返回历史条目，显式传入源 ID 仍可读取。
 - `add(location, ref=None)`：添加本地目录或 HTTPS / SSH Git 仓库。
 - `refresh(source_id, ref=None)`：读取新快照；Git 的 `ref` 可以是分支、标签或 commit。
 - `install(source_id, component_id, replace=False, expected_installation=None, expected_revision=None)`：安装选定插件。同 ID 默认拒绝；替换需明确选择，可携带确认时的安装身份和源 revision 防止选择变化。

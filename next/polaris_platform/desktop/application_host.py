@@ -4,19 +4,22 @@ import threading
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QObject, Signal, Slot, Property, QUrl
+from PySide6.QtCore import QObject, Signal, Slot, Property, QUrl, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtCore import QThread
 
 from ..application import Application, ApplicationDefinition, ApplicationStore
 from ..protocol import PlatformError, capability
+from ..persistence import read_json, write_json
 from .management_control import ManagementControlPort
+from .application_backend_host import ApplicationBackendHost
 
 
-class ApplicationHost(QObject):
+class ApplicationHost(ApplicationBackendHost, QObject):
     changed = Signal()
     finished = Signal(int, str, str)
     applicationStopped = Signal(str, str)
+    updatePrepared = Signal(str)
 
     def __init__(self, runtime, hold=None):
         super().__init__()
@@ -24,9 +27,16 @@ class ApplicationHost(QObject):
         self.store = None
         self.packages = None
         self._views = {}
+        self._builtin = None
+        self._backends = {}
+        self._package_updates = {}
+        self._backend_errors = {}
+        self._backend_intents = {}
+        self._backend_intent_path = None
         self._component_epochs = {}
         self._active_epochs = {}
         self._view_parent = None
+        self._builtin_header_parent = None
         self._presentation_active = False
         self._deliveries = {}
         self._hold = hold or (lambda reason, active: None)
@@ -36,20 +46,50 @@ class ApplicationHost(QObject):
         self._approval_tokens = {}
         self._notice = ''
         self._feedback = ''
+        self._managed_applications_json = '[]'
+        self._source_origins = {}
+        self._source_origin_path = None
+        self._dismissed_error_generation = None
         self._run_app = ''
         self._run_title = ''
         self._closed = False
         self.finished.connect(self._finish)
         self.applicationStopped.connect(self._runtime_stopped)
+        self.updatePrepared.connect(self._commit_package_update)
+
+    def register_builtin(self, application, view_factory, *, component_type, version):
+        """Register a platform-owned application through trusted host assembly."""
+        if self._builtin is not None:
+            raise PlatformError('invalid_application', 'A built-in application is already registered')
+        self._builtin = (application, view_factory)
+        self.runtime.ensure_application(application, factory=lambda: application,
+                                        component_type=component_type, version=version)
+        self.runtime.start_application(application.id)
+        self._selected = application.id
+
+    def _builtin_definition(self):
+        application = self._builtin[0]
+        return {**application.as_dict(), 'builtin': True}
 
     def configure(self, directory):
         self.store = ApplicationStore(Path(directory) / 'applications') if directory is not None else None
         self._closed = False
+        self._source_origin_path = Path(directory) / 'application-sources.json' if directory is not None else None
+        self._source_origins = read_json(self._source_origin_path, {}) if self._source_origin_path else {}
+        if not isinstance(self._source_origins, dict) or any(
+                not isinstance(identity, str) or not isinstance(origin, dict)
+                or set(origin) != {'sourceId', 'packageId', 'revision', 'snapshot', 'digest'}
+                or any(not isinstance(value, str) or not value for value in origin.values())
+                for identity, origin in self._source_origins.items()):
+            raise PlatformError('application_source_invalid', '应用来源记录无效')
+        self._configure_backends(Path(directory) if directory is not None else None)
         from ..application_package import ApplicationPackageStore
         self.packages = ApplicationPackageStore(Path(directory) / 'application-packages') if directory is not None else None
         if self.store:
             for definition in self._definitions():
                 app = ApplicationDefinition.from_dict(definition)
+                if self._builtin and app.id == self._builtin[0].id:
+                    raise PlatformError('application_identity_reserved', '内置应用身份不可被本地定义覆盖')
                 try:
                     self._ensure_application(app, restore=True)
                     self.runtime.register_application_bindings(app.id, [binding['instanceId'] for binding in app.bindings.values()])
@@ -57,6 +97,12 @@ class ApplicationHost(QObject):
                     # Definitions and existing references remain intact; the
                     # unavailable binding is reported when this app executes.
                     self._notice = app.title + ': ' + error.message
+        if self.store:
+            # Canvas configures this host before the remaining desktop
+            # providers start. Restore once their startup turn has completed.
+            store = self.store
+            QTimer.singleShot(0, lambda: self._restore_backends()
+                              if not self._closed and self.store is store else None)
         self.changed.emit()
 
     def _definitions(self):
@@ -76,19 +122,47 @@ class ApplicationHost(QObject):
     @Property(str, notify=changed)
     def applicationsJson(self):
         try:
-            return json.dumps(self._definitions(), ensure_ascii=False)
+            return json.dumps(([self._builtin_definition()] if self._builtin else []) + self._definitions(), ensure_ascii=False)
         except Exception as error:
             self._error = str(error)
             return '[]'
 
     @Property(str, notify=changed)
     def selectedJson(self):
-        if not self._selected or not self.store:
+        if not self._selected:
+            return '{}'
+        if self._builtin and self._selected == self._builtin[0].id:
+            return json.dumps(self._builtin_definition(), ensure_ascii=False)
+        if not self.store:
             return '{}'
         try:
             return json.dumps(self.store.load(self._selected).as_dict(), ensure_ascii=False)
         except Exception:
             return '{}'
+
+    @Property(str, notify=changed)
+    def managedApplicationsJson(self):
+        return self._managed_applications_json
+
+    @Slot()
+    def refreshManagedApplications(self):
+        self._local_input()
+        rows = json.loads(self.applicationsJson)
+        for row in rows:
+            row['state'] = self.runtime.status(row['applicationId'])['state']
+            if row.get('package'):
+                try:
+                    app = ApplicationDefinition.from_dict(row)
+                    manifest = self.packages.load_verified(app)['manifest']
+                    row['version'], row['packageId'] = manifest['version'], manifest['id']
+                    origin = self._source_origins.get(app.id)
+                    if (origin and origin['packageId'] == manifest['id']
+                            and all(origin[key] == app.package[key] for key in ('snapshot', 'digest'))):
+                        row['origin'] = origin
+                except Exception as error:
+                    row['packageError'] = str(error)
+        self._managed_applications_json = json.dumps(rows, ensure_ascii=False)
+        self.changed.emit()
 
     @Property(str, notify=changed)
     def state(self): return self._state if self._selected == self._run_app else 'idle'
@@ -108,17 +182,44 @@ class ApplicationHost(QObject):
     @Property(str, notify=changed)
     def error(self): return self._notice or (self._error if self._selected == self._run_app else '')
 
+    @Property(str, notify=changed)
+    def messageError(self):
+        """Canvas notification visibility does not alter the execution result."""
+        return self._notice or (self._error if self._selected == self._run_app
+                               and self._dismissed_error_generation != self._generation else '')
+
+    @Slot()
+    def dismissMessage(self):
+        self._local_input()
+        self._notice = self._feedback = ''
+        if self._error and self._selected == self._run_app:
+            self._dismissed_error_generation = self._generation
+        self.changed.emit()
+
     @Slot(str)
     def select(self, application_id):
         try:
             self._local_input()
-            if application_id:
+            if application_id and (not self._builtin or application_id != self._builtin[0].id):
                 self.store.load(application_id)
-            if self._selected != application_id and self._selected:
+            if (self._selected != application_id and self._selected
+                    and (not self._builtin or self._selected != self._builtin[0].id)
+                    and not self._background_enabled(self._selected)):
                 self._stop_application(self._selected)
+            if self._selected != application_id:
+                self._feedback = ''
+                if self._error and self._selected == self._run_app:
+                    self._dismissed_error_generation = self._generation
             self._selected = application_id
+            if (self._builtin and application_id == self._builtin[0].id
+                    and self.runtime.status(application_id)['state'] != 'running'):
+                self.runtime.start_application(application_id)
             self._notice = ''
             self._update_views()
+            if self._builtin and application_id == self._builtin[0].id:
+                view = self._views.get(application_id)
+                if view is not None:
+                    view.selected_from_input()
         except Exception as error:
             self._notice = str(error)
         self.changed.emit()
@@ -135,6 +236,9 @@ class ApplicationHost(QObject):
             # Validate entirely before writing or registering any principal.
             if any(item['applicationId'] == app.id for item in self.store.list()):
                 raise PlatformError('application_exists', '此应用身份已存在，请使用新的 applicationId')
+            if app.package and any(item.get('package', {}).get('snapshot') == app.package['snapshot']
+                                   for item in self.store.list()):
+                raise PlatformError('application_snapshot_in_use', '应用快照已由其他应用使用')
             try:
                 self.runtime.application_client(app.id)
             except PlatformError as error:
@@ -189,6 +293,7 @@ class ApplicationHost(QObject):
                 bridge.deliver(view_generation, request_id, '', message)
             self.changed.emit()
             return
+        self._dismissed_error_generation = None
         try:
             if not isinstance(params, dict):
                 raise PlatformError('invalid_application_input', '输入应为对象')
@@ -291,8 +396,13 @@ class ApplicationHost(QObject):
     def _create_application(self, app, entry):
         epoch = uuid4().hex
         self._component_epochs[app.id] = epoch
+        def stopped():
+            self._backend_component_stopped(app.id)
+            self.applicationStopped.emit(app.id, epoch)
+        callbacks = self.packages.load_verified(app)['manifest'].get('callbacks', {}) if app.package else {}
         return Application(definition=app, entry_view=entry,
-            on_stop=lambda: self.applicationStopped.emit(app.id, epoch))
+            on_start=lambda: self._backend_component_started(app.id), on_stop=stopped,
+            callbacks=callbacks, on_callback=lambda command, params: self._backend_callback(app.id, command, params))
 
     def _stop_application(self, application_id):
         try:
@@ -315,6 +425,7 @@ class ApplicationHost(QObject):
         token = self._approval_tokens.pop(application_id, None)
         if token:
             ManagementControlPort(self.runtime).cancel_approval(token)
+            self._hold('application', False)
         for session in tuple(self._sessions):
             if session.application.id == application_id:
                 session.stop()
@@ -329,6 +440,7 @@ class ApplicationHost(QObject):
         try:
             self._local_input()
             app = self.store.load(self._selected)
+            self._clear_backend_intent(app.id)
             self._stop_application(app.id)
             self._ensure_application(app, restore=True)
             self.runtime.revoke_application_authority(app.id)
@@ -341,9 +453,20 @@ class ApplicationHost(QObject):
 
     @Slot()
     def remove(self):
+        self.removeApplication(self._selected)
+
+    @Slot(str)
+    def removeApplication(self, identity):
+        origin = None
+        removed = False
         try:
             self._local_input()
-            app = self.store.load(self._selected)
+            if self._builtin and identity == self._builtin[0].id:
+                raise PlatformError('application_builtin', '内置应用不能卸载')
+            app = self.store.load(identity)
+            origin = self._source_origins.get(app.id)
+            self._record_source(app, None)
+            self._clear_backend_intent(app.id)
             self._stop_application(app.id)
             self._ensure_application(app, restore=True)
             # Remove authority before deleting anything. A partial failure can
@@ -355,10 +478,12 @@ class ApplicationHost(QObject):
             except Exception:
                 self.store.save(app)
                 raise
+            removed = True
             view = self._views.pop(app.id, None)
             if view is not None:
                 view.close()
-            self._selected = ''
+            if self._selected == app.id:
+                self._selected = ''
             if app.package:
                 try:
                     self.packages.remove(app)
@@ -367,8 +492,10 @@ class ApplicationHost(QObject):
             self._notice = ''
             self._feedback = '应用已移除，授权和实例引用已清理'
         except Exception as error:
+            if origin is not None and not removed and app.id not in self._source_origins:
+                self._record_source(app, {key: origin[key] for key in ('sourceId', 'packageId', 'revision')})
             self._notice = '移除应用失败：' + str(error)
-        self.changed.emit()
+        self.refreshManagedApplications()
 
     def close(self):
         self._closed = True
@@ -386,6 +513,7 @@ class ApplicationHost(QObject):
             view.close()
         self._views.clear()
         self._view_parent = None
+        self._builtin_header_parent = None
         self._hold('application', False)
 
     def application_data_directory(self, application_id):
@@ -395,6 +523,48 @@ class ApplicationHost(QObject):
 
     @Slot(str)
     def installDirectory(self, location):
+        self._install_directory(location, open_application=True)
+
+    @Slot(str, result=str)
+    def installPackage(self, location):
+        return self._install_directory(location, open_application=False)
+
+    def _record_source(self, app, origin):
+        records = dict(self._source_origins)
+        if origin is None:
+            records.pop(app.id, None)
+        else:
+            records[app.id] = dict(origin, **app.package)
+        if records != self._source_origins:
+            write_json(self._source_origin_path, records)
+            self._source_origins = records
+
+    def _source_package(self, source_id, package_id, revision):
+        self._local_input()
+        path = ManagementControlPort(self.runtime).application_path(source_id, package_id, revision)
+        return path, dict(sourceId=source_id, packageId=package_id, revision=revision)
+
+    @Slot(str, str, str, result=str)
+    def installSourceApplication(self, source_id, package_id, revision):
+        try:
+            path, origin = self._source_package(source_id, package_id, revision)
+        except Exception as error:
+            self._notice = str(error)
+            self.changed.emit()
+            return ''
+        return self._install_directory(path, open_application=False, origin=origin)
+
+    @Slot(str, str, str, str)
+    def updateSourceApplication(self, identity, source_id, package_id, revision):
+        try:
+            path, origin = self._source_package(source_id, package_id, revision)
+        except Exception as error:
+            self._notice = str(error)
+            self.changed.emit()
+            return
+        self._update_application(identity, path, origin=origin)
+
+    def _install_directory(self, location, *, open_application, origin=None):
         app = None
         committed = False
         try:
@@ -407,6 +577,8 @@ class ApplicationHost(QObject):
             app = self.packages.install(path)
             verified = self.packages.load_verified(app)
             package_id = verified['manifest']['id']
+            if origin and origin['packageId'] != package_id:
+                raise PlatformError('application_package_mismatch', '源条目与应用包身份不一致')
             for existing in self._definitions():
                 previous = ApplicationDefinition.from_dict(existing)
                 if previous.package:
@@ -415,25 +587,143 @@ class ApplicationHost(QObject):
                     except PlatformError:
                         continue  # A broken old package cannot block unrelated installs.
                     if previous_id == package_id:
-                        raise PlatformError('application_exists', '此应用已安装，当前版本暂不支持就地更新')
+                        raise PlatformError('application_exists', '此应用已安装，请使用更新应用')
             self._ensure_application(app)
             try:
                 self.runtime.register_application_bindings(app.id, [])
                 self.store.save(app)
+                try:
+                    self._record_source(app, origin)
+                except Exception:
+                    self.store.delete(app.id)
+                    raise
                 committed = True
             except Exception:
                 self.runtime.unregister_application_principal(app.id)
                 raise
-            if self._selected:
-                self._stop_application(self._selected)
-            self._selected = app.id
+            if open_application:
+                if (self._selected and (not self._builtin or self._selected != self._builtin[0].id)
+                        and not self._background_enabled(self._selected)):
+                    self._stop_application(self._selected)
+                self._selected = app.id
             self._notice, self._feedback = '', '应用已安装，请在“组件连接 / 权限”中连接所需能力'
             self._update_views()
         except Exception as error:
             if app is not None and not committed:
                 self.packages.remove(app)
             self._notice = str(error)
+        self.refreshManagedApplications()
+        return app.id if committed else ''
+
+    @Slot(str)
+    def updateDirectory(self, location):
+        """Update the selected application, keeping its identity and data."""
+        self.updateApplication(self._selected, location)
+
+    @Slot(str, str)
+    def updateApplication(self, identity, location):
+        self._update_application(identity, location)
+
+    def _update_application(self, identity, location, *, origin=None):
+        candidate = None
+        try:
+            self._local_input()
+            if self._builtin and identity == self._builtin[0].id:
+                raise PlatformError('application_builtin', '内置应用随平台更新')
+            if self.busy or identity in self._package_updates:
+                raise PlatformError('application_busy', '请等待当前应用操作完成')
+            previous = self.store.load(identity)
+            old = self.packages.load_verified(previous)
+            path = QUrl(location).toLocalFile() if location.startswith('file:') else location
+            candidate = self.packages.install(path)
+            verified = self.packages.load_verified(candidate)
+            if origin and origin['packageId'] != verified['manifest']['id']:
+                raise PlatformError('application_package_mismatch', '源条目与应用包身份不一致')
+            if old['manifest']['id'] != verified['manifest']['id']:
+                raise PlatformError('application_package_mismatch', '更新包不是当前应用')
+            candidate.id = previous.id
+            candidate.config = previous.config
+            candidate.flows, candidate.pages = previous.flows, previous.pages
+            for alias, binding in previous.bindings.items():
+                if alias not in verified['requires']:
+                    continue
+                candidate.bindings[alias] = binding
+                try:
+                    self._verify_binding(candidate, alias)
+                except PlatformError as error:
+                    if error.code != 'application_binding_unavailable':
+                        raise
+                    candidate.bindings.pop(alias)
+            candidate = ApplicationDefinition.from_dict(candidate.as_dict())
+            enabled = self._background_enabled(previous.id)
+            self._package_updates[previous.id] = (previous, candidate, origin)
+            self._stop_application(previous.id)
+            if enabled:
+                self._set_backend_intent(previous.id, True)
+            view = self._views.pop(previous.id, None)
+            if view is not None:
+                view.close()
+            runner = self._backends.get(previous.id)
+            if runner is not None and not runner.stopped.is_set():
+                def wait_for_stop():
+                    runner.stopped.wait()
+                    self.updatePrepared.emit(previous.id)
+                threading.Thread(target=wait_for_stop, daemon=True, name='application-update').start()
+                self._feedback = '正在停止旧版应用后台'
+            else:
+                self._commit_package_update(previous.id)
+            candidate = None  # The pending transaction owns this snapshot.
+        except Exception as error:
+            if candidate is not None:
+                self._package_updates.pop(candidate.id, None)
+                self.packages.remove(candidate)
+            self._notice = str(error)
         self.changed.emit()
+
+    @Slot(str)
+    def _commit_package_update(self, identity):
+        transaction = self._package_updates.get(identity)
+        if transaction is None:
+            return
+        previous, candidate, origin = transaction
+        committed = False
+        try:
+            if self._closed or self.store.load(identity).as_dict() != previous.as_dict():
+                raise PlatformError('stale_application', '应用已关闭或定义已变化，更新未应用')
+            runner = self._backends.get(identity)
+            if runner is not None and runner.stop_error:
+                raise PlatformError('application_stop_failed', runner.stop_error)
+            self.packages.load_verified(candidate)
+            self.runtime.register_application_bindings(identity, [b['instanceId'] for b in candidate.bindings.values()])
+            try:
+                self.store.save(candidate)
+                try:
+                    self._record_source(candidate, origin)
+                except Exception:
+                    self.store.save(previous)
+                    raise
+            except Exception:
+                self.runtime.register_application_bindings(identity, [b['instanceId'] for b in previous.bindings.values()])
+                raise
+            committed = True
+            self._package_updates.pop(identity)
+            self._backends.pop(identity, None)
+            self._ensure_application(candidate, restore=True)
+            self.packages.remove(previous)
+            self._notice, self._feedback = '', '应用已更新；新增能力须连接并授权'
+            if self._background_enabled(identity):
+                try:
+                    self.runtime.start_application(identity)
+                except Exception as error:
+                    self._backend_errors[identity] = str(error)
+            self._update_views()
+        except Exception as error:
+            self._notice = str(error)
+        finally:
+            self._package_updates.pop(identity, None)
+            if not committed:
+                self.packages.remove(candidate)
+            self.refreshManagedApplications()
 
     @staticmethod
     def _matches_requirement(status, operation, metadata, requirement):
@@ -532,6 +822,7 @@ class ApplicationHost(QObject):
             previous = dict(app.bindings)
             app.bindings[alias] = candidate
             self._verify_binding(app, alias)
+            self._clear_backend_intent(app.id)
             self._stop_application(app.id)
             # Previously approved authority must not silently survive a changed
             # connection to another component instance or revision.
@@ -562,15 +853,41 @@ class ApplicationHost(QObject):
             self._notice = str(error)
             self.changed.emit()
 
+    @Slot(QObject)
+    def attachBuiltinHeader(self, parent):
+        """Attach the platform-owned application's header surface."""
+        try:
+            self._local_input()
+            if self._builtin_header_parent is not parent:
+                if self._builtin:
+                    view = self._views.pop(self._builtin[0].id, None)
+                    if view is not None:
+                        view.close()
+                self._builtin_header_parent = parent
+            self._update_views()
+        except Exception as error:
+            self._notice = str(error)
+            self.changed.emit()
+
     def _update_views(self):
         for identity, view in self._views.items():
             if identity != self._selected or not self._presentation_active or self._closed:
                 view.set_active(False)
         if not self._selected or self._view_parent is None or self._closed:
             return
+        if self._selected in self._package_updates:
+            return
         try:
             import shiboken6
             if not shiboken6.isValid(self._view_parent):
+                return
+            if self._builtin and self._selected == self._builtin[0].id:
+                if self._builtin_header_parent is None or not shiboken6.isValid(self._builtin_header_parent):
+                    return
+                if self._selected not in self._views:
+                    self._views[self._selected] = self._builtin[1](self._view_parent, self._builtin_header_parent)
+                running = self.runtime.status(self._selected)['state'] == 'running'
+                self._views[self._selected].set_active(self._presentation_active and running)
                 return
             app = self.store.load(self._selected)
             if not app.package:
@@ -592,7 +909,8 @@ class ApplicationHost(QObject):
 
     def set_presentation_active(self, active):
         self._presentation_active = bool(active)
-        if not active and self._selected:
+        if (not active and self._selected and (not self._builtin or self._selected != self._builtin[0].id)
+                and not self._background_enabled(self._selected)):
             self._stop_application(self._selected)
         self._update_views()
 

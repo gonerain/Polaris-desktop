@@ -1,8 +1,10 @@
 """Trusted local management component. Runtime access never reaches plugin views."""
 import json
 import threading
+import unicodedata
+from pathlib import Path
 import uuid
-from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer, QUrl
 from polaris_platform.desktop.presentation import Presentation
 from polaris_platform.desktop.qt_ports import GuiDispatcher
 from polaris_platform.protocol import PlatformError
@@ -10,6 +12,8 @@ from polaris_platform.protocol import PlatformError
 
 class ManagerBridge(QObject):
     changed = Signal()
+    sourcesChanged = Signal()
+    dataChanged = Signal()
     completed = Signal(object)
     instanceCreated = Signal(str)
     installationReady = Signal()
@@ -17,25 +21,28 @@ class ManagerBridge(QObject):
     planReady = Signal()
     planCancelled = Signal()
     approvalFinished = Signal(str, str)
+    applicationPermissionFinished = Signal(str, str, str)
     def __init__(self, runtime):
         super().__init__()
         self.runtime = runtime
         self._data, self._permissions, self._plan_json = '[]', '[]', '[]'
         self._notice = ''
+        self._notice_error = False
         self._sources_json = '[]'
         self.defaults = None
         self._gui = GuiDispatcher()
         self._installation_plan = None
-        self._busy, self._closed = False, False
+        self._busy, self._closed, self._polling = False, False, False
         self._worker, self._pending_plan = None, None
         self._pending_user_request = []
+        self._pending_refresh = False
         self._approvals = {}
         self._application_checks = {}
         self.completed.connect(self._complete)
         self.approvalFinished.connect(self._finish_approval)
         self.timer = QTimer(self)
         self.timer.setInterval(1500)
-        self.timer.timeout.connect(self.refresh)
+        self.timer.timeout.connect(self.poll)
         from PySide6.QtGui import QGuiApplication
         self.moveToThread(QGuiApplication.instance().thread())
 
@@ -46,8 +53,20 @@ class ManagerBridge(QObject):
             'APP_NAME', 'DISPLAY_VERSION', 'AUTHOR', 'PROJECT_URL', 'CODE_LICENSE', 'ARTWORK_LICENSE',
             'ARTWORK_CREDIT', 'ARTWORK_URL')}, ensure_ascii=False)
 
-    @Property(str, notify=changed)
+    @Property(str, notify=sourcesChanged)
     def sourcesJson(self): return self._sources_json
+
+    @Slot(str, result=str)
+    def normalizeMarketText(self, value):
+        return unicodedata.normalize('NFKC', value).casefold()
+
+    @Slot(str, str, result=str)
+    def marketAssetUrl(self, directory, path):
+        return QUrl.fromLocalFile(str(Path(directory) / path)).toString()
+
+    @Slot(str, str, result=str)
+    def marketReadme(self, directory, path):
+        return (Path(directory) / path).read_text(encoding='utf-8')
 
     def _source_control(self):
         if self.runtime.status('sources')['state'] != 'running':
@@ -76,12 +95,13 @@ class ManagerBridge(QObject):
     @Slot(str)
     def retryDefault(self, source_id):
         if self.defaults and source_id in self.defaults.specs:
-            self.defaults.request(source_id)
+            self.defaults.request(source_id, load_catalog=source_id in self.defaults.default_catalogs)
 
     @Slot(str)
-    def addSource(self, location):
+    @Slot(str, str)
+    def addSource(self, location, ref=''):
         def add():
-            self._source_control().add(location.strip())
+            self._source_control().add(location.strip(), ref=ref.strip() or None)
             return {'_notice': '已添加插件源，请选择需要安装的插件'}
         self.submit(add, user_input=True)
 
@@ -90,17 +110,21 @@ class ManagerBridge(QObject):
         self.submit(lambda: (self._source_control().refresh(source_id), {'_notice': '插件源已刷新'})[1], user_input=True)
 
     @Slot(str, str)
-    def installSource(self, source_id, component_id):
+    @Slot(str, str, str)
+    def installSource(self, source_id, component_id, expected_revision=None):
         def install():
+            control = self._source_control()
+            revision = next(row['revision'] for row in control.sources() if row['id'] == source_id)
+            if expected_revision is not None and revision != expected_revision:
+                raise PlatformError('source_changed', '源目录已变化，请重新查看后安装')
             existing = self._installation_record(component_id)
             if existing:
-                revision = next(row['revision'] for row in self._source_control().sources() if row['id'] == source_id)
                 return self._installation_confirmation(existing, 'replace', sourceId=source_id, sourceRevision=revision)
-            self._gui.run(lambda: self._source_control().install(source_id, component_id))
+            self._gui.run(lambda: control.install(source_id, component_id, **({'expected_revision': expected_revision} if expected_revision is not None else {})))
             return {'_notice': '插件已安装'}
         self.submit(install, user_input=True)
 
-    @Property(str, notify=changed)
+    @Property(str, notify=dataChanged)
     def dataJson(self): return self._data
     @Property(str, notify=changed)
     def permissionsJson(self): return self._permissions
@@ -108,8 +132,22 @@ class ManagerBridge(QObject):
     def planJson(self): return self._plan_json
     @Property(str, notify=changed)
     def planSubject(self): return self._pending_plan.get('subject', '') if self._pending_plan else ''
+    @Property(bool, notify=changed)
+    def authorizationPending(self): return self._pending_plan is not None
+    @Property(str, notify=changed)
+    def planType(self): return self._pending_plan.get('type', '') if self._pending_plan else ''
+    @Property(str, notify=changed)
+    def planRequester(self): return self._pending_plan.get('requester', '') if self._pending_plan else ''
     @Property(str, notify=changed)
     def notice(self): return self._notice
+    @Property(bool, notify=changed)
+    def noticeIsError(self): return self._notice_error
+
+    @Slot()
+    def dismissNotice(self):
+        self._notice = ''
+        self._notice_error = False
+        self.changed.emit()
     @Property(str, notify=changed)
     def installationPrompt(self):
         plan = self._installation_plan
@@ -119,25 +157,37 @@ class ManagerBridge(QObject):
         return ('覆盖安装' if plan['action'] == 'replace' else '卸载') + '“' + plan['name'] + '”？'
 
     @Property(bool, notify=changed)
-    def busy(self): return self._busy
+    def busy(self): return (self._busy and not self._polling) or bool(self._pending_user_request)
 
-    def submit(self, fn, user_input=False):
+    def submit(self, fn, user_input=False, polling=False, include_sources=True):
         if self._closed: return
         if self._busy:
-            if user_input: self._pending_user_request.append(fn)
+            if polling and include_sources:
+                self._pending_refresh = True
+            elif not polling and (user_input or self._polling):
+                self._pending_user_request.append(fn)
+                self.changed.emit()
             return
-        self._busy = True
+        self._busy, self._polling = True, polling
         self.changed.emit()
         def work():
             try:
                 result = fn()
                 snapshot = self.runtime.snapshot()
                 decisions = self.runtime.authorization.decisions()
-                if not self._closed:
+                sources = None
+                if not self._closed and include_sources:
                     try:
-                        sources = self._source_control().sources()
+                        control = self._source_control()
+                        sources = control.sources()
+                        for source in sources:
+                            for collection in ('components', 'packages'):
+                                for entry in source.get(collection, []):
+                                    if collection == 'components' or entry['type'] == 'component':
+                                        entry['installationOrigin'] = control.installation_origin(entry['manifest']['id'])
                     except (PlatformError, AttributeError, ValueError):
                         sources = []
+                if not self._closed:
                     self.completed.emit((snapshot, decisions, result, None, sources))
             except Exception as exc:
                 if not self._closed:
@@ -150,25 +200,36 @@ class ManagerBridge(QObject):
         snapshot, decisions, value, error, sources = result
         if sources is not None:
             rows = self.defaults.rows(sources) if self.defaults else sources
-            self._sources_json = json.dumps(rows, ensure_ascii=False, default=str)
+            source_json = json.dumps(rows, ensure_ascii=False, default=str)
+            if source_json != self._sources_json:
+                self._sources_json = source_json
+                self.sourcesChanged.emit()
         if isinstance(value, dict) and '_view_plan' in value:
             token = value['_view_plan'].get('approvalToken')
             if token and token not in self._approvals: value = None
-        self._busy = False
+        self._busy, self._polling = False, False
         if error:
             self._notice = error
+            self._notice_error = True
         elif isinstance(value, dict) and '_installation_plan' in value:
             self._installation_plan = value['_installation_plan']
             self._notice = ''
+            self._notice_error = False
             self.installationReady.emit()
         elif isinstance(value, dict) and '_notice' in value:
             self._notice = value['_notice']
+            self._notice_error = False
         elif isinstance(value, dict) and '_view_plan' in value:
             self.cancelView()
             self._pending_plan = value['_view_plan']
+            self._pending_plan['requiresConfirmation'] = not all(row['authorized'] for row in self._pending_plan['permissions'])
             self._plan_json = json.dumps(self._pending_plan['permissions'], ensure_ascii=False)
+        elif isinstance(value, dict) and '_application_permission_result' in value:
+            outcome = value['_application_permission_result']
+            self.applicationPermissionFinished.emit(outcome['requester'], outcome['status'], outcome['message'])
         elif value is not None:
             self._notice = json.dumps(value, ensure_ascii=False, default=str)[:1200]
+            self._notice_error = False
         if snapshot is not None:
             records = []
             for item in snapshot:
@@ -180,7 +241,10 @@ class ManagerBridge(QObject):
                     manageable=default and item.get('manifest', {}).get('kind') != 'application'
                         and item['id'] != getattr(self.runtime, 'management_component_id', 'manager')
                         and item['id'] not in self.runtime.roles.values()))
-            self._data = json.dumps(records, ensure_ascii=False, default=str)
+            data_json = json.dumps(records, ensure_ascii=False, default=str)
+            if data_json != self._data:
+                self._data = data_json
+                self.dataChanged.emit()
             self._permissions = json.dumps(decisions, ensure_ascii=False)
             if self._pending_plan:
                 if self._pending_plan.get('type') == 'application':
@@ -203,6 +267,9 @@ class ManagerBridge(QObject):
                 self.planReady.emit()
         if self._pending_user_request and not self._busy:
             self.submit(self._pending_user_request.pop(0), user_input=True)
+        elif self._pending_refresh and not self._busy:
+            self._pending_refresh = False
+            self.refresh()
 
     @Slot()
     def quit(self):
@@ -210,7 +277,10 @@ class ManagerBridge(QObject):
         QGuiApplication.instance().quit()
 
     @Slot()
-    def refresh(self): self.submit(lambda: None)
+    def refresh(self): self.submit(lambda: None, polling=True)
+
+    @Slot()
+    def poll(self): self.submit(lambda: None, polling=True, include_sources=False)
 
     @Slot(str, str)
     def lifecycle(self, target, action):
@@ -240,7 +310,7 @@ class ManagerBridge(QObject):
             raise ValueError('这是独立实例，不能作为组件安装卸载')
         if any(row['id'] == target and row.get('manifest', {}).get('kind') == 'application'
                for row in self.runtime.snapshot()):
-            raise ValueError('请在应用入口移除应用')
+            raise ValueError('请在扩展管理的应用页卸载应用')
         options = self.runtime.management_options(target) if hasattr(self.runtime, 'management_options') else {}
         if options.get(action) is False or target == getattr(self.runtime, 'management_component_id', 'manager') or target in self.runtime.roles.values():
             raise ValueError('此组件需在退出后通过启动配置更改')
@@ -595,7 +665,10 @@ class ManagerBridge(QObject):
                     return None
                 if plan.get('type') == 'application':
                     outcome = 'confirmed'
-                    return {'_notice': '应用授权已确认'}
+                    if plan['requiresConfirmation']:
+                        return {'_application_permission_result': {'requester': plan['requester'], 'status': 'confirmed',
+                                                                   'message': '授权已确认，可以继续使用应用。'}}
+                    return None
                 context = self.runtime.user_context(plan['requester'])
                 if current.get('usesRequirements'):
                     approved = {tuple(row['key']) for row in current['permissions']}
@@ -603,6 +676,11 @@ class ManagerBridge(QObject):
                 result = client.call(plan['target'], plan['action'], current['params'], context=context)
                 outcome = 'confirmed'
                 return result
+            except Exception as error:
+                if plan.get('type') == 'application' and plan['requiresConfirmation']:
+                    return {'_application_permission_result': {'requester': plan['requester'], 'status': 'failed',
+                                                               'message': str(error)}}
+                raise
             finally:
                 if token: self.approvalFinished.emit(token, outcome)
         self._pending_plan = None
@@ -611,22 +689,34 @@ class ManagerBridge(QObject):
 
 
 class Manager(Presentation):
-    """Trusted local management component, with its own native management view."""
-    source, title, size = 'Manager.qml', 'Polaris · 组件管理', (1040, 760)
+    """Trusted extension controls presented inside the Canvas shell."""
+    title = 'Polaris · 扩展管理'
+
     def __init__(self, runtime=None):
         super().__init__()
         self._cleanup_host = None
         self.dependencies = []
-        self.views = [{'id': 'main', 'title': self.title, 'adapter': 'qt-quick', 'actions': [
-            {'label': '显示', 'operation': 'show', 'permissions': []},
-            {'label': '隐藏', 'operation': 'hide', 'permissions': []}]}]
+        self.views = []
         self.runtime = runtime
         self._gui = GuiDispatcher()
-        self._view = None
         self.bridge = ManagerBridge(runtime) if runtime is not None else None
 
+    def _canvas(self):
+        if self.runtime.status('canvas')['state'] != 'running':
+            self.runtime.start_component('canvas')
+        return self.runtime.component_instance('canvas')
+
+    def _canvas_running(self):
+        try:
+            return self.runtime.status('canvas')['state'] == 'running'
+        except PlatformError as error:
+            if error.code == 'not_installed':
+                return False
+            raise
+
     def start(self, port):
-        if self.runtime is not None: self.runtime.management_component_id = port.id
+        if self.runtime is not None:
+            self.runtime.management_component_id = port.id
         super().start(port)
         if self.bridge is None and self.runtime is not None:
             self.bridge = self._gui.run(lambda: ManagerBridge(self.runtime))
@@ -634,30 +724,40 @@ class Manager(Presentation):
             self._gui.run(self.bridge.configure_defaults)
             self._gui.run(self.bridge.timer.start)
             self.bridge.refresh()
+        if self._canvas_running():
+            self._gui.run(lambda: self._canvas().actions.managementChanged.emit())
 
     def local_management_control(self):
         return self if self.running else None
 
     def request_mount(self, requester, target, view_id, on_finished=None):
         if not self.running or self.bridge is None:
-            raise PlatformError('management_unavailable', '组件管理未运行')
-        self.show()
+            raise PlatformError('management_unavailable', '扩展管理未运行')
+        self._gui.run(lambda: self._canvas().ensure_management_presentation())
         return self._gui.run(lambda: self.bridge.request_mount(requester, target, view_id, on_finished))
 
     def request_application(self, definition, flow, on_finished=None, validate=None):
         if not self.running or self.bridge is None:
-            raise PlatformError('management_unavailable', '组件管理未运行')
-        self.show()
+            raise PlatformError('management_unavailable', '扩展管理未运行')
+        self._gui.run(lambda: self._canvas().ensure_management_presentation())
         return self._gui.run(lambda: self.bridge.request_application(definition, flow, on_finished, validate))
 
     def cancel_approval(self, token):
         if self.bridge is not None:
             return self._gui.run(lambda: self.bridge.cancel_approval(token))
 
+    def application_path(self, source_id, package_id, revision):
+        return self.bridge._source_control().application_path(source_id, package_id, revision)
+
+    def cancel_pending_ui(self):
+        if self.bridge is not None:
+            self._gui.run(self.bridge.cancel_all)
+
     def report_notice(self, message):
         def update():
             if self.bridge is not None:
                 self.bridge._notice = str(message)
+                self.bridge._notice_error = True
                 self.bridge.changed.emit()
         self._gui.run(update)
 
@@ -666,53 +766,46 @@ class Manager(Presentation):
             self._gui.run(self.bridge.refresh)
 
     def status(self, context=None):
-        state = self._gui.run(lambda: {'available': self._view is not None,
-                                       'visible': self._view.isVisible() if self._view else False})
-        return dict(state, running=self.running)
-
-    def describe(self):
-        result = super().describe()
-        result['view_state'] = dict(self._view_state)
-        return result
+        def state():
+            if not self._canvas_running():
+                return {'available': False, 'visible': False}
+            canvas = self._canvas()
+            window = canvas.actions._window
+            root = window.rootObject() if window is not None else None
+            return {'available': root is not None,
+                    'visible': bool(window and window.isVisible() and root.property('settingsOpen')
+                                    and root.property('settingsSection') == 'extensions')}
+        return dict(self._gui.run(state), running=self.running, embedded=True)
 
     def show(self, context=None):
         if not self.running:
-            raise PlatformError('component_unavailable', '组件未运行')
+            raise PlatformError('component_unavailable', '扩展管理未运行')
+        bridge = self.bridge
         def display():
-            if self._view is None:
-                from pathlib import Path
-                from PySide6.QtQuick import QQuickView
-                from PySide6.QtCore import QUrl
-                from PySide6.QtGui import QGuiApplication
-                view = QQuickView()
-                view.setTitle(self.title)
-                view.setResizeMode(QQuickView.SizeRootObjectToView)
-                view.rootContext().setContextProperty('manager', self.bridge)
-                view.setSource(QUrl.fromLocalFile(str(Path(__file__).parent / self.source)))
-                if view.status() == QQuickView.Error:
-                    errors = '\n'.join(error.toString() for error in view.errors())
-                    import shiboken6
-                    shiboken6.delete(view)
-                    raise PlatformError('view_error', errors)
-                view.resize(*self.size)
-                view.closing.connect(self._native_closed)
-                self._view = view
-            self._view.show()
-            self._view.raise_()
-        self._gui.run(display)
-        self._view_state = self.status()
-        return dict(self._view_state)
-
-    @Slot()
-    def _native_closed(self):
-        self._view_state.update(visible=False)
-        if self.bridge: self.bridge.cancel_all()
+            if not self.running or self.bridge is not bridge:
+                return
+            try:
+                self._canvas().open_extension_management()
+            except Exception as error:
+                import sys
+                print('扩展管理无法显示：' + str(error), file=sys.stderr)
+                self.report_notice(str(error))
+        # A new GUI event leaves any public operation handling stack before the
+        # shell obtains a genuine user context for local management presentation.
+        self._gui.run(lambda: QTimer.singleShot(0, display))
+        return dict(self.status(), pending=True)
 
     def hide(self, context=None):
-        if self.bridge: self._gui.run(self.bridge.cancel_all)
-        if self._view: self._gui.run(self._view.hide)
-        self._view_state = self.status()
-        return dict(self._view_state)
+        if not self._canvas_running():
+            return self.status()
+        def hide_page():
+            canvas = self._canvas()
+            window = canvas.actions._window
+            if window is not None:
+                from PySide6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(window.rootObject(), 'showWorkspace', Qt.DirectConnection)
+        self._gui.run(hide_page)
+        return self.status()
 
     def stop(self):
         bridge = self.bridge
@@ -724,15 +817,14 @@ class Manager(Presentation):
             self._gui.run(bridge.timer.stop)
             if bridge._worker and bridge._worker.is_alive() and bridge._worker is not threading.current_thread():
                 bridge._worker.join(2)
+        self.bridge = None
         def dispose():
             import shiboken6
-            if self._view:
-                self._view.close()
-                shiboken6.delete(self._view)
-                self._view = None
-            if bridge: shiboken6.delete(bridge)
+            if self._canvas_running():
+                self._canvas().actions.managementChanged.emit()
+            if bridge:
+                shiboken6.delete(bridge)
         self._gui.run(dispose)
-        self.bridge = None
         super().stop()
 
 

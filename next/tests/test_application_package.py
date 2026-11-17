@@ -26,6 +26,37 @@ class ApplicationPackageTest(unittest.TestCase):
     def write_manifest(self):
         (self.source / 'polaris-application.json').write_text(json.dumps(self.manifest))
 
+    def test_callbacks_require_backend_and_valid_contract_and_object_schema(self):
+        callback = dict(contract='test.callback.deliver@1', parameters={'type': 'object'})
+        self.manifest['callbacks'] = {'deliver': callback}
+        self.write_manifest()
+        with self.assertRaises(PlatformError):
+            self.packages.install(self.source)
+        (self.source / 'backend.py').write_text('def create(context): return None')
+        self.manifest['entry']['backend'] = 'backend.py'
+        self.write_manifest()
+        app = self.packages.install(self.source)
+        self.assertEqual(self.packages.load_verified(app)['manifest']['callbacks'], {'deliver': callback})
+        for invalid in ([], {'deliver': {}}, {'deliver': {'contract': 'invalid', 'parameters': {'type': 'object'}}},
+                        {'deliver': {'contract': 'test.deliver@1', 'parameters': []}}):
+            with self.subTest(invalid=invalid):
+                self.manifest['callbacks'] = invalid
+                self.write_manifest()
+                with self.assertRaises(PlatformError):
+                    self.packages.install(self.source)
+
+    def test_component_dependencies_are_separate_from_capabilities(self):
+        self.manifest['dependencies'] = ['demo.provider', 'demo.other']
+        self.write_manifest()
+        app = self.packages.install(self.source)
+        self.assertEqual(self.packages.load_verified(app)['manifest']['dependencies'], self.manifest['dependencies'])
+        for invalid in ('demo.provider', [1], [{}], [''], ['demo.provider', 'demo.provider']):
+            with self.subTest(invalid=invalid):
+                self.manifest['dependencies'] = invalid
+                self.write_manifest()
+                with self.assertRaises(PlatformError):
+                    self.packages.install(self.source)
+
     def test_contract_requirements_validate_and_preserve_preference(self):
         self.manifest['requires'] = {'echo': {'contract': 'demo.text.echo@1', 'access': 'read',
                                              'preferredComponentType': 'demo.provider'}}
@@ -40,6 +71,22 @@ class ApplicationPackageTest(unittest.TestCase):
             with self.assertRaises(PlatformError):
                 self.packages.install(self.source)
             self.manifest['requires']['echo'] = original
+
+    def test_backend_entry_stays_in_snapshot_and_requires_existing_python_source(self):
+        (self.source / 'backend.py').write_text('def create(context): return None')
+        for backend in ('../backend.py', '/tmp/backend.py', 'sub/../backend.py', 'missing.py', 'Main.qml'):
+            self.manifest['entry']['backend'] = backend
+            self.write_manifest()
+            with self.assertRaises(PlatformError):
+                self.packages.install(self.source)
+        self.manifest['entry']['backend'] = 'backend.py'
+        self.write_manifest()
+        app = self.packages.install(self.source)
+        loaded = self.packages.load_verified(app)
+        self.assertEqual(loaded['backend'].name, 'backend.py')
+        loaded['backend'].write_text('changed python code')
+        with self.assertRaises(PlatformError):
+            self.packages.load_verified(app)
 
     def test_snapshot_identity_persistence_and_change_detection(self):
         first = self.packages.install(self.source)

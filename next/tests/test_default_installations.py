@@ -130,7 +130,98 @@ class DefaultInstallationTests(unittest.TestCase):
         self.assertEqual(self.rt.client('runtime').call('cached', 'value', {}, self.rt.user_context('runtime')),
                          'from official source')
 
+    def test_one_source_can_install_multiple_targets_without_reinstalling_removed(self):
+        first, _ = self.plugin('first')
+        second, _ = self.plugin('second')
+        root = Path(first['location'])
+        import shutil
+        shutil.copytree(Path(second['location']) / 'plugins' / 'second', root / 'plugins' / 'second')
+        (root / 'polaris-source.json').write_text(json.dumps(dict(schemaVersion=1, name='Both',
+            components=[{'path': 'plugins/first'}, {'path': 'plugins/second'}])))
+        spec = dict(name='Both', location=str(root), components=[{'component': 'first'}, {'component': 'second'}])
+        self.installer.configure([spec])
+        self.settle()
+        self.assertFalse(self.installer.errors)
+        self.assertEqual(self.rt.status('first')['state'], 'running')
+        self.assertEqual(self.rt.status('second')['state'], 'running')
+        self.rt.uninstall_component('second')
+        self.installer.configure([spec])
+        self.assertFalse(self.installer.pending)
+        self.assertIn('second', self.rt.removed_installations())
+        self.assertEqual(len(self.installer.control.sources()), 1)
+
+    def test_bundled_catalog_refreshes_when_targets_already_installed(self):
+        spec, _ = self.plugin('installed')
+        spec['bundledDirectory'] = 'fixture'
+        self.installer.configure([spec])
+        self.settle()
+        source, = self.installer.control.sources()
+        before = self.rt.status('installed')
+        index = Path(spec['location']) / 'polaris-source.json'
+        value = json.loads(index.read_text())
+        value['name'] = 'Updated catalog'
+        index.write_text(json.dumps(value))
+        self.installer.configure([spec])
+        self.settle()
+        updated, = self.installer.control.sources()
+        self.assertNotEqual(updated['revision'], source['revision'])
+        self.assertEqual(updated['name'], 'Updated catalog')
+        self.assertEqual(self.rt.status('installed')['installation'], before['installation'])
+        self.assertEqual(self.rt.status('installed')['instance'], before['instance'])
+        self.assertTrue(self.installer.rows([updated])[0]['defaultCatalog'])
+
+    def test_remote_default_fetches_even_when_installed_and_archives_only_after_success(self):
+        import subprocess
+        from unittest.mock import patch
+        from components.sources import Sources
+        legacy, _ = self.plugin('existing')
+        repo = Path(legacy['location'])
+        def git(*args):
+            subprocess.run(['git','-C',str(repo),*args], check=True, capture_output=True)
+        git('init'); git('config','user.name','Fixture'); git('config','user.email','test@example.invalid')
+        git('add','.'); git('commit','-m','fixture')
+        self.installer.configure([legacy]); self.settle()
+        old, = self.installer.control.sources()
+        before = self.rt.status('existing')['installation']
+        origin = self.installer.control.installation_origin('existing')
+        url = 'https://example.invalid/catalog.git'
+        spec = dict(name='Remote', location=url, ref='HEAD', defaultCatalog=True,
+                    components=[{'component':'existing'}],
+                    migrateLegacy={'migration':'fixture-v1', 'remoteLocations':[]})
+        run = Sources._git
+        def transport(*args):
+            return run(*(str(repo) if arg == url else arg for arg in args))
+        with patch.object(Sources, '_git', side_effect=RuntimeError('offline')):
+            self.installer.configure([spec]); self.settle()
+        rows = self.installer.control.sources()
+        self.assertFalse(next(r for r in rows if r['id'] == old['id']).get('archived', False))
+        remote = next(r for r in rows if r['location'] == url)
+        self.assertIsNone(remote['revision'])
+        from components.manager import ManagerBridge
+        bridge = ManagerBridge(self.rt)
+        bridge.defaults = self.installer
+        with patch.object(Sources, '_git', side_effect=transport):
+            bridge.retryDefault(remote['id']); self.settle()
+        rows = self.installer.control.sources()
+        self.assertTrue(next(r for r in rows if r['id'] == old['id'])['archived'])
+        remote = next(r for r in rows if r['location'] == url)
+        self.assertIsNotNone(remote['revision'])
+        self.assertEqual(self.rt.status('existing')['installation'], before)
+        self.assertEqual(self.installer.control.installation_origin('existing'), origin)
+        self.assertEqual(len(self.installer.control.catalog()), 1)
+        self.assertEqual(len(self.installer.control.catalog(old['id'])), 1)
+        future, _ = self.plugin('future')
+        future_source = self.installer.control.add(future['location'])
+        self.installer.configure([spec]); self.settle()
+        future_row = next(r for r in self.installer.control.sources() if r['id'] == future_source['id'])
+        self.assertFalse(future_row.get('archived', False))
+
     def test_distribution_presets(self):
-        self.assertEqual({s['component']:s['location'] for s in configured_sources({})},
-            {'org.polaris.'+name: 'https://github.com/gonerain/Polaris-'+name+'.git' for name in ('agent','weixin','schedule')})
+        spec, = configured_sources({})
+        self.assertEqual(spec['location'], 'https://github.com/gonerain/Polaris-desktop.git')
+        self.assertEqual(spec['ref'], 'codex/marketplace-catalog')
+        self.assertTrue(spec['defaultCatalog'])
+        self.assertNotIn('bundledDirectory', spec)
+        self.assertEqual({entry['component'] for entry in spec['components']},
+                         {'org.polaris.agent', 'org.polaris.weixin', 'org.polaris.schedule'})
         self.assertEqual(configured_sources({'defaultSources': []}), [])

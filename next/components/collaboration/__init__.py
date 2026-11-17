@@ -17,10 +17,10 @@ class Collaboration(Component):
         self._subscriptions = {}
         self._running = False
         self.runtime = None
-        self.operation("discover")(lambda p, c: self.discover())
+        self.operation("discover", applicationBinding="instance", provides="polaris.directory.discover@1")(lambda p, c: self.discover())
         self.operation("providers")(lambda p, c: self.providers(**p))
         self.operation("watch")(lambda p, c: self.watch(p.get("after", 0)))
-        self.operation("describe")(lambda p, c: self.describe_target(p["target"]))
+        self.operation("describe", applicationBinding="instance", provides="polaris.directory.describe@1")(lambda p, c: self.describe_target(p["target"]))
 
     def start(self, port):
         super().start(port)

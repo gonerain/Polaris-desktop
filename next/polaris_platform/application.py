@@ -35,10 +35,16 @@ class ApplicationDefinition:
         self.flows = deepcopy(flows or {})
         self.pages = deepcopy(pages or [])
         if package is not None and (not isinstance(package, dict) or set(package) != {'snapshot', 'digest'}
-                or not isinstance(package['snapshot'], str) or package['snapshot'] != self.id
+                or not isinstance(package['snapshot'], str)
                 or not isinstance(package['digest'], str) or len(package['digest']) != 64
                 or any(c not in '0123456789abcdef' for c in package['digest'])):
             raise PlatformError('invalid_application', 'Invalid application package reference')
+        if package is not None:
+            try:
+                if UUID(package['snapshot']).hex != package['snapshot']:
+                    raise ValueError('noncanonical UUID')
+            except (ValueError, TypeError, AttributeError) as error:
+                raise PlatformError('invalid_application', 'Invalid application snapshot identity') from error
         self.package = deepcopy(package)
         if not isinstance(self.id, str) or not self.id or not isinstance(title, str):
             raise PlatformError('invalid_application', 'Application identity and title are required')
@@ -132,7 +138,7 @@ class Application(ApplicationDefinition, Component):
 
     def __init__(self, title=None, bindings=None, config=None, flows=None, pages=None,
                  application_id=None, package=None, *, definition=None,
-                 entry_view=None, on_stop=None):
+                 entry_view=None, on_stop=None, on_start=None, callbacks=None, on_callback=None):
         Component.__init__(self)
         if isinstance(title, ApplicationDefinition):
             definition = title
@@ -145,12 +151,30 @@ class Application(ApplicationDefinition, Component):
                                        flows, pages, application_id, package)
         self.entry_view = deepcopy(entry_view)
         self._on_stop = on_stop
+        self._on_start = on_start
+        self._callbacks = deepcopy(callbacks or {})
+        for name, callback in self._callbacks.items():
+            from .contracts import contract_version
+            self.operation(name, access='write', major=contract_version(callback['contract']),
+                           provides=callback['contract'], applicationBinding='instance')(
+                lambda params, context, name=name: on_callback(name, params))
         if entry_view is not None:
             self.views = [deepcopy(entry_view)]
+
+    def describe(self):
+        value = Component.describe(self)
+        for name, callback in self._callbacks.items():
+            value['operations'][name].update(title=callback.get('label', name), parameters=deepcopy(callback['parameters']))
+        return value
 
     @property
     def definition(self):
         return ApplicationDefinition.from_dict(self.as_dict())
+
+    def start(self, port):
+        Component.start(self, port)
+        if self._on_start is not None:
+            self._on_start()
 
     def stop(self):
         was_started = self.port is not None

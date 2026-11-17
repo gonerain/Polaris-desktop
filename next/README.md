@@ -65,7 +65,7 @@ Polaris Agent 的对话视图提供“模型设置”，可选择服务并保存
 
 GUI 默认运行插件源管理组件，不另开窗口。组件管理中的“插件源”可添加 Git 地址或本地仓库目录、查看仓库中的插件，并逐个安装或更新。原有“加载组件”仍直接加载本地插件目录。来源标准见 [CONTRACT.md](CONTRACT.md)。
 
-默认管理器从 [default-sources.json](components/manager/default-sources.json) 读取官方源，仅安装各条目指定的组件 ID。首次安装后启动，已有安装保留启停设置与授权；已移除的旧版内置业务组件目录会按原安装身份接入官方源。停用、卸载、自行从其他目录安装的选择均会保留。指定 `--config` 时可在顶层设置 `{"componentManager":{"defaultSources":[]}}` 禁用默认源，或提供自定义的 `name`、`component`、`location` 和可选 `ref`。无界面启动不进行默认下载。手工添加源只读取索引，更新仍由用户选择。
+默认管理器从 [default-sources.json](components/manager/default-sources.json) 读取随软件分发的 `marketplace/` 目录及其默认组件目标。目录更新只刷新市场资料，不自动替换已有安装；已有启停、卸载、身份与授权保持。指定 `--config` 时可设置 `{"componentManager":{"defaultSources":[]}}` 禁用默认目录，也可提供带 `location`、可选 `ref` 和 `components` 目标列表的自定义源。无界面启动不执行默认安装。源投稿和校验方法见 [市场说明](../marketplace/README.md)。
 
 ## 调用示例
 

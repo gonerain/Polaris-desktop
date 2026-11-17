@@ -1,4 +1,4 @@
-"""Canvas-owned durable geometry, containing no provider or session state."""
+"""Shared shell size/theme and workbench layout file, without provider or session state."""
 import json
 import math
 from pathlib import Path

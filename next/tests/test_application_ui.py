@@ -95,8 +95,8 @@ else:
             return item
 
         def connect(self, alias='tidy', choice=1):
-            panel = find(self.window.contentItem(), 'applicationConnections')
-            if not panel.isVisible(): self.click('applicationConnectionsToggle')
+            popup = self.window.rootObject().findChild(QObject, 'applicationConnectionsDialog')
+            if not popup.property('visible'): self.click('applicationConnectionsToggle')
             combo = find(self.window.contentItem(), 'applicationBinding_' + alias)
             self.assertEqual(combo.property('currentIndex'), 0)
             point = combo.mapToScene(QPointF(combo.width()/2, combo.height()/2))
@@ -109,8 +109,13 @@ else:
 
         def approve(self):
             self.wait(lambda: not self.manager.bridge.busy and self.manager.bridge._pending_plan is not None)
-            self.click('confirmPermission', self.manager._view)
+            self.assertEqual(self.host._selected, self.app_id)
+            self.assertFalse(self.window.rootObject().property('settingsOpen'))
+            self.click('confirmApplicationPermission')
             self.wait(lambda: not self.host.busy)
+            popup = self.window.rootObject().findChild(QObject, 'applicationConnectionsDialog')
+            self.wait(lambda: popup.property('stage') == 'confirmed')
+            self.click('finishApplicationPermission')
 
         def test_own_qml_real_gui_connection_permission_call_and_local_logic(self):
             root = self.view.root
@@ -122,7 +127,7 @@ else:
             self.assertEqual(root.property('characters'), len(editor.property('text')))
             self.connect('tidy')
             self.connect('keywords')
-            self.click('applicationConnectionsToggle')
+            self.click('closeApplicationConnections')
             self.click('studioTidy')
             self.wait(lambda: self.manager.bridge._pending_plan is not None)
             self.assertFalse(root.property('output'))
@@ -145,6 +150,87 @@ else:
             self.assertEqual(editor.property('text'), '  今天   整理会议记录  \n\n  明天  完成文档  ')
             self.click('studioClear')
             self.assertEqual(root.property('characters'), 0)
+
+        def test_connections_popup_keeps_application_geometry_and_header_entry(self):
+            surface = find(self.window.contentItem(), 'customApplicationSurface')
+            popup = self.window.rootObject().findChild(QObject, 'applicationConnectionsDialog')
+            for width in (1300, 720, 360):
+                self.window.resize(width, 760)
+                QTest.qWait(25)
+                geometry = (surface.y(), surface.height(), self.view.root.height())
+                toggle = find(self.window.contentItem(), 'applicationConnectionsToggle')
+                dismiss = find(self.window.contentItem(), 'dismissCanvas')
+                self.assertLess(toggle.mapToScene(QPointF()).x(), dismiss.mapToScene(QPointF()).x())
+                self.assertEqual(toggle.mapToScene(QPointF()).y(), dismiss.mapToScene(QPointF()).y())
+                self.click('applicationConnectionsToggle')
+                self.assertTrue(popup.property('visible'))
+                self.assertEqual(geometry, (surface.y(), surface.height(), self.view.root.height()))
+                self.assertLessEqual(popup.property('width'), width - 32)
+                capture = os.environ.get('POLARIS_APPLICATION_CAPTURE')
+                if capture:
+                    Path(capture).mkdir(parents=True, exist_ok=True)
+                    self.window.grabWindow().save(str(Path(capture) / f'connections-dialog-{width}.png'))
+                self.click('closeApplicationConnections')
+                self.assertFalse(popup.property('visible'))
+                self.assertEqual(geometry, (surface.y(), surface.height(), self.view.root.height()))
+
+        def test_authorization_result_stays_in_dialog_and_repeated_calls_are_silent(self):
+            self.connect('tidy')
+            self.click('closeApplicationConnections')
+            popup = self.window.rootObject().findChild(QObject, 'applicationConnectionsDialog')
+            surface = find(self.window.contentItem(), 'customApplicationSurface')
+            geometry = (surface.y(), surface.height())
+            plans = QSignalSpy(self.manager.bridge.planReady)
+            results = QSignalSpy(self.manager.bridge.applicationPermissionFinished)
+            self.view.bridge.call('tidy', {'text': 'first'}, 'first')
+            self.wait(lambda: self.manager.bridge._pending_plan is not None and not self.manager.bridge.busy)
+            self.assertEqual(popup.property('stage'), 'approval')
+            self.assertEqual(geometry, (surface.y(), surface.height()))
+            self.click('confirmApplicationPermission')
+            self.wait(lambda: popup.property('stage') == 'confirmed' and not self.host.busy)
+            self.assertTrue(popup.property('visible'))
+            self.assertEqual(geometry, (surface.y(), surface.height()))
+            self.assertFalse(find(self.window.contentItem(), 'canvasMessageBar').isVisible())
+            self.assertIn('授权已确认', find(self.window.contentItem(), 'applicationPermissionResult').property('text'))
+            capture = os.environ.get('POLARIS_APPLICATION_CAPTURE')
+            if capture:
+                Path(capture).mkdir(parents=True, exist_ok=True)
+                self.window.grabWindow().save(str(Path(capture) / 'application-authorization-result.png'))
+            self.click('finishApplicationPermission')
+            for index in range(3):
+                self.view.bridge.call('tidy', {'text': 'refresh'}, 'refresh-' + str(index))
+                self.wait(lambda: self.host.state == 'done')
+                self.assertFalse(popup.property('visible'))
+                self.assertFalse(self.manager.bridge.notice)
+                self.assertEqual(geometry, (surface.y(), surface.height()))
+            self.assertEqual(plans.count(), 1)
+            self.assertEqual(results.count(), 1)
+            self.assertTrue(self.runtime.authorization.scope(self.app_id))
+
+        def test_authorization_failure_and_cancel_remain_in_popup(self):
+            self.connect('tidy')
+            self.click('closeApplicationConnections')
+            popup = self.window.rootObject().findChild(QObject, 'applicationConnectionsDialog')
+            surface = find(self.window.contentItem(), 'customApplicationSurface')
+            geometry = (surface.y(), surface.height())
+            self.view.bridge.call('tidy', {'text': 'failed'}, 'failed')
+            self.wait(lambda: self.manager.bridge._pending_plan is not None and not self.manager.bridge.busy)
+            with patch.object(self.manager.bridge, '_make_application_plan', side_effect=ValueError('授权校验失败')):
+                self.click('confirmApplicationPermission')
+                self.wait(lambda: popup.property('stage') == 'failed' and not self.host.busy)
+            self.assertEqual(popup.property('resultMessage'), '授权校验失败')
+            self.assertFalse(self.runtime.authorization.scope(self.app_id))
+            self.assertEqual(geometry, (surface.y(), surface.height()))
+            self.assertFalse(find(self.window.contentItem(), 'canvasMessageBar').isVisible())
+            self.click('finishApplicationPermission')
+            self.view.bridge.call('tidy', {'text': 'cancelled'}, 'cancelled')
+            self.wait(lambda: self.manager.bridge._pending_plan is not None and not self.manager.bridge.busy)
+            self.click('cancelApplicationPermission')
+            self.wait(lambda: not self.host.busy)
+            self.assertFalse(popup.property('visible'))
+            self.assertFalse(self.runtime.authorization.scope(self.app_id))
+            self.assertFalse(find(self.window.contentItem(), 'canvasMessageBar').isVisible())
+            self.assertEqual(geometry, (surface.y(), surface.height()))
 
         def test_application_uses_common_runtime_lifecycle_and_owned_data(self):
             from polaris_platform.application import Application
@@ -211,6 +297,7 @@ else:
             second = self.runtime.create_instance('org.example.text-tools')
             self.runtime.start_instance(second)
             self.connect('tidy', choice=2)
+            self.click('closeApplicationConnections')
             self.assertEqual(self.host.store.load(self.app_id).bindings['tidy']['instanceId'], second)
             find(self.view.root, 'studioEditor').setProperty('text', '  second   instance  ')
             self.click('studioTidy')
@@ -227,7 +314,9 @@ else:
 
         def test_real_directory_picker_opens_and_cancels_without_installing(self):
             before = len(self.host.store.list())
-            self.click('addApplication')
+            self.manager.show()
+            self.wait(lambda: self.manager.status()['visible'])
+            self.click('installApplication')
             picker = self.window.rootObject().findChild(QObject, 'applicationDirectoryPicker')
             self.assertIsNotNone(picker)
             self.wait(lambda: picker.property('visible'))
@@ -296,7 +385,7 @@ else:
             replies = QSignalSpy(self.view.bridge.completed)
             self.view.bridge.call('tidy', {'text': 'first'}, 'first')
             self.wait(lambda: self.manager.bridge._pending_plan is not None)
-            self.click('confirmPermission', self.manager._view)
+            self.click('confirmApplicationPermission')
             self.wait(entered.is_set)
             generation = self.host._generation
             self.view.bridge.call('tidy', {'text': 'busy'}, 'busy')

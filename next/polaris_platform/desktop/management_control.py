@@ -40,6 +40,23 @@ class ManagementControlPort:
         factory = getattr(provider, 'local_management_control', None)
         return factory() if callable(factory) else None
 
+    def application_path(self, source_id, package_id, revision):
+        control = self._control()
+        if control is None:
+            raise PlatformError('management_unavailable', '扩展管理未运行')
+        return control.application_path(source_id, package_id, revision)
+
+    def bridge(self):
+        """Trusted Canvas context only; application engines never receive this."""
+        control = self._control()
+        return control.bridge if control is not None else None
+
+    def cancel_pending_ui(self):
+        control = self._control()
+        cancel = getattr(control, 'cancel_pending_ui', None)
+        if callable(cancel):
+            cancel()
+
     def request_mount(self, requester, target, view_id, on_finished=None):
         control = self._control()
         if control is None:

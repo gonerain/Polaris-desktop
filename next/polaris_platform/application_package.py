@@ -24,14 +24,39 @@ def _manifest(root):
         value = json.loads((root / MANIFEST).read_text(encoding='utf-8'))
     except (OSError, UnicodeError, ValueError) as error:
         raise PlatformError('invalid_application_package', 'Cannot read application manifest') from error
-    if not isinstance(value, dict) or set(value) != {'id', 'name', 'version', 'entry', 'requires'}:
+    if (not isinstance(value, dict) or not {'id', 'name', 'version', 'entry', 'requires'} <= set(value)
+            or set(value) - {'id', 'name', 'version', 'entry', 'requires', 'dependencies', 'callbacks'}):
         _invalid('Manifest requires id, name, version, entry and requires')
+    dependencies = value.get('dependencies', [])
+    if (not isinstance(dependencies, list)
+            or any(not isinstance(item, str) or not item.strip() for item in dependencies)
+            or len(set(dependencies)) != len(dependencies)):
+        _invalid('Dependencies must be unique component type IDs')
+    callbacks = value.get('callbacks', {})
+    if not isinstance(callbacks, dict):
+        _invalid('Callbacks must be an operation map')
+    for name, callback in callbacks.items():
+        from .contracts import contract_version
+        if (not isinstance(name, str) or not name or not isinstance(callback, dict)
+                or not {'contract', 'parameters'} <= set(callback)
+                or set(callback) - {'contract', 'parameters', 'label'}
+                or not isinstance(callback['parameters'], dict)
+                or callback['parameters'].get('type') != 'object'
+                or ('label' in callback and (not isinstance(callback['label'], str) or not callback['label'].strip()))):
+            _invalid('Invalid application callback')
+        try:
+            contract_version(callback['contract'])
+        except PlatformError:
+            _invalid('Invalid callback contract')
     for field in ('id', 'name', 'version'):
         if not isinstance(value[field], str) or not value[field].strip():
             _invalid('Manifest identity fields must be nonempty strings')
     entry = value['entry']
-    if not isinstance(entry, dict) or set(entry) != {'adapter', 'file'} or entry['adapter'] != 'qt-quick':
+    if (not isinstance(entry, dict) or not {'adapter', 'file'} <= set(entry)
+            or set(entry) - {'adapter', 'file', 'backend'} or entry['adapter'] != 'qt-quick'):
         _invalid('Only a qt-quick entry is supported')
+    if callbacks and 'backend' not in entry:
+        _invalid('Callbacks require a backend entry')
     filename = entry['file']
     if not isinstance(filename, str) or not filename or '\\' in filename:
         _invalid('Invalid entry path')
@@ -40,6 +65,13 @@ def _manifest(root):
         _invalid('Entry must be a relative QML path')
     if not (root / filename).is_file():
         _invalid('Entry QML file does not exist')
+    if 'backend' in entry:
+        backend = entry['backend']
+        if (not isinstance(backend, str) or not backend or chr(92) in backend
+                or PurePosixPath(backend).is_absolute()
+                or any(part in ('.', '..') for part in backend.split('/'))
+                or not backend.endswith('.py') or not (root / backend).is_file()):
+            _invalid('Backend must be an existing relative Python path')
     requirements = value['requires']
     if not isinstance(requirements, dict):
         _invalid('Requirements must be an alias map')
@@ -122,7 +154,7 @@ class ApplicationPackageStore:
     def load_verified(self, app):
         if not isinstance(app, ApplicationDefinition) or not app.package:
             _invalid('Application has no package')
-        root = self.directory / app.id
+        root = self.directory / app.package['snapshot']
         if root.is_symlink() or not root.is_dir():
             raise PlatformError('application_package_changed', 'Application snapshot is missing or changed')
         try:
@@ -133,12 +165,13 @@ class ApplicationPackageStore:
         except (OSError, PlatformError) as error:
             raise PlatformError('application_package_changed', 'Application snapshot is missing or changed') from error
         return {'entry': str((root / manifest['entry']['file']).absolute()),
+                'backend': (root / manifest['entry']['backend']).absolute() if 'backend' in manifest['entry'] else None,
                 'requires': manifest['requires'], 'manifest': manifest}
 
     def remove(self, app):
-        if not isinstance(app, ApplicationDefinition) or not app.package or app.package['snapshot'] != app.id:
+        if not isinstance(app, ApplicationDefinition) or not app.package:
             _invalid('Application has no package')
-        root = self.directory / app.id
+        root = self.directory / app.package['snapshot']
         if root.is_symlink():
             root.unlink()
         elif root.exists():

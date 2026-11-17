@@ -85,33 +85,9 @@ if __name__ == '__main__':
             def choose(target):
                 rt.select_provider('pet', 'operation', 'open_canvas', 'show', rt.status(target)['installation'], rt.status('pet')['installation'])
             try:
-                from PySide6.QtCore import Qt
-                from PySide6.QtTest import QTest
-                self.manager.show()
+                self.manager.bridge.selectProvider('pet', 'operation', 'open_canvas', 'show',
+                    rt.status('alternate')['installation'], rt.status('pet')['installation'])
                 self.wait_bridge()
-                self.manager.bridge.refresh()
-                self.wait_bridge()
-                window = self.manager._view
-                root = window.rootObject()
-                root.setProperty('selectedId', 'pet')
-                def click(name):
-                    controls = []
-                    items = [root]
-                    while items:
-                        item = items.pop()
-                        if item.objectName().startswith(('dependencies_', 'provider_')):
-                            controls.append(item.objectName())
-                        if item.objectName() == name:
-                            pos = item.mapToScene(item.boundingRect().center()).toPoint()
-                            self.assertTrue(item.isVisible() and item.isEnabled(), (name, pos))
-                            QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, pos)
-                            QTest.qWait(25)
-                            self.wait_bridge()
-                            return
-                        items.extend(item.childItems())
-                    self.fail(f"Missing {name}, open={root.property('expandedCapability')}, controls={controls}")
-                click('dependencies_open_canvas')
-                click('provider_canvas_alternate')
                 preview = self.manager.bridge._make_plan('user', 'pet', 'open_canvas')
                 self.assertEqual({row['name'] for row in preview['permissions'] if row['target'] == 'alternate'},
                                  {'present', 'inspect', 'closed'})
@@ -145,14 +121,13 @@ if __name__ == '__main__':
             control.report_notice('local notice')
             self.assertEqual(self.manager.bridge.notice, 'local notice')
             self.manager.show()
-            root = self.manager._view.rootObject()
-            from PySide6.QtCore import Qt
-            from PySide6.QtTest import QTest
-            button = root.findChild(QObject, 'aboutButton')
-            point = button.mapToScene(button.boundingRect().center()).toPoint()
-            QTest.mouseClick(self.manager._view, Qt.LeftButton, Qt.NoModifier, point)
+            self.wait_management()
+            root = self.host._views[self.canvas.handle].rootObject()
+            root.setProperty('settingsSection', 'about')
             self.app.processEvents()
-            self.assertTrue(root.findChild(QObject, 'aboutDialog').property('visible'))
+            self.assertTrue(root.findChild(QObject, 'canvasAboutPage').property('visible'))
+            self.assertEqual(root.findChild(QObject, 'canvasAboutVersion').property('text'),
+                             'Polaris  v' + metadata.VERSION)
             info = json.loads(self.manager.bridge.aboutJson)
             self.assertEqual(info['DISPLAY_VERSION'], metadata.DISPLAY_VERSION)
             class AlternateManager(Component):
@@ -232,29 +207,40 @@ if __name__ == '__main__':
             self.assertTrue(self.call('canvas', 'show')['visible'])
             self.assertFalse(self.call('canvas', 'hide')['visible'])
             self.assertEqual(self.runtime.status('canvas')['state'], 'running')
-            self.assertEqual(self.canvas.cards[0]['title'], 'Hello')
+            self.assertEqual(self.canvas.workbench.cards[0]['title'], 'Hello')
             self.call('pet', 'say', {'message': 'Hello'})
             self.manager.show()
+            self.wait_management()
             self.runtime.stop_component('canvas')
-            self.assertTrue(self.manager.status()['visible'])
+            self.assertFalse(self.manager.status()['visible'])
             self.runtime.stop_component('window')
-            self.assertTrue(self.manager.status()['visible'])
+            self.assertFalse(self.manager.status()['visible'])
             with self.assertRaises(PlatformError): self.call('pet', 'show')
             self.runtime.stop_component('pet')
             self.assertEqual(self.runtime.status('pet')['state'], 'stopped')
-            self.assertTrue(self.manager.status()['visible'])
+            self.assertFalse(self.manager.status()['visible'])
             self.runtime.start_component('window')
             self.runtime.start_component('pet')
             self.assertTrue(self.call('pet', 'show')['visible'])
             self.manager.show()
+            self.wait_management()
             self.assertTrue(self.manager.status()['visible'])
+
+        def wait_management(self):
+            from PySide6.QtTest import QTest
+            for _ in range(300):
+                self.app.processEvents()
+                if self.manager.status()['visible']:
+                    return
+                QTest.qWait(5)
+            self.fail(self.manager.bridge.notice)
 
         def test_gui_assets_and_snapshot(self):
             self.call('canvas', 'show')
             self.call('pet', 'show')
             self.manager.show()
             for _ in range(30): self.app.processEvents()
-            for view in list(self.host._views.values()) + [self.manager._view]:
+            for view in list(self.host._views.values()):
                 self.assertFalse(view.errors())
                 image = view.grabWindow()
                 self.assertFalse(image.isNull())
@@ -275,6 +261,7 @@ if __name__ == '__main__':
             self.assertTrue(self.call('pet', 'show')['visible'])
             self.assertEqual(self.pet.properties['message'], 'Keep this bubble')
             self.manager.show()
+            self.wait_management()
             self.assertTrue(self.manager.status()['visible'])
             self.runtime.stop_component('canvas')
             self.assertEqual(len(replacement._views), 1)
@@ -282,10 +269,10 @@ if __name__ == '__main__':
         def wait_bridge(self):
             import time
             deadline = time.monotonic() + 5
-            while self.manager.bridge.busy and time.monotonic() < deadline:
+            while self.manager.bridge._busy and time.monotonic() < deadline:
                 self.app.processEvents()
                 time.sleep(.005)
-            self.assertFalse(self.manager.bridge.busy)
+            self.assertFalse(self.manager.bridge._busy)
 
         def test_explicit_view_plan_and_dynamic_event_permissions(self):
             import json

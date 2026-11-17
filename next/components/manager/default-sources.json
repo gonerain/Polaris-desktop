@@ -1,5 +1,33 @@
 [
-  {"name":"微信","component":"org.polaris.weixin","location":"https://github.com/gonerain/Polaris-weixin.git","legacyDirectory":"weixin","legacyFactory":"polaris_weixin:create"},
-  {"name":"日程","component":"org.polaris.schedule","location":"https://github.com/gonerain/Polaris-schedule.git","legacyDirectory":"schedule","legacyFactory":"polaris_schedule:create"},
-  {"name":"Agent Bridge","component":"org.polaris.agent","location":"https://github.com/gonerain/Polaris-agent.git","legacyDirectory":"agent","legacyFactory":"polaris_agent:create"}
+  {
+    "name": "Polaris 官方目录",
+    "components": [
+      {
+        "component": "org.polaris.weixin",
+        "legacyDirectory": "weixin",
+        "legacyFactory": "polaris_weixin:create"
+      },
+      {
+        "component": "org.polaris.schedule",
+        "legacyDirectory": "schedule",
+        "legacyFactory": "polaris_schedule:create"
+      },
+      {
+        "component": "org.polaris.agent",
+        "legacyDirectory": "agent",
+        "legacyFactory": "polaris_agent:create"
+      }
+    ],
+    "location": "https://github.com/gonerain/Polaris-desktop.git",
+    "ref": "codex/marketplace-catalog",
+    "defaultCatalog": true,
+    "migrateLegacy": {
+      "migration": "unified-remote-catalog-v1",
+      "remoteLocations": [
+        "https://github.com/gonerain/Polaris-weixin.git",
+        "https://github.com/gonerain/Polaris-schedule.git",
+        "https://github.com/gonerain/Polaris-agent.git"
+      ]
+    }
+  }
 ]

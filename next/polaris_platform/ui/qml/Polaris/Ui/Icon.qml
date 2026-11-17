@@ -2,9 +2,10 @@ import QtQuick
 import QtQuick as Quick
 
 Quick.Canvas {
+    required property QtObject theme
     property string kind: "plus"
-    property color ink: "#606570"
-    width: 18; height: 18
+    property color ink: theme.muted
+    width: theme.iconSize; height: theme.iconSize
     onWidthChanged: requestPaint()
     onHeightChanged: requestPaint()
     onKindChanged: requestPaint()
@@ -22,6 +23,11 @@ Quick.Canvas {
         else if (kind === "resize") { c.moveTo(7, 14); c.lineTo(14, 7); c.moveTo(11, 14); c.lineTo(14, 11) }
         else if (kind === "star") { c.moveTo(9, 2); c.lineTo(10.5, 7.5); c.lineTo(16, 9); c.lineTo(10.5, 10.5); c.lineTo(9, 16); c.lineTo(7.5, 10.5); c.lineTo(2, 9); c.lineTo(7.5, 7.5); c.closePath() }
         else if (kind === "board") { c.roundedRect(3, 3, 12, 12, 2, 2); c.moveTo(7, 3); c.lineTo(7, 15) }
+        else if (kind === "apps") { c.roundedRect(3, 3, 5, 5, 1, 1); c.roundedRect(10, 3, 5, 5, 1, 1); c.roundedRect(3, 10, 5, 5, 1, 1); c.roundedRect(10, 10, 5, 5, 1, 1) }
+        else if (kind === "settings") {
+            for (var i = 0; i < 16; ++i) { var angle = i * Math.PI / 8; var r = i % 4 === 0 || i % 4 === 3 ? 7 : 5.5; var x = 9 + Math.cos(angle) * r; var y = 9 + Math.sin(angle) * r; if (i === 0) c.moveTo(x,y); else c.lineTo(x,y) }
+            c.closePath(); c.stroke(); c.beginPath(); c.arc(9,9,2.4,0,Math.PI*2)
+        }
         else if (kind === "palette") {
             c.moveTo(15, 9); c.bezierCurveTo(15, 5.3, 12.4, 3, 9, 3)
             c.bezierCurveTo(5.5, 3, 3, 5.6, 3, 9); c.bezierCurveTo(3, 12.5, 5.5, 15, 8.5, 15)

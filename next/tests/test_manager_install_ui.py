@@ -48,17 +48,23 @@ def exercise():
     bridge = ManagerBridge(runtime)
     window = QQuickView()
     window.setResizeMode(QQuickView.SizeRootObjectToView)
-    window.rootContext().setContextProperty('manager', bridge)
-    window.setSource(QUrl.fromLocalFile(str(Path(__file__).parents[1] / 'components/manager/Manager.qml')))
+    from polaris_platform.ui import configure_qml_engine
+    configure_qml_engine(window.engine())
+    window.rootContext().setContextProperty('testManager', bridge)
+    wrapper_temp = tempfile.TemporaryDirectory()
+    wrapper = Path(wrapper_temp.name) / 'Embedded.qml'
+    directory = (Path(__file__).parents[1] / 'components/manager').as_uri()
+    wrapper.write_text('import QtQuick\nimport Polaris.Ui 1.0 as Ui\nimport "' + directory + '" as Management\nItem { Ui.Theme { id: colors } Management.Manager { anchors.fill: parent; manager: testManager; theme: colors; category: "components" } Management.ManagementDialogs { anchors.fill: parent; manager: testManager; theme: colors } }')
+    window.setSource(QUrl.fromLocalFile(str(wrapper)))
     assert not window.errors(), window.errors()
     window.resize(1040, 760)
     window.show()
     QTest.qWait(150)
     def wait():
         deadline = time.monotonic() + 3
-        while bridge.busy and time.monotonic() < deadline: QTest.qWait(10)
+        while bridge._busy and time.monotonic() < deadline: QTest.qWait(10)
         QTest.qWait(40)
-        assert not bridge.busy
+        assert not bridge._busy
     def click(name):
         def find(item):
             if item.objectName() == name: return item
@@ -106,8 +112,10 @@ def exercise():
     class Sources:
         def __init__(self): self.rows = []; self.installs = []
         def local_source_control(self): return self
-        def sources(self): return self.rows
-        def add(self, location):
+        def sources(self): return copy.deepcopy(self.rows)
+        def installation_origin(self, identity): return None
+        def add(self, location, ref=None):
+            self.last_ref = ref
             release.wait(2)
             self.rows = [dict(id='source', revision='commit', location=location, name='测试源', components=[
                 dict(path='one', manifest=dict(id='one', name='插件一', version='1')),
@@ -120,9 +128,12 @@ def exercise():
     source_state = {'state': 'running'}
     runtime.status = lambda target: source_state
     runtime.component_instance = lambda target: sources
+    click('extensionsMarketTab')
     click('sourceButton')
     location = window.rootObject().findChild(QObject, 'sourceLocation')
     location.setProperty('text', '/tmp/example-source')
+    source_ref = window.rootObject().findChild(QObject, 'sourceRef')
+    source_ref.setProperty('text', 'release')
     control = window.rootObject().findChild(QObject, 'addSource')
     point = control.mapToScene(control.boundingRect().center())
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, QPoint(round(point.x()), round(point.y())))
@@ -132,8 +143,10 @@ def exercise():
     release.set(); wait()
     assert len(json.loads(bridge.sourcesJson)[0]['components']) == 2
     assert sources.installs == []
+    assert sources.last_ref == 'release'
+    click('closeSources')
     click('installSource_one')
-    assert sources.installs == [('source', 'one', {})]
+    assert sources.installs == [('source', 'one', {'expected_revision':'commit'})]
     # Same ID source replacement uses the existing confirmation and identity check.
     runtime.record = dict(manifest=dict(id='one', name='插件一'), installationId='old', directory='/old')
     click('installSource_one')
@@ -152,6 +165,7 @@ def exercise():
     assert len(sources.rows) == 1 and len(sources.installs) == 2
     bridge._closed = True
     window.close()
+    wrapper_temp.cleanup()
 
 
 if __name__ == '__main__':

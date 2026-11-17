@@ -71,8 +71,11 @@ print(json.dumps(result))
                 self.assertEqual(payload['runtimeState'], 'running')
                 if failed != 'manager':
                     self.assertEqual(payload['managerState'], 'running')
-                    self.assertIn(f'组件 {failed} 启动失败', payload['notice'])
-                    self.assertEqual(payload['managerVisible'], failed in ('window', 'pet'))
+                    if failed != 'window':
+                        self.assertIn(f'组件 {failed} 启动失败', payload['notice'])
+                    else:
+                        self.assertTrue(payload['notice'])
+                    self.assertEqual(payload['managerVisible'], failed == 'pet')
                 if failed not in ('pet', 'window'):
                     self.assertTrue(payload['petVisible'])
 
@@ -166,4 +169,4 @@ print(json.dumps(result))
                 self.assertEqual(payload['removed'], sorted(removed))
                 self.assertEqual(payload['managerState'], 'running')
                 self.assertNotEqual(payload['sourcesState'], 'running')
-                self.assertEqual(payload['managerVisible'], phase != 'remove')
+                self.assertFalse(payload['managerVisible'], 'No independent management window is created when its Canvas/Window host is removed')

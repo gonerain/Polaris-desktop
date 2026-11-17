@@ -224,7 +224,7 @@ Rectangle {
         onOpened: root.menuRegionEpoch++
         // Qt 6.5 already uses Item popups; newer Qt may choose native windows.
         Component.onCompleted: if ('popupType' in petMenu) petMenu['popupType'] = 0
-        MenuItem { objectName: 'managePetMenuItem'; text: '组件管理'; onTriggered: petActions.management() }
+        MenuItem { objectName: 'managePetMenuItem'; text: '扩展管理'; onTriggered: petActions.management() }
         MenuItem { objectName: 'quitPetMenuItem'; text: '退出'; onTriggered: petActions.quit() }
     }
 }

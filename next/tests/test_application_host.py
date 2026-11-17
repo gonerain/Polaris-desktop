@@ -131,6 +131,81 @@ class ApplicationHostTests(unittest.TestCase):
         self.assertIn('Inputs require', self.host.error)
         self.assertEqual(len(list((Path(self.temporary.name) / 'applications').glob('*.json'))), 1)
 
+    def test_canvas_message_dismissal_keeps_execution_error_and_repeated_failures_visible(self):
+        self.import_app()
+        self.host._feedback = '已安装'
+        self.host.select(self.app.id)
+        self.assertEqual(self.host.feedback, '已安装', 'Reselecting this page is not navigation')
+        self.host._run_app = self.app.id
+        self.host._generation += 1
+        self.host._state, self.host._error = 'error', '执行失败'
+        self.assertEqual(self.host.messageError, '执行失败')
+        self.host.dismissMessage()
+        self.assertEqual(self.host.messageError, '')
+        self.assertEqual((self.host.state, self.host.error), ('error', '执行失败'))
+        self.assertEqual(self.host.feedback, '')
+        self.host._generation += 1
+        self.assertEqual(self.host.messageError, '执行失败', 'A new run can fail with the same message')
+        self.host._notice = '安装失败'
+        self.host.dismissMessage()
+        self.host._notice = '安装失败'
+        self.assertEqual(self.host.messageError, '安装失败', 'A repeated operation error is new feedback')
+        self.host.select('')
+        self.assertEqual(self.host.messageError, '')
+        self.host.select(self.app.id)
+        self.assertEqual(self.host.messageError, '')
+
+    def test_canvas_navigation_ends_success_without_a_timer(self):
+        self.import_app()
+        self.host.revoke()
+        self.assertTrue(self.host.feedback)
+        self.host.select('')
+        self.assertEqual(self.host.feedback, '')
+
+    def test_management_install_update_remove_use_explicit_id_without_selecting_or_destroying_instances(self):
+        self.import_app()
+        selected = self.host._selected
+        provider = self.runtime.status('provider')['instanceId']
+        source = Path(self.temporary.name) / 'managed-package'
+        source.mkdir()
+        (source / 'Main.qml').write_text('import QtQuick\nItem {}')
+        manifest = dict(id='managed.app', name='Managed app', version='1',
+                        entry={'adapter': 'qt-quick', 'file': 'Main.qml'}, requires={})
+        (source / 'polaris-application.json').write_text(json.dumps(manifest))
+        installed = self.host.installPackage(str(source))
+        self.assertTrue(installed, self.host.error)
+        self.assertEqual(self.host._selected, selected)
+        self.assertNotIn(installed, self.host._views, 'Browsing/installing does not open the app')
+        rows = json.loads(self.host.managedApplicationsJson)
+        self.assertEqual(next(row['version'] for row in rows if row['applicationId'] == installed), '1')
+        manifest['version'] = '2'
+        (source / 'polaris-application.json').write_text(json.dumps(manifest))
+        self.host.updateApplication(installed, str(source))
+        self.assertFalse(self.host.error, self.host.error)
+        self.assertEqual(self.host._selected, selected)
+        self.assertEqual(self.host.packages.load_verified(self.host.store.load(installed))['manifest']['version'], '2')
+        self.host.removeApplication(installed)
+        self.assertFalse(self.host.error, self.host.error)
+        self.assertEqual(self.host._selected, selected)
+        self.assertEqual(self.runtime.status(provider)['state'], 'running')
+        self.assertEqual(self.host.store.load(selected).bindings['echo']['instanceId'], provider)
+
+    def test_closing_success_or_navigating_during_run_does_not_dismiss_its_later_error(self):
+        self.import_app()
+        self.host._run_app = self.app.id
+        self.host._generation += 1
+        self.host._state, self.host._error, self.host._feedback = 'running', '', '组件已连接'
+        self.host.dismissMessage()
+        self.host._finish(self.host._generation, '', '执行失败')
+        self.assertEqual(self.host.messageError, '执行失败')
+        self.host._generation += 1
+        self.host._state, self.host._error = 'running', ''
+        with patch.object(self.host, '_background_enabled', return_value=True):
+            self.host.select('')
+            self.host._finish(self.host._generation, '', '后台执行失败')
+            self.host.select(self.app.id)
+        self.assertEqual(self.host.messageError, '后台执行失败')
+
     def test_approval_is_explicit_and_execution_uses_only_app_origin(self):
         self.import_app()
         def request(port, definition, flow, callback, validate=None):

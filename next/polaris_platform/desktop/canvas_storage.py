@@ -1,2 +1,2 @@
-"""Compatibility imports for canvas storage."""
-from components.canvas.storage import CanvasStorage, layout
+"""Public imports for the workbench layout file shared with its shell."""
+from ..builtin_apps.workbench.storage import CanvasStorage, layout

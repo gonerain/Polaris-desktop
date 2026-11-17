@@ -78,14 +78,14 @@ else:
             QTest.qWait(20)
             self.gate = threading.Event()
             self.waiting = threading.Event()
-            self.original_run = self.canvas.dispatcher.run
+            self.original_run = self.canvas.workbench.dispatcher.run
             def gated_run(function):
                 if QThread.currentThread() != self.app.thread():
                     self.waiting.set()
                     if not self.gate.wait(3):
                         raise RuntimeError('Test did not release native attach')
                 return self.original_run(function)
-            self.canvas.dispatcher.run = gated_run
+            self.canvas.workbench.dispatcher.run = gated_run
             self.errors = []
             self.canvas.actions.failed.connect(lambda *error: self.errors.append(error))
 
@@ -97,7 +97,7 @@ else:
 
         def tearDown(self):
             self.gate.set()
-            self.wait(lambda: not self.canvas._workers)
+            self.wait(lambda: not self.canvas.workbench._workers and not self.canvas._workers)
             for record in reversed(self.runtime.snapshot()):
                 if record['state'] == 'running':
                     self.runtime.stop_component(record['id'], persist=False)
@@ -116,13 +116,13 @@ else:
             self.assertIsNot(replacement, self.canvas)
             self.client.call('canvas', 'show', context=self.context)
             self.gate.set()
-            self.wait(lambda: not self.canvas._workers)
+            self.wait(lambda: not self.canvas.workbench._workers and not self.canvas._workers)
             self.assertEqual(self.provider.created, 0)
             self.assertEqual(replacement.status()['mounts'], [])
             self.assertEqual(self.errors, [])
 
         def test_stop_during_provider_create_discards_late_native_result(self):
-            self.canvas.dispatcher.run = self.original_run
+            self.canvas.workbench.dispatcher.run = self.original_run
             self.gate.set()
             stopper_errors = []
             def stop():
@@ -140,7 +140,7 @@ else:
             self.provider.on_create = during_create
             self.client.call('canvas', 'mount', {'target': 'provider'}, context=self.context)
             self.wait(lambda: self.provider.created == 1)
-            self.wait(lambda: not self.canvas._workers and not self.stopper.is_alive())
+            self.wait(lambda: not self.canvas.workbench._workers and not self.canvas._workers and not self.stopper.is_alive())
             self.assertEqual(stopper_errors, [])
             self.assertEqual(self.canvas.status()['mounts'], [])
             import shiboken6
@@ -151,7 +151,7 @@ else:
             self.queue_attach()
             self.runtime.stop_component('window')
             self.gate.set()
-            self.wait(lambda: not self.canvas._workers)
+            self.wait(lambda: not self.canvas.workbench._workers and not self.canvas._workers)
             self.assertEqual(self.provider.created, 0)
             self.assertEqual(self.canvas.status()['mounts'], [])
             self.assertEqual(self.errors, [])
@@ -162,7 +162,7 @@ else:
             self.runtime.replace_component('window', manifest, lambda: WindowHost(runtime=self.runtime))
             self.client.call('canvas', 'show', context=self.context)
             self.gate.set()
-            self.wait(lambda: not self.canvas._workers)
+            self.wait(lambda: not self.canvas.workbench._workers and not self.canvas._workers)
             self.assertEqual(self.provider.created, 0)
             self.assertEqual(self.canvas.status()['mounts'], [])
             self.assertEqual(self.errors, [])

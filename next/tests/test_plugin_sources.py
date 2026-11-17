@@ -231,8 +231,12 @@ class SourceTests(unittest.TestCase):
     def test_external_reinstallation_does_not_inherit_source_record(self):
         source = self.control.add(str(self.repository))
         self.control.install(source['id'], 'one')
+        origin = self.control.installation_origin('one')
+        self.assertEqual(origin['sourceId'], source['id'])
+        self.assertEqual(origin['revision'], source['revision'])
         self.runtime.uninstall_component('one')
         self.runtime.install_directory(self.repository / 'one')
+        self.assertIsNone(self.control.installation_origin('one'))
         with self.assertRaises(PlatformError) as error:
             self.control.update('one')
         self.assertEqual(error.exception.code, 'installation_changed')
@@ -258,6 +262,155 @@ class SourceTests(unittest.TestCase):
         self.commit()
         with self.assertRaises(PlatformError):
             self.control.add(str(self.repository))
+
+    def application(self, version='1'):
+        directory = self.repository / 'app'
+        directory.mkdir(exist_ok=True)
+        (directory / 'Main.qml').write_text('import QtQuick\nItem {}')
+        (directory / 'polaris-application.json').write_text(json.dumps(dict(
+            id='example.app', name='Example', version=version,
+            entry=dict(adapter='qt-quick', file='Main.qml'), requires={})))
+
+    def test_application_catalog_snapshot_and_revision(self):
+        self.application()
+        (self.repository / 'polaris-source.json').write_text(json.dumps(dict(
+            schemaVersion=1, name='Fixture', components=[{'path': 'one'}],
+            applications=[{'path': 'app', 'description': 'Example application'}])))
+        self.commit()
+        source = self.control.add(str(self.repository))
+        self.assertEqual(len(self.control.catalog(source['id'])), 1)
+        row, = self.control.application_catalog(source['id'])
+        self.assertEqual(row['manifest']['version'], '1')
+        self.assertEqual(row['description'], 'Example application')
+        path = Path(self.control.application_path(source['id'], 'example.app', source['revision']))
+        self.application('2')
+        self.commit()
+        updated = self.control.refresh(source['id'])
+        self.assertEqual(json.loads((path / 'polaris-application.json').read_text())['version'], '1')
+        self.assertEqual(self.control.application_catalog(source['id'])[0]['manifest']['version'], '2')
+        with self.assertRaises(PlatformError) as error:
+            self.control.application_path(source['id'], 'example.app', source['revision'])
+        self.assertEqual(error.exception.code, 'source_changed')
+        self.assertNotEqual(path, Path(self.control.application_path(source['id'], 'example.app', updated['revision'])))
+
+    def test_v2_packages_metadata_and_content_digests(self):
+        self.application()
+        assets = self.repository / 'assets'
+        assets.mkdir()
+        (assets / 'icon.png').write_bytes(b'icon')
+        (assets / 'readme.md').write_text('details')
+        index = self.repository / 'polaris-source.json'
+        entries = [dict(type='component', path='one', summary='One', author='Author', icon='assets/icon.png', tags=['tools']),
+                   dict(type='application', path='app', summary='App', author='Author', icon='assets/icon.png', readme='assets/readme.md')]
+        def save():
+            index.write_text(json.dumps(dict(schemaVersion=2, name='Mixed', packages=entries)))
+            self.commit()
+        save()
+        source = self.control.add(str(self.repository))
+        rows = self.control.packages(source['id'])
+        self.assertEqual({r['type'] for r in rows}, {'component', 'application'})
+        component = next(r for r in rows if r['type'] == 'component')
+        app = next(r for r in rows if r['type'] == 'application')
+        installed = self.control.install(source['id'], 'one')
+        self.runtime.start_component('one')
+        instance = self.runtime.status('one')['instance']
+        self.assertEqual(self.control.installation_origin('one')['contentDigest'], component['contentDigest'])
+        entries[0]['summary'] = 'Changed presentation'
+        (assets / 'icon.png').write_bytes(b'new icon')
+        save()
+        updated = self.control.refresh(source['id'])
+        rows = self.control.packages(source['id'])
+        self.assertEqual(next(r for r in rows if r['type'] == 'component')['contentDigest'], component['contentDigest'])
+        self.assertEqual(next(r for r in rows if r['type'] == 'application')['contentDigest'], app['contentDigest'])
+        self.assertEqual(self.control.update('one'), installed)
+        self.assertEqual(self.runtime.status('one')['instance'], instance)
+        self.plugin('one', '2')
+        save()
+        self.control.refresh(source['id'])
+        self.assertNotEqual(self.control.catalog(source['id'])[0]['contentDigest'], component['contentDigest'])
+        self.control.update('one')
+        self.assertEqual(self.runtime.status('one')['manifest']['version'], '2')
+        self.control.rollback('one')
+        self.assertEqual(self.control.installation_origin('one')['contentDigest'], component['contentDigest'])
+
+    def test_component_digest_tracks_linked_directory_contents(self):
+        shared = self.repository / 'shared'
+        shared.mkdir()
+        (shared / 'helper.py').write_text('VALUE = 1\n')
+        (self.repository / 'one' / 'shared').symlink_to('../shared', target_is_directory=True)
+        self.commit()
+        source = self.control.add(str(self.repository))
+        before = self.control.catalog(source['id'])[0]['contentDigest']
+        (shared / 'helper.py').write_text('VALUE = 2\n')
+        self.commit()
+        self.control.refresh(source['id'])
+        self.assertNotEqual(self.control.catalog(source['id'])[0]['contentDigest'], before)
+
+    def test_v1_display_document_must_stay_in_source(self):
+        index = self.repository / 'polaris-source.json'
+        index.write_text(json.dumps(dict(schemaVersion=1, name='Fixture',
+                                        components=[{'path':'one', 'readme':'../outside'}])))
+        self.commit()
+        with self.assertRaises(PlatformError):
+            self.control.add(str(self.repository))
+
+    def test_v2_rejects_invalid_fields_and_assets(self):
+        index = self.repository / 'polaris-source.json'
+        asset = self.repository / 'icon.png'
+        asset.write_bytes(b'icon')
+        valid = dict(type='component', path='one', summary='One', author='Author', icon='icon.png')
+        for change in ({'author': ''}, {'icon': '../outside'}, {'icon': 'one/manifest.json'},
+                       {'screenshots': ['missing.png']}, {'tags': [3]}, {'type': 'other'}):
+            entry = dict(valid, **change)
+            index.write_text(json.dumps(dict(schemaVersion=2, name='Fixture', packages=[entry])))
+            self.commit()
+            with self.assertRaises(PlatformError):
+                self.control.add(str(self.repository))
+
+    def test_application_only_source_and_invalid_entries(self):
+        self.application()
+        index = self.repository / 'polaris-source.json'
+        def write(entries):
+            index.write_text(json.dumps(dict(schemaVersion=1, name='Apps', applications=entries)))
+            self.commit()
+        write([{'path': 'app'}])
+        source = self.control.add(str(self.repository))
+        self.assertEqual(self.control.catalog(source['id']), [])
+        self.assertEqual(len(self.control.application_catalog(source['id'])), 1)
+        for entries in ([{'path': '../outside'}], [{'path': 'app'}, {'path': 'app'}],
+                        [{'path': 'app', 'description': 3}]):
+            write(entries)
+            with self.assertRaises(PlatformError):
+                self.control.add(str(self.repository))
+        (self.repository / 'app' / 'Main.qml').unlink()
+        write([{'path': 'app'}])
+        with self.assertRaises(PlatformError):
+            self.control.add(str(self.repository))
+
+    def test_archived_catalogs_remain_readable_and_archive_rolls_back_on_save_failure(self):
+        self.application()
+        (self.repository / 'polaris-source.json').write_text(json.dumps(dict(
+            schemaVersion=1, name='Fixture', components=[{'path':'one'}], applications=[{'path':'app'}])))
+        self.commit()
+        source = self.control.add(str(self.repository))
+        installed = self.control.install(source['id'], 'one')
+        before = deepcopy(self.sources._data)
+        with patch.object(self.sources, '_save', side_effect=OSError('disk full')):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                self.control.archive_sources([source['id']], 'migration')
+        self.assertEqual(self.sources._data, before)
+        self.assertEqual(Sources(self.runtime, self.root / 'state')._data, before)
+        self.control.archive_sources([source['id']], 'migration')
+        self.assertEqual(self.control.catalog(), [])
+        self.assertEqual(self.control.application_catalog(), [])
+        self.assertEqual(self.control.packages(), [])
+        self.assertEqual(len(self.control.catalog(source['id'])), 1)
+        self.assertEqual(len(self.control.application_catalog(source['id'])), 1)
+        self.assertEqual(len(self.control.packages(source['id'])), 2)
+        self.assertEqual(self.control.installation_origin('one')['installationId'], installed['installationId'])
+        new_source = self.control.add(str(self.repository))
+        self.control.archive_sources([new_source['id']], 'migration')
+        self.assertFalse(next(row for row in self.control.sources() if row['id'] == new_source['id']).get('archived', False))
 
     def test_local_symlink_escape_and_active_request_denied(self):
         plain = self.root / 'plain'

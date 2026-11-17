@@ -1,5 +1,6 @@
 """Black-box Qt interactions for canvas sessions and third-party native views."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -122,8 +123,8 @@ else:
                 result = self.call('canvas', 'mount', {'target': 'org.example.counter', 'view': 'main',
                                                        'descriptor': {'preferredSize': preferred}})
                 identity = result['mountId']
-                self.wait(lambda: self.canvas.mounts[identity]['state'] == 'mounted')
-                record = self.canvas.mounts[identity]
+                self.wait(lambda: self.canvas.workbench.mounts[identity]['state'] == 'mounted')
+                record = self.canvas.workbench.mounts[identity]
                 self.assertEqual((record['layout']['width'], record['layout']['height']), expected)
                 parent = record['container']
                 before = parent.property('polarisTheme').toVariant()['background']
@@ -135,19 +136,19 @@ else:
                 self.assertNotEqual(parent.property('polarisTheme').toVariant()['background'], before)
                 self.canvas.actions.setTheme('dark')
                 self.call('canvas', 'unmount', {'mountId': identity})
-                self.wait(lambda: identity not in self.canvas.mounts)
+                self.wait(lambda: identity not in self.canvas.workbench.mounts)
 
         def test_text_cards_and_explicit_arrange_do_not_overlap(self):
             self.call('canvas', 'set_cards', {'cards': [{'title': 'One'}, {'title': 'Two'}]})
             first, second = self.mount(), self.mount()
-            self.assertGreaterEqual(self.canvas.mounts[first]['layout']['y'], 168)
-            self.canvas.actions.arrange(1000)
-            layouts = [self.canvas.mounts[identity]['layout'] for identity in (first, second)]
+            self.assertGreaterEqual(self.canvas.workbench.mounts[first]['layout']['y'], 168)
+            self.canvas.workbench.actions.arrange(1000)
+            layouts = [self.canvas.workbench.mounts[identity]['layout'] for identity in (first, second)]
             self.assertTrue(all(row['y'] >= 168 for row in layouts))
             self.assertGreaterEqual(layouts[1]['x'], layouts[0]['x'] + layouts[0]['width'])
 
         def test_overflow_navigation_keeps_cards_reachable_after_resize(self):
-            self.window.resize(950, 620)
+            self.window.resize(1120, 620)
             mounts = [self.mount() for _ in range(7)]
             viewport = find_item(self.window.rootObject(), 'canvasViewport')
             self.assertIsNotNone(viewport)
@@ -168,14 +169,14 @@ else:
                 return 12 <= point.x() < self.window.width() - 24 and 56 <= point.y() < self.window.height() - 24
 
             last = card_for(mounts[-1])
-            original_y = self.canvas.mounts[mounts[-1]]['layout']['y']
+            original_y = self.canvas.workbench.mounts[mounts[-1]]['layout']['y']
             self.wait(lambda: viewport.property('contentY') > 0 and title_visible(last))
             self.assertEqual(last.y(), original_y, 'Scrolling must preserve the logical card layout')
             self.assertEqual((last.width(), last.height()), (380, 340), 'New native cards must leave useful space for their content')
             self.assertEqual(viewport.property('contentWidth'), viewport.width())
             self.assertFalse(find_item(self.window.rootObject(), 'canvasHorizontalScroll').isVisible())
             self.window.resize(380, 280)
-            self.wait(lambda: viewport.width() == 284 and viewport.height() == 166)
+            self.wait(lambda: viewport.width() == self.window.width() - self.window.rootObject().property('navigationWidth') - 32 and viewport.height() == self.window.height() - 102)
             self.assertGreater(viewport.property('contentWidth'), viewport.width())
             self.assertGreater(viewport.property('contentHeight'), viewport.height())
 
@@ -223,7 +224,7 @@ else:
             _mouseMove(self.window, start + QPoint(-50, 50))
             _mouseRelease(self.window, Qt.LeftButton, Qt.NoModifier, start + QPoint(-50, 50))
             self.wait(lambda: next(row['layout'] for row in self.canvas.status()['mounts'] if row['mountId'] == mounts[1]) != before)
-            self.assertEqual(self.canvas.mounts[mounts[1]]['layout']['collapsed'], True)
+            self.assertEqual(self.canvas.workbench.mounts[mounts[1]]['layout']['collapsed'], True)
             drag_scrollbar('canvasHorizontalScroll', 0)
             drag_scrollbar('canvasVerticalScroll', 1)
             # This card is taller than the shrunken viewport. A background
@@ -239,7 +240,7 @@ else:
             point = close.mapToScene(QPointF(close.width() / 2, close.height() / 2))
             self.assertTrue(84 <= point.x() < self.window.width() - 12 and 102 <= point.y() < self.window.height() - 12, (point.x(), point.y(), viewport.property('contentX'), viewport.property('contentY')))
             self.click('canvasUnmountView', parent=last)
-            self.wait(lambda: mounts[-1] not in self.canvas.mounts)
+            self.wait(lambda: mounts[-1] not in self.canvas.workbench.mounts)
 
         def test_first_show_pointer_delay_cancel_and_popup_hold(self):
             # A window-leave notification before the first entry is not a dismissal.
@@ -321,7 +322,7 @@ else:
             self.click('componentViewChoice')
             self.wait(lambda: not self.manager.bridge.busy and bool(self.manager.bridge.planJson)
                       and self.manager.bridge.planJson != '[]')
-            self.wait(lambda: find_item(self.manager._view.contentItem(), 'confirmPermission') is not None)
+            self.wait(lambda: find_item(self.window.contentItem(), 'confirmPermission') is not None)
             _mouseMove(self.window, QPoint(-20, -20))
             QTest.qWait(280)
             self.assertTrue(self.window.isVisible(), 'An external permission confirmation must hold the canvas')
@@ -330,10 +331,10 @@ else:
             self.assertFalse(self.canvas.status()['mounts'])
 
         def approval_click(self, name):
-            button = find_item(self.manager._view.contentItem(), name)
+            button = find_item(self.window.contentItem(), name)
             self.assertIsNotNone(button)
             point = button.mapToScene(QPointF(button.width()/2, button.height()/2))
-            _mouseClick(self.manager._view, Qt.LeftButton, Qt.NoModifier, QPoint(round(point.x()), round(point.y())))
+            _mouseClick(self.window, Qt.LeftButton, Qt.NoModifier, QPoint(round(point.x()), round(point.y())))
 
         def leave_canvas(self):
             _mouseMove(self.window, QPoint(350, 300))
@@ -365,8 +366,8 @@ else:
                                            lambda: Canvas(runtime=self.runtime, collapse_delay=160))
             replacement = self.runtime.component_instance('canvas')
             self.assertNotEqual(previous, self.runtime.status('canvas')['instance'])
-            self.approval_click('confirmPermission')
             self.wait(lambda: not self.manager.bridge.busy and self.manager.bridge.planJson == '[]')
+            self.assertIsNone(replacement.actions._window)
             self.assertFalse(replacement.status()['mounts'])
             self.assertFalse(self.runtime.authorization.scope('canvas'))
             self.assertFalse(self.runtime.component_instance('org.example.counter')._views)
@@ -626,24 +627,364 @@ else:
             self.assertFalse(errors, errors)
             self.assertEqual(len({result['mountId'] for result in results}), 1)
             mount_id = results[0]['mountId']
-            self.wait(lambda: self.canvas.mounts[mount_id]['state'] == 'mounted')
+            self.wait(lambda: self.canvas.workbench.mounts[mount_id]['state'] == 'mounted')
             self.assertEqual(len(provider._views), 1)
             self.call('canvas', 'layout', {'mountId': mount_id, 'collapsed': True})
             self.call('canvas', 'hide')
             result = self.call('canvas', 'mount', {'target': 'org.example.counter', 'view': 'main'})
             self.assertTrue(result['reused'])
             self.assertTrue(self.window.isVisible())
-            self.assertFalse(self.canvas.mounts[mount_id]['layout']['collapsed'])
+            self.assertFalse(self.canvas.workbench.mounts[mount_id]['layout']['collapsed'])
             self.runtime.revoke('user', 'org.example.counter', 'create_view')
             with self.assertRaises(PlatformError) as caught:
                 self.call('canvas', 'mount', {'target': 'org.example.counter', 'view': 'main'})
             self.assertEqual(caught.exception.code, 'permission_required')
             self.assertEqual(len(provider._views), 1)
 
+        def test_pointer_overlay_timer_stops_hidden_and_resumes_shown(self):
+            import json
+            from PySide6.QtCore import QObject
+            from PySide6.QtTest import QSignalSpy
+            timer = self.window.rootObject().findChild(QObject, 'canvasPointerOverlayTimer')
+            self.assertIsNotNone(timer)
+            self.assertEqual(timer.property('interval'), 80)
+            spy = QSignalSpy(timer.triggered)
+            _mouseMove(self.window, QPoint(350, 300))
+            before = spy.count()
+            QTest.qWait(320)
+            visible_ticks = spy.count() - before
+            self.assertGreaterEqual(visible_ticks, 2)
+            self.call('canvas', 'hide')
+            self.wait(lambda: not self.window.isVisible())
+            QTest.qWait(20)
+            before = spy.count()
+            QTest.qWait(320)
+            hidden_ticks = spy.count() - before
+            self.assertEqual(hidden_ticks, 0)
+            self.assertFalse(timer.property('running'))
+            self.call('canvas', 'show')
+            self.wait(lambda: self.window.isVisible())
+            _mouseMove(self.window, QPoint(350, 300))
+            before = spy.count()
+            QTest.qWait(320)
+            resumed_ticks = spy.count() - before
+            self.assertGreaterEqual(resumed_ticks, 2)
+            self.call('canvas', 'hide')
+            self.wait(lambda: not self.window.isVisible())
+            # Reproduce the old running:true policy on this isolated, hidden
+            # QML timer, after validating the real new visibility binding.
+            timer.setProperty('running', True)
+            before = spy.count()
+            QTest.qWait(320)
+            old_policy_hidden_ticks = spy.count() - before
+            self.assertGreaterEqual(old_policy_hidden_ticks, 2)
+            timer.setProperty('running', False)
+            evidence = dict(window='isolated offscreen Qt', intervalMs=80, sampleWindowMs=320,
+                visibleTicks=visible_ticks, hiddenTicksAfterFix=hidden_ticks,
+                shownAgainTicks=resumed_ticks, hiddenTicksWithOldRunningTrue=old_policy_hidden_ticks,
+                baselineMethod='Replay original running:true policy on the same isolated timer after fixed-policy assertions')
+            destination = os.environ.get('POLARIS_TIMER_EVIDENCE')
+            if destination:
+                Path(destination).parent.mkdir(parents=True, exist_ok=True)
+                Path(destination).write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + '\n')
+
+        def test_hidden_workbench_editor_does_not_receive_keyboard_input(self):
+            from PySide6.QtCore import QUrl, QMetaObject
+            from PySide6.QtQml import QQmlComponent, qmlEngine
+            self.mount()
+            parent = find_item(self.window.rootObject(), 'componentViewContent')
+            component = QQmlComponent(qmlEngine(parent))
+            component.setData(b'import QtQuick\nTextInput { width: 140; height: 32; text: "focus"; property int keyEvents: 0; Keys.onReturnPressed: keyEvents += 1 }', QUrl())
+            editor = component.create()
+            self.assertIsNotNone(editor, [error.toString() for error in component.errors()])
+            editor.setParent(parent)
+            editor.setParentItem(parent)
+            editor.forceActiveFocus()
+            QTest.keyClick(self.window, Qt.Key_Return)
+            self.assertEqual(editor.property('keyEvents'), 1)
+            self.assertTrue(QMetaObject.invokeMethod(self.window.rootObject(), 'showSettings', Qt.DirectConnection))
+            QTest.keyClick(self.window, Qt.Key_Return)
+            self.assertEqual(editor.property('keyEvents'), 1)
+            self.assertFalse(find_item(self.window.rootObject(), 'canvasViewport').isEnabled())
+            self.click('workspaceEntry')
+            self.assertTrue(find_item(self.window.rootObject(), 'canvasViewport').isEnabled())
+            point = editor.mapToScene(QPointF(20, 12)).toPoint()
+            _mouseClick(self.window, Qt.LeftButton, Qt.NoModifier, point)
+            QTest.keyClick(self.window, Qt.Key_Return)
+            self.assertEqual(editor.property('keyEvents'), 2)
+
+        def test_canvas_keyboard_reveals_navigation_and_appearance(self):
+            import tempfile
+            from PySide6.QtCore import QMetaObject
+            with tempfile.TemporaryDirectory() as directory:
+                host = self.canvas.application_host
+                host.configure(directory)
+                identities = []
+                for n in range(8):
+                    package = Path(directory) / ('pkg' + str(n))
+                    package.mkdir()
+                    (package / 'Main.qml').write_text('import QtQuick\nItem {}')
+                    (package / 'polaris-application.json').write_text(json.dumps({
+                        'id': 'fixture.navigation' + str(n), 'name': '<b>很长的应用名称</b>' + str(n), 'version': '1',
+                        'entry': {'adapter': 'qt-quick', 'file': 'Main.qml'}, 'requires': {}}))
+                    host.installDirectory(str(package))
+                    identities.append(json.loads(host.selectedJson)['applicationId'])
+                host.dismissMessage()
+                self.window.resize(360, 280); QTest.qWait(60)
+                root = self.window.rootObject()
+                rail = find_item(root, 'canvasApplicationRail')
+                first = find_item(root, 'workspaceEntry')
+                first.forceActiveFocus(Qt.TabFocusReason)
+                for _ in range(8):
+                    QTest.keyClick(self.window, Qt.Key_Tab); QTest.qWait(20)
+                    focus = self.window.activeFocusItem()
+                    self.assertTrue(focus.objectName().startswith('applicationEntry_'), focus.objectName())
+                    top = focus.mapToItem(rail, QPointF(0, 0)).y()
+                    self.assertGreaterEqual(top, -0.5)
+                    self.assertLessEqual(top + focus.height(), rail.height() + 0.5)
+                    self.assertTrue(focus.property('hintVisible'))
+                title = find_item(root, 'canvasPageTitle')
+                self.assertIn('<b>', title.property('text'))
+                self.assertTrue(title.property('truncated'))
+                capture = os.environ.get('POLARIS_UI_CAPTURE_DIR')
+                if capture:
+                    Path(capture).mkdir(parents=True, exist_ok=True)
+                    QTest.qWait(700)
+                    self.window.grabWindow().save(str(Path(capture) / 'canvas-navigation-focus-360x280.png'))
+                QMetaObject.invokeMethod(root, 'showSettings', Qt.DirectConnection)
+                QTest.qWait(20)
+                appearance = find_item(root, 'canvasAppearancePage')
+                dark = find_item(root, 'canvasAppearance_dark')
+                warm = find_item(root, 'canvasAppearance_warm')
+                dark.forceActiveFocus(Qt.TabFocusReason)
+                for _ in range(2):
+                    QTest.keyClick(self.window, Qt.Key_Tab); QTest.qWait(20)
+                self.assertEqual(self.window.activeFocusItem(), warm)
+                top = warm.mapToItem(appearance, QPointF(0, 0)).y()
+                self.assertGreaterEqual(top, -0.5)
+                if warm.height() <= appearance.height():
+                    self.assertLessEqual(top + warm.height(), appearance.height() + 0.5)
+                else:
+                    self.assertLessEqual(top, 0.5)
+                dismiss = find_item(root, 'dismissCanvas')
+                dismiss.forceActiveFocus(Qt.TabFocusReason); QTest.qWait(20)
+                self.assertTrue(dismiss.property('hintVisible'))
+                QTest.qWait(700)
+                capture = os.environ.get('POLARIS_UI_CAPTURE_DIR')
+                if capture:
+                    Path(capture).mkdir(parents=True, exist_ok=True)
+                    self.window.grabWindow().save(str(Path(capture) / 'canvas-keyboard-focus-360x280.png'))
+                root.setProperty('settingsOpen', False)
+                host.select(identities[-1]); QTest.qWait(20)
+                from unittest.mock import patch
+                point = title.mapToScene(QPointF(8, 8)).toPoint()
+                _mouseMove(self.window, point); QTest.qWait(700)
+                if capture:
+                    self.window.grabWindow().save(str(Path(capture) / 'canvas-title-hint-360x280.png'))
+                with patch.object(self.window, 'startSystemMove', return_value=False):
+                    initial = self.window.position()
+                    _mousePress(self.window, Qt.LeftButton, Qt.NoModifier, point)
+                    _mouseMove(self.window, point + QPoint(20, 10))
+                    self.assertEqual(self.window.position(), initial + QPoint(20, 10))
+                    _mouseRelease(self.window, Qt.LeftButton, Qt.NoModifier, point)
+
+        def test_canvas_feedback_layout_and_keyboard(self):
+            import tempfile
+            capture = os.environ.get('POLARIS_UI_CAPTURE_DIR')
+            if capture:
+                Path(capture).mkdir(parents=True, exist_ok=True)
+            root = self.window.rootObject()
+            host = self.canvas.application_host
+            with tempfile.TemporaryDirectory() as directory:
+                host.configure(directory)
+                package = Path(directory) / 'fixture'
+                package.mkdir()
+                (package / 'Main.qml').write_text('import QtQuick\nItem {}')
+                (package / 'polaris-application.json').write_text(json.dumps({
+                    'id': 'fixture.canvas-messages', 'name': '消息验收应用', 'version': '1',
+                    'entry': {'adapter': 'qt-quick', 'file': 'Main.qml'}, 'requires': {}}))
+                host.installDirectory(str(package))
+                self.assertFalse(host.error, host.error)
+                selected = json.loads(host.selectedJson)['applicationId']
+                message = find_item(root, 'canvasMessageBar')
+                label = find_item(root, 'canvasMessageText')
+                close = find_item(root, 'canvasCloseMessage')
+                content = find_item(root, 'customApplicationSurface')
+                for width in (1300, 720, 620, 619, 360):
+                    self.window.resize(width, 760)
+                    QTest.qWait(30)
+                    self.assertFalse(message.isVisible(), 'Packaged application feedback belongs in its connection dialog')
+                    self.assertEqual(content.y(), root.property('contentTop'))
+                    self.assertEqual(content.y(), 90)
+                    if capture:
+                        self.window.grabWindow().save(str(Path(capture) / f'installed-{width}.png'))
+                host._notice = '安装失败：这是新错误，必须优先显示。' * 30
+                host.changed.emit()
+                QTest.qWait(30)
+                self.assertEqual(label.property('text'), host._notice)
+                scroll = find_item(root, 'canvasMessageScroll')
+                self.assertGreater(label.height(), scroll.height(), 'Long errors remain scrollable')
+                self.assertGreater(content.height(), 200)
+                self.assertTrue(close.isVisible())
+                flick = scroll.property('contentItem')
+                flick.setProperty('contentY', flick.property('contentHeight') - flick.height())
+                self.assertGreater(flick.property('contentY'), 0)
+                self.assertEqual(label.property('text'), host._notice, 'Scrolling keeps the complete error text')
+                if capture:
+                    self.window.grabWindow().save(str(Path(capture) / 'error-long-360.png'))
+                close.forceActiveFocus(Qt.TabFocusReason)
+                self.assertTrue(close.property('visualFocus'))
+                QTest.keyClick(self.window, Qt.Key_Space)
+                QTest.qWait(20)
+                self.assertFalse(message.isVisible())
+                self.assertFalse(host.feedback, 'Closing the error must not revive old success')
+                host._run_app = selected
+                host._generation += 1
+                host._state, host._error = 'error', '运行失败，关闭消息后仍保留执行结果'
+                host.changed.emit()
+                QTest.qWait(20)
+                self.click('canvasCloseMessage')
+                self.assertEqual((host.state, host.error), ('error', '运行失败，关闭消息后仍保留执行结果'))
+                settings = find_item(root, 'canvasSettingsEntry')
+                settings.forceActiveFocus(Qt.TabFocusReason)
+                self.assertTrue(settings.property('visualFocus'))
+                QTest.keyClick(self.window, Qt.Key_Space)
+                QTest.qWait(20)
+                self.assertTrue(root.property('settingsOpen'))
+                self.assertFalse(message.isVisible())
+                for width in (1300, 720, 620, 619, 360):
+                    self.window.resize(width, 760)
+                    QTest.qWait(30)
+                    themes = [find_item(root, 'canvasAppearance_' + key) for key in ('dark', 'light', 'warm')]
+                    page = find_item(root, 'canvasSettingsPage')
+                    for theme in themes:
+                        self.assertLessEqual(theme.mapToScene(QPointF(theme.width(), 0)).x(), width - 12)
+                    if width == 360:
+                        self.assertGreater(themes[1].y(), themes[0].y())
+                    if capture:
+                        self.window.grabWindow().save(str(Path(capture) / f'settings-{width}.png'))
+                theme = find_item(root, 'canvasAppearance_warm')
+                theme.forceActiveFocus(Qt.TabFocusReason)
+                self.assertTrue(theme.property('visualFocus'))
+                from PySide6.QtQml import QQmlProperty
+                self.assertEqual(QQmlProperty(theme.property('background'), 'border.width').read(), 2)
+                QTest.keyClick(self.window, Qt.Key_Space)
+                QTest.qWait(20)
+                self.assertEqual(self.canvas.actions.theme, 'warm')
+                if capture:
+                    self.window.grabWindow().save(str(Path(capture) / 'theme-keyboard-focus-360.png'))
+                for _ in range(18):
+                    QTest.keyClick(self.window, Qt.Key_Tab)
+                    focused = self.window.activeFocusItem()
+                    self.assertIsNotNone(focused)
+                    self.assertTrue(focused.isVisible(), focused.objectName())
+                    self.assertTrue(focused.isEnabled(), focused.objectName())
+                # Removing an application leaves an empty page; entering settings is
+                # still navigation even though the selected application stays ''.
+                self.click('applicationEntry_' + selected)
+                self.click('applicationConnectionsToggle')
+                host._state = 'running'
+                host.changed.emit()
+                QTest.qWait(20)
+                busy = find_item(self.window.contentItem(), 'applicationBusyMessage')
+                self.assertLessEqual(busy.mapToScene(QPointF(busy.width(), 0)).x(), self.window.width() - 24)
+                if capture:
+                    self.window.grabWindow().save(str(Path(capture) / 'connections-busy-360.png'))
+                host._state = 'idle'
+                host.changed.emit()
+                for name in ('revokePackagedApplication',):
+                    item = find_item(self.window.contentItem(), name)
+                    self.assertLessEqual(item.mapToScene(QPointF(item.width(), 0)).x(), self.window.width() - 24)
+                if capture:
+                    self.window.grabWindow().save(str(Path(capture) / 'connections-360.png'))
+                self.manager.show()
+                self.wait(lambda: self.manager.status()['visible'])
+                find_item(root, 'extensionManagementPage').setProperty('selectedApplicationId', selected)
+                QTest.qWait(20)
+                remove = find_item(root, 'removeManagedApplication')
+                remove.forceActiveFocus(Qt.TabFocusReason)
+                QTest.keyClick(self.window, Qt.Key_Space)
+                QTest.qWait(20)
+                from PySide6.QtCore import QObject
+                popup = root.findChild(QObject, 'applicationRemovalDialog')
+                self.assertTrue(popup.property('visible'))
+                cancel = find_item(self.window.contentItem(), 'cancelApplicationRemoval')
+                cancel.forceActiveFocus(Qt.TabFocusReason)
+                self.assertTrue(cancel.property('visualFocus'))
+                if capture:
+                    self.window.grabWindow().save(str(Path(capture) / 'removal-keyboard-360.png'))
+                QTest.keyClick(self.window, Qt.Key_Space)
+                QTest.qWait(20)
+                self.assertFalse(popup.property('visible'))
+                self.assertEqual(host.store.load(selected).id, selected)
+                self.assertEqual(host._selected, '', 'Management browsing keeps no running app selected')
+                remove.forceActiveFocus(Qt.TabFocusReason)
+                QTest.keyClick(self.window, Qt.Key_Space)
+                QTest.qWait(20)
+                confirm = find_item(self.window.contentItem(), 'confirmApplicationRemoval')
+                confirm.forceActiveFocus(Qt.TabFocusReason)
+                QTest.keyClick(self.window, Qt.Key_Space)
+                QTest.qWait(20)
+                self.assertFalse(popup.property('visible'))
+                self.assertTrue(host.feedback)
+                self.click('workspaceEntry')
+                self.assertFalse(host.feedback)
+                self.click('canvasSettingsEntry')
+                self.assertFalse(message.isVisible())
+
+        def test_canvas_settings_navigation_theme_manager_and_version(self):
+            from unittest.mock import patch
+            from polaris_platform.metadata import VERSION
+            mount_id = self.mount()
+            self.window.resize(1300, 820)
+            self.click('canvasSettingsEntry')
+            self.assertTrue(find_item(self.window.rootObject(), 'canvasSettingsPage').isVisible())
+            self.assertFalse(find_item(self.window.rootObject(), 'canvasViewport').isVisible())
+            self.assertFalse(find_item(self.window.rootObject(), 'chooseComponentView').isVisible())
+            self.assertEqual(find_item(self.window.rootObject(), 'canvasPageTitle').property('text'), '设置')
+            self.assertEqual(find_item(self.window.rootObject(), 'canvasAboutVersion').property('text'), 'Polaris  v' + VERSION)
+            from PySide6.QtCore import QObject
+            self.manager.show()
+            self.wait(lambda: self.manager.status()['visible'])
+            self.click('installApplication')
+            folder = self.window.rootObject().findChild(QObject, 'applicationDirectoryPicker')
+            self.assertIsNotNone(folder)
+            folder.setProperty('visible', False)
+            self.app.processEvents()
+            self.assertTrue(find_item(self.window.rootObject(), 'canvasSettingsPage').isVisible())
+            self.assertEqual(self.window.rootObject().property('settingsSection'), 'extensions')
+            self.assertTrue(find_item(self.window.rootObject(), 'extensionManagementPage').isVisible())
+            self.assertFalse(hasattr(self.manager, '_view'))
+            self.window.rootObject().setProperty('settingsSection', 'appearance')
+            self.click('canvasAppearance_warm')
+            self.assertEqual(self.canvas.actions.theme, 'warm')
+            self.click('canvasAppearance_dark')
+            self.assertEqual(self.canvas.actions.theme, 'dark')
+            capture = os.environ.get('POLARIS_UI_CAPTURE_DIR')
+            if capture:
+                Path(capture).mkdir(parents=True, exist_ok=True)
+                self.window.grabWindow().save(str(Path(capture) / 'settings.png'))
+                self.window.resize(720, 760)
+                QTest.qWait(30)
+                self.window.grabWindow().save(str(Path(capture) / 'settings-narrow.png'))
+                self.window.resize(360, 760)
+                QTest.qWait(30)
+                self.assertGreater(find_item(self.window.rootObject(), 'canvasAppearance_light').y(), find_item(self.window.rootObject(), 'canvasAppearance_dark').y())
+                self.window.grabWindow().save(str(Path(capture) / 'settings-compact.png'))
+                self.window.resize(720, 760)
+                QTest.qWait(20)
+            self.click('workspaceEntry')
+            self.assertFalse(find_item(self.window.rootObject(), 'canvasSettingsPage').isVisible())
+            self.assertTrue(find_item(self.window.rootObject(), 'canvasViewport').isVisible())
+            self.assertIn(mount_id, self.canvas.workbench.mounts)
+            if capture:
+                self.window.grabWindow().save(str(Path(capture) / 'workbench-narrow.png'))
+
         def test_application_switch_preserves_workbench_and_renders_inputs(self):
             import tempfile
             import json
             from polaris_platform.application import Application
+            self.window.resize(1300, 820)
             mount_id = self.mount()
             capture = os.environ.get('POLARIS_UI_CAPTURE_DIR')
             if capture:
@@ -670,26 +1011,143 @@ else:
                 self.wait(lambda: find_item(self.window.rootObject(), 'applicationInput_label') is not None)
                 self.assertFalse(find_item(self.window.rootObject(), 'canvasViewport').isVisible())
                 self.assertTrue(find_item(self.window.rootObject(), 'applicationPage').isVisible())
-                self.assertIn(mount_id, self.canvas.mounts)
+                self.assertFalse(find_item(self.window.rootObject(), 'chooseComponentView').isVisible())
+                self.assertEqual(find_item(self.window.rootObject(), 'canvasPageTitle').property('text'), '示例应用')
+                self.assertIn(mount_id, self.canvas.workbench.mounts)
                 if capture:
                     QTest.qWait(80)
                     self.window.grabWindow().save(str(Path(capture) / 'application.png'))
-                host.select('')
+                self.click('canvasSettingsEntry')
+                self.assertFalse(find_item(self.window.rootObject(), 'applicationPage').isVisible())
+                self.assertTrue(find_item(self.window.rootObject(), 'canvasSettingsPage').isVisible())
+                self.click('workspaceEntry')
                 self.assertTrue(find_item(self.window.rootObject(), 'canvasViewport').isVisible())
-                self.assertIn(mount_id, self.canvas.mounts)
+                self.assertIn(mount_id, self.canvas.workbench.mounts)
+
+        def test_workbench_has_real_application_identity_and_owns_its_scene(self):
+            from polaris_platform.application import Application
+            from polaris_platform.builtin_apps.workbench import Workbench, WORKBENCH_ID
+            from PySide6.QtQml import QQmlExpression
+            workbench = self.canvas.workbench
+            self.assertIsInstance(workbench, Application)
+            self.assertIsInstance(workbench, Workbench)
+            self.assertIs(self.runtime.application_component(WORKBENCH_ID), workbench)
+            self.assertEqual(self.runtime.status(WORKBENCH_ID)['componentType'], 'org.polaris.workbench')
+            self.assertEqual(json.loads(self.canvas.application_host.selectedJson)['applicationId'], WORKBENCH_ID)
+            self.assertFalse(hasattr(self.canvas, 'mounts'))
+            self.assertFalse(hasattr(self.canvas, 'cards'))
+            self.assertEqual(Path(workbench._view.component.url().toLocalFile()).name, 'Workbench.qml')
+            scope = QQmlExpression(workbench._view.context, workbench._view.root, 'typeof canvasActions')
+            self.assertEqual(scope.evaluate()[0], 'undefined')
+            scope = QQmlExpression(workbench._view.context, workbench._view.root, 'typeof applicationHost')
+            self.assertEqual(scope.evaluate()[0], 'undefined')
+            mount_id = self.mount()
+            record = workbench.mounts[mount_id]
+            self.assertEqual(record['context'].origin, self.context.origin)
+            provider = self.runtime.component_instance('org.example.counter')
+            self.click('canvasSettingsEntry')
+            self.assertFalse(workbench._view.root.isEnabled())
+            self.assertEqual(self.runtime.status(WORKBENCH_ID)['state'], 'running')
+            self.assertIs(workbench.mounts[mount_id], record)
+            self.click('workspaceEntry')
+            self.assertTrue(workbench._view.root.isEnabled())
+            self.assertIs(provider, self.runtime.component_instance('org.example.counter'))
+
+        def test_workbench_reparent_releases_old_handles_and_rebuilds_with_original_context(self):
+            from PySide6.QtQuick import QQuickItem
+            mount_id = self.mount()
+            workbench = self.canvas.workbench
+            original = workbench.mounts[mount_id]
+            original_handle = original['handle']
+            original_context = original['context']
+            layout = dict(x=61, y=73, width=403, height=281, collapsed=False)
+            self.call('canvas', 'layout', dict(mountId=mount_id, **layout))
+            provider = self.runtime.component_instance('org.example.counter')
+            body = QQuickItem(self.window.rootObject())
+            body.setParentItem(self.window.rootObject())
+            body.setWidth(800)
+            body.setHeight(600)
+            header = QQuickItem(self.window.rootObject())
+            header.setParentItem(self.window.rootObject())
+            header.setWidth(240)
+            header.setHeight(34)
+            old_view = workbench._view
+            self.canvas.application_host.attachView(body)
+            self.canvas.application_host.attachBuiltinHeader(header)
+            self.wait(lambda: len(workbench.mounts) == 1 and all(r['state'] == 'mounted' for r in workbench.mounts.values()))
+            rebuilt = next(iter(workbench.mounts.values()))
+            self.assertTrue(original['cancelled'])
+            self.assertNotIn(original_handle, provider._views)
+            self.assertIs(rebuilt['context'], original_context)
+            self.assertEqual(rebuilt['layout'], layout)
+            self.assertEqual(rebuilt['layoutId'], original['layoutId'])
+            self.assertIsNone(old_view.root)
+            self.assertIs(workbench._view.parent, body)
+            self.assertIs(workbench._view.header_parent, header)
+            self.assertIs(workbench._view.context.engine(), workbench._view.engine)
+            self.assertEqual(self.runtime.status('org.example.counter')['state'], 'running')
+
+        def test_workbench_explicit_navigation_restart_restores_saved_layout(self):
+            from polaris_platform.builtin_apps.workbench import WORKBENCH_ID
+            self.prepare_approval()
+            self.approval_click('confirmPermission')
+            self.wait(lambda: bool(self.canvas.workbench.mounts) and all(r['state'] == 'mounted' for r in self.canvas.workbench.mounts.values()))
+            mount_id = next(iter(self.canvas.workbench.mounts))
+            layout = dict(x=57, y=71, width=410, height=277, collapsed=False)
+            self.call('canvas', 'layout', dict(mountId=mount_id, **layout))
+            workbench = self.canvas.workbench
+            old = workbench.mounts[mount_id]
+            self.runtime.stop_application(WORKBENCH_ID)
+            self.assertFalse(workbench.running)
+            self.assertFalse(workbench._view.root.isEnabled())
+            self.canvas.application_host.refreshConnections()
+            self.assertFalse(workbench.running)
+            self.assertFalse(workbench._view.root.isVisible())
+            # A real navigation click is the new local input authority.
+            self.click('workspaceEntry')
+            self.wait(lambda: bool(workbench.mounts) and all(r['state'] == 'mounted' for r in workbench.mounts.values()))
+            rebuilt = next(iter(workbench.mounts.values()))
+            self.assertEqual(rebuilt['layout'], layout)
+            self.assertNotEqual(rebuilt['handle'], old['handle'])
+            self.assertTrue(workbench._view.root.isEnabled())
+
+        def test_workbench_stop_cancels_its_approval_and_restart_has_fresh_epoch(self):
+            from polaris_platform.builtin_apps.workbench import WORKBENCH_ID
+            self.prepare_approval()
+            workbench = self.canvas.workbench
+            old_epoch = workbench._generation
+            tokens = list(workbench._approval_tokens.values())
+            reasons = list(workbench._approvals)
+            self.assertTrue(tokens)
+            self.runtime.stop_application(WORKBENCH_ID)
+            self.wait(lambda: self.manager.bridge.planJson == '[]')
+            self.assertFalse(workbench._approvals)
+            self.assertFalse(workbench._approval_tokens)
+            self.assertFalse(set(reasons) & self.canvas._holds)
+            self.assertFalse(self.runtime.authorization.scope('canvas'))
+            self.runtime.start_application(WORKBENCH_ID)
+            self.canvas.application_host.select(WORKBENCH_ID)
+            self.assertNotEqual(old_epoch, workbench._generation)
+            for token in tokens:
+                self.manager.bridge.cancel_approval(token)
+            self.assertFalse(workbench.mounts)
+            self.assertFalse(self.runtime.authorization.scope('canvas'))
+            self.prepare_approval()
+            self.approval_click('confirmPermission')
+            self.wait(lambda: bool(workbench.mounts) and all(r['state'] == 'mounted' for r in workbench.mounts.values()))
 
         def test_legacy_layout_pins_default_identity_and_single_conflicts_preserve_intent(self):
             from copy import deepcopy
             from PySide6.QtTest import QSignalSpy
             mount_id = self.mount()
-            record = self.canvas.mounts[mount_id]
+            record = self.canvas.workbench.mounts[mount_id]
             saved = deepcopy(self.canvas._storage.entries[record['layoutId']])
             saved.pop('stableInstanceId', None)
             saved['target'] = 'org.example.counter'
             self.call('canvas', 'unmount', {'mountId': mount_id})
             self.canvas._storage.entries[saved['id']] = saved
-            self.canvas.restore_layout(self.context)
-            self.wait(lambda: len(self.canvas.mounts) == 1)
+            self.canvas.workbench.restore_layout(self.context)
+            self.wait(lambda: len(self.canvas.workbench.mounts) == 1)
             stable = self.runtime.status('org.example.counter')['instanceId']
             self.assertEqual(saved['stableInstanceId'], stable)
             self.assertEqual(saved['target'], stable)
@@ -700,8 +1158,8 @@ else:
             duplicate['id'] = 'duplicate-layout'
             self.canvas._storage.entries[duplicate['id']] = duplicate
             failed = QSignalSpy(self.canvas.actions.failed)
-            self.canvas.restore_layout(self.context)
-            self.assertEqual(len(self.canvas.mounts), 1)
+            self.canvas.workbench.restore_layout(self.context)
+            self.assertEqual(len(self.canvas.workbench.mounts), 1)
             self.assertEqual(len(self.canvas._storage.entries), 2)
             self.assertGreater(failed.count(), 0)
 

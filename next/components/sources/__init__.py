@@ -10,6 +10,7 @@ import tempfile
 from threading import RLock
 from uuid import uuid4
 
+from polaris_platform.application_package import _manifest as application_manifest, _tree_digest
 from polaris_platform.component import Component
 from polaris_platform.persistence import read_json, write_json
 from polaris_platform.protocol import PlatformError
@@ -24,9 +25,15 @@ class Sources(Component):
         self._root.mkdir(parents=True, exist_ok=True)
         self._storage = self._root / 'records.json'
         self._data = read_json(self._storage, {'sources': {}, 'installations': {}})
+        for source in self._data['sources'].values():
+            if source.get('directory') and 'packages' not in source:
+                _, components, applications = self._index(Path(source['directory']))
+                source.update(components=components, applications=applications, packages=components + applications)
         self._lock = RLock()
         self.operation('sources')(lambda p, c: self.sources())
         self.operation('catalog')(lambda p, c: self.catalog(p.get('source_id')))
+        self.operation('packages')(lambda p, c: self.packages(p.get('source_id')))
+        self.operation('application_catalog')(lambda p, c: self.application_catalog(p.get('source_id')))
 
     def local_source_control(self):
         self._trusted()
@@ -54,11 +61,60 @@ class Sources(Component):
         with self._lock:
             return deepcopy(list(self._data['sources'].values()))
 
+    def packages(self, source_id=None):
+        with self._lock:
+            records = self._data['sources'].values() if source_id is None else [self._source(source_id)]
+            return deepcopy([dict(sourceId=source['id'], revision=source['revision'], **item)
+                             for source in records if source_id is not None or not source.get('archived', False)
+                             for item in source.get('packages', source.get('components', []) + source.get('applications', []))])
+
     def catalog(self, source_id=None):
         with self._lock:
             records = self._data['sources'].values() if source_id is None else [self._source(source_id)]
             return deepcopy([dict(sourceId=s['id'], revision=s['revision'], **item)
-                             for s in records for item in s['components']])
+                             for s in records if source_id is not None or not s.get('archived', False)
+                             for item in s['components']])
+
+    def application_catalog(self, source_id=None):
+        with self._lock:
+            records = self._data['sources'].values() if source_id is None else [self._source(source_id)]
+            return deepcopy([dict(sourceId=s['id'], revision=s['revision'], **item)
+                             for s in records if source_id is not None or not s.get('archived', False)
+                             for item in s.get('applications', [])])
+
+    def _application_path(self, source_id, application_id, expected_revision):
+        source = self._source(source_id)
+        if source['revision'] != expected_revision:
+            raise PlatformError('source_changed', 'Source revision changed; review the selection again')
+        item = next((a for a in source.get('applications', []) if a['manifest']['id'] == application_id), None)
+        if item is None:
+            raise PlatformError('unknown_application', application_id)
+        return str(self._inside(Path(source['directory']), item['path']))
+
+    def _installation_origin(self, component_id):
+        record = self._data['installations'].get(component_id)
+        if record is None:
+            return None
+        installed = next((i for i in self._control.export_installations()
+                          if i['manifest']['id'] == component_id), None)
+        if installed is None or installed['installationId'] != record['installationId'] or installed['directory'] != record['path']:
+            return None
+        return {**{key: record[key] for key in ('sourceId', 'revision', 'installationId')},
+                'contentDigest': record.get('contentDigest') or self._component_digest(Path(record['path']))}
+
+    def _archive_sources(self, source_ids, migration):
+        """Archive selected sources once, retaining their provenance records."""
+        if migration in self._data.get('archiveMigrations', []):
+            return
+        before = deepcopy(self._data)
+        try:
+            for identity in source_ids:
+                self._source(identity)['archived'] = True
+            self._data.setdefault('archiveMigrations', []).append(migration)
+            self._save()
+        except Exception:
+            self._data = before
+            raise
 
     def _source(self, source_id):
         if source_id not in self._data['sources']:
@@ -88,25 +144,86 @@ class Sources(Component):
             raise PlatformError('invalid_source', 'Component path escapes repository')
         return target
 
+    @staticmethod
+    def _component_digest(root):
+        # Python may write bytecode inside installed component snapshots.
+        digest = hashlib.sha256()
+        def visit(directory, prefix, ancestors):
+            resolved = directory.resolve()
+            if resolved in ancestors:
+                raise PlatformError('invalid_source', 'Component directory link cycle: ' + prefix)
+            ancestors = ancestors | {resolved}
+            for path in sorted(directory.iterdir(), key=lambda item: item.name):
+                if path.name == '__pycache__':
+                    continue
+                relative = prefix + path.name
+                name = relative.encode('utf-8')
+                if path.is_dir():
+                    digest.update(b'D' + name + b'\0')
+                    visit(path, relative + '/', ancestors)
+                elif path.is_file():
+                    data = path.read_bytes()
+                    digest.update(b'F' + name + b'\0' + str(len(data)).encode() + b'\0' + data)
+        visit(root, '', set())
+        return digest.hexdigest()
+
     def _index(self, root):
         index = read_json(root / 'polaris-source.json', None)
-        if not isinstance(index, dict) or type(index.get('schemaVersion')) is not int or index['schemaVersion'] != 1:
-            raise PlatformError('invalid_source', 'Expected polaris-source.json schemaVersion 1')
-        if not isinstance(index.get('components'), list) or not isinstance(index.get('name'), str):
-            raise PlatformError('invalid_source', 'Source requires name and components')
-        components, ids = [], set()
-        for item in index['components']:
-            if not isinstance(item, dict):
-                raise PlatformError('invalid_source', 'Component entry must be an object')
+        if not isinstance(index, dict) or type(index.get('schemaVersion')) is not int or index['schemaVersion'] not in (1, 2):
+            raise PlatformError('invalid_source', 'Expected polaris-source.json schemaVersion 1 or 2')
+        if not isinstance(index.get('name'), str):
+            raise PlatformError('invalid_source', 'Source requires a name')
+        version = index['schemaVersion']
+        if version == 1:
+            if (not ({'components', 'applications'} & index.keys()) or
+                    any(not isinstance(index[key], list) for key in ('components', 'applications') if key in index)):
+                raise PlatformError('invalid_source', 'Source requires component or application entries')
+            entries = [(kind, item) for kind, key in (('component', 'components'), ('application', 'applications'))
+                       for item in index.get(key, [])]
+        else:
+            if not isinstance(index.get('packages'), list):
+                raise PlatformError('invalid_source', 'Source requires packages')
+            entries = [(item.get('type') if isinstance(item, dict) else None, item) for item in index['packages']]
+        components, applications = [], []
+        ids = {'component': set(), 'application': set()}
+        for kind, item in entries:
+            if not isinstance(item, dict) or kind not in ids:
+                raise PlatformError('invalid_source', 'Invalid package entry')
             directory = self._inside(root, item.get('path'))
-            manifest_path = self._inside(root, str(directory.relative_to(root) / 'manifest.json'))
-            manifest = read_json(manifest_path, None)
-            Runtime.validate_manifest(manifest)
-            if manifest['id'] in ids:
-                raise PlatformError('invalid_source', 'Duplicate component ID: ' + manifest['id'])
-            ids.add(manifest['id'])
-            components.append({'path': item['path'], 'manifest': manifest})
-        return index['name'], components
+            if kind == 'component':
+                manifest_path = self._inside(root, str(directory.relative_to(root) / 'manifest.json'))
+                manifest = read_json(manifest_path, None)
+                Runtime.validate_manifest(manifest)
+                content_digest = self._component_digest(directory)
+            else:
+                manifest = application_manifest(directory)
+                content_digest = _tree_digest(directory)
+            if manifest['id'] in ids[kind]:
+                raise PlatformError('invalid_source', 'Duplicate ' + kind + ' ID: ' + manifest['id'])
+            ids[kind].add(manifest['id'])
+            entry = {'type': kind, 'path': item['path'], 'manifest': manifest, 'contentDigest': content_digest}
+            if version == 2:
+                for field in ('summary', 'author', 'icon'):
+                    if not isinstance(item.get(field), str) or not item[field].strip():
+                        raise PlatformError('invalid_source', 'Package requires ' + field)
+                entry.update({field: item[field] for field in ('summary', 'author', 'icon')})
+            for field in ('description', 'readme', 'upstream'):
+                if field in item:
+                    if not isinstance(item[field], str):
+                        raise PlatformError('invalid_source', field + ' must be a string')
+                    entry[field] = item[field]
+            for field in ('tags', 'screenshots'):
+                if field in item:
+                    if not isinstance(item[field], list) or any(not isinstance(value, str) for value in item[field]):
+                        raise PlatformError('invalid_source', field + ' must be a string list')
+                    entry[field] = item[field]
+            assets = ([item['icon']] if version == 2 else []) + ([item['readme']] if 'readme' in item else []) + item.get('screenshots', [])
+            for asset in assets:
+                target = self._inside(root, asset)
+                if not target.is_file() or (version == 2 and target.is_relative_to(directory)):
+                    raise PlatformError('invalid_source', 'Invalid package display asset')
+            (components if kind == 'component' else applications).append(entry)
+        return index['name'], components, applications
 
     def _prepare(self, location, ref):
         if ref is not None and (not isinstance(ref, str) or not ref or ref.startswith('-')):
@@ -139,11 +256,11 @@ class Sources(Component):
             else:
                 raise PlatformError('invalid_source', 'Expected a local directory or HTTPS/SSH Git repository')
             self._validate_links(root)
-            name, components = self._index(root)
+            name, components, applications = self._index(root)
             destination = self._root / 'revisions' / uuid4().hex
             destination.parent.mkdir(exist_ok=True)
             shutil.move(str(root), destination)
-            return dict(name=name, revision=revision, directory=str(destination), components=components)
+            return dict(name=name, revision=revision, directory=str(destination), components=components, applications=applications, packages=components + applications)
 
     @staticmethod
     def _validate_links(root):
@@ -181,16 +298,19 @@ class Sources(Component):
                 raise
             return source_id
 
-    def _fetch_preset(self, source_id, cancelled):
+    def _fetch_preset(self, source_id, cancelled, refresh=False):
         # Fetch outside the catalog lock so the manager remains usable while offline.
         with self._lock:
             source = dict(self._source(source_id))
-        if source['revision'] or cancelled():
+        if (source['revision'] and not refresh) or cancelled():
             return
         prepared = self._prepare(source['location'], source['ref'])
         with self._lock:
             current = self._source(source_id)
-            if current['revision'] or cancelled():
+            if current['revision'] != source['revision'] or cancelled():
+                shutil.rmtree(prepared['directory'])
+                return
+            if current['revision'] == prepared['revision']:
                 shutil.rmtree(prepared['directory'])
                 return
             self._data['sources'][source_id] = dict(current, **prepared)
@@ -241,11 +361,11 @@ class Sources(Component):
         owned = self._data['installations'].get(component_id)
         if existing and owned and owned['sourceId'] == source_id:
             self._assert_owned(component_id, owned)
-            if owned['path'] == path:
+            if (owned.get('contentDigest') or self._component_digest(Path(owned['path']))) == item['contentDigest']:
                 return deepcopy(owned)
             previous = deepcopy(owned['previous'])
             if owned['path'] != path:
-                previous.append(dict(path=owned['path'], revision=owned['revision']))
+                previous.append(dict(path=owned['path'], revision=owned['revision'], contentDigest=owned.get('contentDigest') or self._component_digest(Path(owned['path']))))
         if existing:
             self._switch(component_id, path)
         else:
@@ -254,7 +374,7 @@ class Sources(Component):
             except ModuleNotFoundError as error:
                 raise PlatformError('dependency_unavailable', f'Missing plugin dependency: {error.name}') from error
         identity = next(i['installationId'] for i in self._control.export_installations() if i['manifest']['id'] == component_id)
-        self._data['installations'][component_id] = dict(sourceId=source_id, revision=source['revision'], path=path, installationId=identity, previous=previous)
+        self._data['installations'][component_id] = dict(sourceId=source_id, revision=source['revision'], path=path, installationId=identity, contentDigest=item['contentDigest'], previous=previous)
         self._save()
         return deepcopy(self._data['installations'][component_id])
 
@@ -314,11 +434,12 @@ class Sources(Component):
         if item is None:
             raise PlatformError('unknown_component', component_id)
         path = str(self._inside(Path(source['directory']), item['path']))
-        if record['path'] == path:
+        old_digest = record.get('contentDigest') or self._component_digest(Path(record['path']))
+        if old_digest == item['contentDigest']:
             return deepcopy(record)
         self._switch(component_id, path)
-        record['previous'].append(dict(path=record['path'], revision=record['revision']))
-        record.update(path=path, revision=source['revision'])
+        record['previous'].append(dict(path=record['path'], revision=record['revision'], contentDigest=old_digest))
+        record.update(path=path, revision=source['revision'], contentDigest=item['contentDigest'])
         self._save()
         return deepcopy(record)
 
@@ -330,6 +451,7 @@ class Sources(Component):
         previous = record['previous'][-1]
         self._switch(component_id, previous['path'])
         record.update(record['previous'].pop())
+        record['contentDigest'] = previous.get('contentDigest') or self._component_digest(Path(previous['path']))
         self._save()
         return deepcopy(record)
 
@@ -351,19 +473,21 @@ class _SourceControl:
             self._check()
             return self._owner._preset(spec)
 
-    def fetch_preset(self, source_id, cancelled):
+    def fetch_preset(self, source_id, cancelled, refresh=False):
         with self._owner._lock:
             self._check()
-        self._owner._fetch_preset(source_id, lambda: cancelled() or self._owner.port is not self._port)
+        self._owner._fetch_preset(source_id, lambda: cancelled() or self._owner.port is not self._port, refresh=refresh)
 
     def __getattr__(self, name):
-        if name not in {'sources', 'catalog', 'add', 'refresh', 'install', 'update', 'rollback'}:
+        if name not in {'sources', 'catalog', 'packages', 'application_catalog', 'application_path', 'installation_origin', 'archive_sources', 'add', 'refresh', 'install', 'update', 'rollback'}:
             raise AttributeError(name)
         def invoke(*args, **kwargs):
             with self._owner._lock:
                 self._check()
-                if name in {'sources', 'catalog'}:
+                if name in {'sources', 'catalog', 'packages', 'application_catalog'}:
                     return getattr(self._owner, name)(*args, **kwargs)
+                if name in {'application_path', 'installation_origin'}:
+                    return getattr(self._owner, '_' + name)(*args, **kwargs)
                 position = 1 if name == 'install' else 0
                 target = kwargs.get('component_id', args[position] if len(args) > position else None)
                 before = deepcopy(self._owner._data)

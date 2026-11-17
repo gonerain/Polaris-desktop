@@ -96,6 +96,8 @@ class WindowHost(Component):
             self._check()
             if validate: validate()
             view = QQuickView()
+            from polaris_platform.ui import configure_qml_engine
+            configure_qml_engine(view.engine())
             view.setTitle(title)
             profile = dict(options or {})
             flags = view.flags()

@@ -73,7 +73,7 @@ else:
             self.assertTrue(condition())
 
         def tearDown(self):
-            self.wait(lambda: not self.canvas._workers)
+            self.wait(lambda: not self.canvas.workbench._workers and not self.canvas._workers)
             for row in reversed(self.runtime.snapshot()):
                 if row['state'] == 'running':
                     self.runtime.stop_component(row['id'], persist=False)
@@ -81,7 +81,7 @@ else:
             self.directory.cleanup()
 
         def restart(self):
-            self.wait(lambda: not self.canvas._workers)
+            self.wait(lambda: not self.canvas.workbench._workers and not self.canvas._workers)
             self.runtime.stop_component('canvas', persist=False)
             self.runtime.start_component('canvas')
             self.canvas = self.runtime.component_instance('canvas')
@@ -90,7 +90,7 @@ else:
 
         def test_restart_restores_only_from_authorized_local_input(self):
             mounts = [self.call('mount', {'target': 'org.example.counter'})['mountId'] for _ in range(2)]
-            self.wait(lambda: all(r['state'] == 'mounted' for r in self.canvas.mounts.values()))
+            self.wait(lambda: all(r['state'] == 'mounted' for r in self.canvas.workbench.mounts.values()))
             geometry = dict(x=1431, y=953, width=415, height=260, collapsed=True)
             self.call('layout', dict(mountId=mounts[0], **geometry))
             window = self.host._views[self.canvas.handle]
@@ -99,19 +99,19 @@ else:
             original = self.canvas._storage.path.read_text()
             self.restart()
             self.assertEqual(self.canvas.size, (1010, 740))
-            self.assertFalse(self.canvas.mounts, 'Pet show must not borrow canvas authority')
+            self.assertFalse(self.canvas.workbench.mounts, 'Pet show must not borrow canvas authority')
             for operation in ('status', 'create', 'show'):
                 self.runtime.grant('canvas', 'window', operation)
             self.canvas.actions.pointerEntered()
-            self.wait(lambda: len(self.canvas.mounts) == 2 and all(r['state'] == 'unavailable' for r in self.canvas.mounts.values()))
+            self.wait(lambda: len(self.canvas.workbench.mounts) == 2 and all(r['state'] == 'unavailable' for r in self.canvas.workbench.mounts.values()))
             self.assertEqual(self.canvas._storage.path.read_text(), original)
             for operation in self.runtime.status('org.example.counter')['description']['operations']:
                 self.runtime.grant('canvas', 'org.example.counter', operation)
             for operation in ('status', 'create', 'show'):
                 self.runtime.grant('canvas', 'window', operation)
             self.canvas.actions.pointerEntered()
-            self.wait(lambda: len(self.canvas.mounts) == 2 and all(r['state'] == 'mounted' for r in self.canvas.mounts.values()))
-            self.assertIn(geometry, [r['layout'] for r in self.canvas.mounts.values()])
+            self.wait(lambda: len(self.canvas.workbench.mounts) == 2 and all(r['state'] == 'mounted' for r in self.canvas.workbench.mounts.values()))
+            self.assertIn(geometry, [r['layout'] for r in self.canvas.workbench.mounts.values()])
             def find(item, name):
                 if item.objectName() == name:
                     return item
@@ -124,20 +124,20 @@ else:
             self.assertGreaterEqual(viewport.property('contentHeight'), geometry['y'] + 42)
             self.assertEqual(self.canvas._storage.path.read_text(), original, 'Navigation must not rewrite a restored layout')
             self.call('show')
-            self.assertEqual(len(self.canvas.mounts), 2)
+            self.assertEqual(len(self.canvas.workbench.mounts), 2)
             self.runtime.stop_component('org.example.counter', persist=False)
             self.canvas._check_mounts()
-            self.wait(lambda: not self.canvas.mounts)
+            self.wait(lambda: not self.canvas.workbench.mounts)
             self.assertEqual(len(self.canvas._storage.entries), 2)
             self.runtime.start_component('org.example.counter')
             self.canvas.actions.pointerEntered()
-            self.wait(lambda: len(self.canvas.mounts) == 2 and all(r['state'] == 'mounted' for r in self.canvas.mounts.values()))
-            self.call('unmount', {'mountId': next(iter(self.canvas.mounts))})
+            self.wait(lambda: len(self.canvas.workbench.mounts) == 2 and all(r['state'] == 'mounted' for r in self.canvas.workbench.mounts.values()))
+            self.call('unmount', {'mountId': next(iter(self.canvas.workbench.mounts))})
             self.assertEqual(len(self.canvas._storage.entries), 1)
 
         def test_real_pet_click_and_first_canvas_hover_restore(self):
             self.call('mount', {'target': 'org.example.counter'})
-            self.wait(lambda: all(r['state'] == 'mounted' for r in self.canvas.mounts.values()))
+            self.wait(lambda: all(r['state'] == 'mounted' for r in self.canvas.workbench.mounts.values()))
             self.restart()
             self.call('hide')
             for operation in ('status', 'create', 'show'):
@@ -168,7 +168,7 @@ else:
             point = QPoint(100, 100)
             QCursor.setPos(canvas_window.mapToGlobal(point))
             QTest.mouseMove(canvas_window, point)
-            self.wait(lambda: len(self.canvas.mounts) == 1 and all(r['state'] == 'mounted' for r in self.canvas.mounts.values()))
+            self.wait(lambda: len(self.canvas.workbench.mounts) == 1 and all(r['state'] == 'mounted' for r in self.canvas.workbench.mounts.values()))
 
     def exercise_host():
         import time
@@ -226,13 +226,13 @@ else:
             window.resize(960, 710)
             QTest.qWait(300)
         else:
-            wait(lambda: len(canvas.mounts) == 1 and all(r['state'] == 'mounted' for r in canvas.mounts.values()))
+            wait(lambda: len(canvas.workbench.mounts) == 1 and all(r['state'] == 'mounted' for r in canvas.workbench.mounts.values()))
             assert canvas.size == (960, 710), canvas.size
-            assert next(iter(canvas.mounts.values()))['layout'] == dict(x=43, y=67, width=390, height=245, collapsed=True)
+            assert next(iter(canvas.workbench.mounts.values()))['layout'] == dict(x=43, y=67, width=390, height=245, collapsed=True)
             runtime.client('pet').call('canvas', 'show', context=runtime.user_context('pet'))
-            assert len(canvas.mounts) == 1
+            assert len(canvas.workbench.mounts) == 1
         assert canvas._storage.path.parent == runtime.component_data_directory('canvas')
-        wait(lambda: not canvas._workers)
+        wait(lambda: not canvas.workbench._workers and not canvas._workers)
         for row in reversed(runtime.snapshot()):
             if row['state'] == 'running':
                 runtime.stop_component(row['id'], persist=False)

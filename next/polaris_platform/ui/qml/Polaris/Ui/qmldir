@@ -1,0 +1,8 @@
+module Polaris.Ui
+Theme 1.0 Theme.qml
+Icon 1.0 Icon.qml
+Button 1.0 Button.qml
+NavigationItem 1.0 NavigationItem.qml
+ScrollBar 1.0 ScrollBar.qml
+TextField 1.0 TextField.qml
+ComboBox 1.0 ComboBox.qml

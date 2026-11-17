@@ -1,41 +1,37 @@
-"""Canvas-owned layout, transient sessions, and native component view mounting."""
+"""Desktop shell, window sessions, and public workbench operation routing."""
 from __future__ import annotations
-
-import math
 
 import json
 import threading
 from pathlib import Path
 import uuid
 
-from PySide6.QtCore import QObject, Signal, Slot, QTimer, Property, QEvent, Qt, QPoint, QRect, QSize
+from PySide6.QtCore import QObject, Signal, Slot, QTimer, Property, QEvent, Qt, QPoint, QRect, QSize, QMetaObject
 from PySide6.QtGui import QGuiApplication, QCursor
-from PySide6.QtQuick import QQuickItem
 
 from polaris_platform.protocol import PlatformError
+from polaris_platform.metadata import VERSION
+from polaris_platform.desktop.management_control import ManagementControlPort
 from polaris_platform.desktop.presentation import Presentation
-from .storage import CanvasStorage, layout as validate_layout
+from polaris_platform.builtin_apps.workbench import Workbench, WORKBENCH_ID
+from polaris_platform.builtin_apps.workbench.storage import CanvasStorage
 from polaris_platform.desktop.qt_ports import GuiDispatcher
 
 
-class CanvasActions(QObject):
-    """Local QML bridge. It carries one existing session, never management authority."""
-    added = Signal('QVariantMap')
-    removed = Signal(str)
-    reset = Signal()
-    viewsChanged = Signal()
-    themeChanged = Signal()
-    failed = Signal(str, str)
-    arranged = Signal(str, 'QVariantMap')
 
+class CanvasActions(QObject):
+    """Shell window, appearance, and local pointer controls."""
+    themeChanged = Signal()
+    managementChanged = Signal()
+    failed = Signal(str, str)
     def __init__(self, canvas):
         super().__init__()
         self.canvas = canvas
         self._window = None
         self._native_drag = False
         self._gesture = None
-        self._pending_restore = None
         self.moveToThread(QGuiApplication.instance().thread())
+
 
     @Slot(QObject)
     def bindWindow(self, window):
@@ -52,14 +48,16 @@ class CanvasActions(QObject):
         self.canvas.hold('native-frame', False)
         if window is not None:
             window.installEventFilter(self)
-            window.destroyed.connect(self._window_destroyed)
+            window.destroyed.connect(lambda: self._window_destroyed(window))
+
 
     def _window_destroyed(self, window):
-        if self._window is None or self._window == window:
+        if self._window is window:
             self._window = None
             self._gesture = None
             self._native_drag = False
             self.canvas.hold('native-frame', False)
+
 
     @Slot(int, float, float)
     def beginWindowGesture(self, edges, global_x, global_y):
@@ -83,6 +81,7 @@ class CanvasActions(QObject):
             native = False
         if self._gesture is gesture:
             self._gesture = (*gesture[:3], bool(native))
+
 
     @Slot(float, float)
     def updateWindowGesture(self, global_x, global_y):
@@ -108,9 +107,11 @@ class CanvasActions(QObject):
                 rect.setBottom(max(initial.bottom() + delta.y(), initial.top() + minimum_height - 1))
         self._window.setGeometry(rect)
 
+
     @Slot()
     def endWindowGesture(self):
         self._release_native_drag()
+
 
     @Slot()
     def cancelWindowGesture(self):
@@ -118,6 +119,7 @@ class CanvasActions(QObject):
         if self._gesture is not None and self._gesture[3]:
             return
         self._release_native_drag()
+
 
     def eventFilter(self, watched, event):
         if watched is self._window:
@@ -139,11 +141,13 @@ class CanvasActions(QObject):
                 QTimer.singleShot(0, self.syncPointer)
         return False
 
+
     def _release_native_drag(self):
         self._gesture = None
         self._native_drag = False
         self.syncPointer()
         self.canvas.hold('native-frame', False)
+
 
     @Slot()
     def syncPointer(self):
@@ -164,9 +168,44 @@ class CanvasActions(QObject):
             elif not inside and self.canvas._inside:
                 self.canvas.pointer_left()
 
+
+    @Property(str, constant=True)
+    def applicationVersion(self):
+        return VERSION
+
+
+    @Slot()
+    def showComponentManager(self):
+        try:
+            self.canvas._management_control.show()
+        except PlatformError as error:
+            self.failed.emit('', error.message)
+
+    @Property(QObject, notify=managementChanged)
+    def managementBridge(self):
+        return self.canvas._management_control.bridge()
+
+    @Slot(str)
+    def openComponentView(self, identity):
+        try:
+            status = self.canvas.user_access.status(identity)
+            actions = [action for view in status['description'].get('views', [])
+                       for action in view.get('actions', [])]
+            if actions:
+                self.managementBridge.prepareView(self.canvas.port.id, identity, actions[0]['operation'])
+                return
+            self.canvas.workbench.refresh_views()
+            index = next(index for index, row in enumerate(self.canvas.workbench.available_views)
+                         if row['target'] in (identity, status['instanceId']))
+            self.canvas.workbench.actions.mountSelected(index)
+        except Exception as error:
+            self.failed.emit('', str(error))
+
+
     @Property(str, notify=themeChanged)
     def theme(self):
         return self.canvas._storage.theme
+
 
     @Slot(str)
     def setTheme(self, theme):
@@ -176,41 +215,12 @@ class CanvasActions(QObject):
         self.themeChanged.emit()
         self.canvas._save_layout()
 
-    @Property(str, notify=viewsChanged)
-    def viewsJson(self):
-        return json.dumps(self.canvas.available_views, ensure_ascii=False)
-
-    @Slot()
-    def refreshViews(self):
-        self.canvas.refresh_views()
-
-    @Slot(int)
-    def mountSelected(self, index):
-        try:
-            selection = self.canvas.available_views[index]
-            self.canvas.request_mount_approval(selection)
-        except Exception as error:
-            self.failed.emit('', str(error))
 
     @Slot()
     def pointerEntered(self):
         self.canvas.pointer_entered()
         if self.canvas.user_access is not None:
-            self._pending_restore = (self.canvas.user_access.context(), self.canvas._presentation_generation)
-            QTimer.singleShot(0, self.restorePending)
-
-    def restorePending(self):
-        pending = self._pending_restore
-        if pending is None:
-            return
-        context, generation = pending
-        if not self.canvas.running or generation != self.canvas._presentation_generation:
-            self._pending_restore = None
-            return
-        if self.canvas.handle is None or self.canvas.session_id is None:
-            return  # show() consumes this already-captured input after presentation succeeds.
-        self._pending_restore = None
-        self.canvas.restore_layout(context)
+            self.canvas.workbench.capture_restore()
 
     @Slot()
     def pointerLeft(self):
@@ -219,48 +229,57 @@ class CanvasActions(QObject):
         else:
             self.syncPointer()
 
+
     @Slot(str, bool)
     def hold(self, reason, active):
         self.canvas.hold(reason, active)
+
 
     @Slot()
     def dismiss(self):
         self.canvas.dismiss_async('closed')
 
-    @Slot(str, QObject)
-    def attach(self, mount_id, parent):
-        self.canvas.attach_async(mount_id, parent)
 
-    @Slot(str)
-    def unmount(self, mount_id):
-        try:
-            context = self.canvas.user_access.context()
-            self.canvas.work(lambda: self.canvas.unmount({'mountId': mount_id}, context))
-        except PlatformError as error:
-            self.failed.emit('', error.message)
 
-    @Slot(float)
-    def arrange(self, available_width):
-        with self.canvas._lock:
-            columns = max(1, int((max(0, available_width - 32) + 16) // 346))
-            text_rows = (len(self.canvas.cards) + columns - 1) // columns
-            x, y, row_height = 16, 8 + text_rows * 176, 0
-            limit = max(240, available_width - 16)
-            for record in list(self.canvas.mounts.values()):
-                width, height = record['preferredSize']
-                if x > 16 and x + width > limit:
-                    x, y, row_height = 16, y + row_height + 16, 0
-                self.canvas.set_layout(dict(mountId=record['mountId'], x=x, y=y,
-                                            width=width, height=height,
-                                            collapsed=record['layout']['collapsed']), None)
-                x += width + 16
-                row_height = max(row_height, 44 if record['layout']['collapsed'] else height)
+class NativeDisplayClient:
+    """Only native-display collaboration calls retain the Canvas identity."""
+    def __init__(self, client): self._client = client
+    def bind(self, target, operation): return self._client.bind(target, operation)
+    def invoke(self, bound, params, context): return self._client.invoke(bound, params, context=context)
 
-    @Slot(str, float, float, float, float, bool)
-    def layout(self, mount_id, x, y, width, height, collapsed):
-        record = self.canvas.mounts.get(mount_id)
-        if record is not None:
-            self.canvas.set_layout(dict(mountId=mount_id, x=x, y=y, width=width, height=height, collapsed=collapsed), None)
+
+class WorkbenchDisplayPort:
+    """Trusted display boundary; never exported into ordinary application QML."""
+    def __init__(self, canvas):
+        self._canvas = canvas
+        self.client = None
+    @property
+    def layout_lock(self): return self._canvas._lock
+    @property
+    def storage(self): return self._canvas._storage
+    @property
+    def generation(self): return self._canvas._generation
+    @property
+    def presentation_generation(self): return self._canvas._presentation_generation
+    @property
+    def handle(self): return self._canvas.handle
+    @property
+    def session_id(self): return self._canvas.session_id
+    @property
+    def size(self): return self._canvas.size
+    @property
+    def theme(self): return self._canvas._storage.theme
+    @property
+    def has_user_access(self): return self._canvas.user_access is not None
+    def window(self, operation, params, context): return self._canvas._window(operation, params, context)
+    def show(self, context, params): return self._canvas.show(context, params)
+    def hold(self, reason, active): self._canvas.hold(reason, active)
+    def context(self): return self._canvas.user_access.context()
+    def snapshot(self): return self._canvas.user_access.snapshot()
+    def status(self, target): return self._canvas.user_access.status(target)
+    def check_capabilities(self, context, checks): return self._canvas.user_access.check_capabilities(context, checks)
+    def cancel_approval(self, token): return self._canvas._management_control.cancel_approval(token)
+    def prepare_mount(self, target, descriptor, on_finished): return self._canvas.user_access.prepare_mount(target, descriptor, on_finished)
 
 
 class Canvas(Presentation):
@@ -273,19 +292,16 @@ class Canvas(Presentation):
         self._data_dir = data_dir
         self._storage = CanvasStorage(data_dir)
         self.size = self._storage.size
-        self._restoring = False
         self.dispatcher = GuiDispatcher()
+        self._management_control = ManagementControlPort(runtime)
+        self._management_context = None
         self.actions = CanvasActions(self)
         self.application_host = None
         if runtime is not None:
             from polaris_platform.desktop.application_host import ApplicationHost
             self.application_host = ApplicationHost(runtime, self.hold)
-        self.qt_context = {'canvasActions': self.actions, 'applicationHost': self.application_host}
         from polaris_platform.desktop.user_access import DesktopUserAccess
         self.user_access = DesktopUserAccess(runtime) if runtime is not None else None
-        self.available_views = []
-        self.cards = []
-        self.mounts = {}
         self.session_id = None
         self.session_context = None
         self._inside = self._entered = False
@@ -294,8 +310,15 @@ class Canvas(Presentation):
         self._lock = threading.RLock()
         self._pointer_revision = 0
         self._generation = 0
-        self._approvals = {}
         self._collapse_delay = max(0, int(collapse_delay))
+        self.display_port = WorkbenchDisplayPort(self)
+        self.workbench = Workbench(self.display_port)
+        self.workbench.actions.failed.connect(self.actions.failed)
+        self.actions.themeChanged.connect(self.workbench.actions.themeChanged)
+        if self.application_host is not None:
+            self.workbench.actions.runningChanged.connect(self.application_host._update_views)
+        self._builtin_registered = False
+        self.qt_context = {'canvasActions': self.actions, 'applicationHost': self.application_host}
         self._save_timer = self.dispatcher.run(self._make_save_timer)
         self._timer = self.dispatcher.run(self._make_timer)
         self._monitor = self.dispatcher.run(self._make_monitor)
@@ -309,6 +332,7 @@ class Canvas(Presentation):
         self.operation('layout', 'write')(self.set_layout)
         self.dependencies[0]['operations'].extend(['mount', 'set_cards'])
 
+
     def _make_save_timer(self):
         timer = QTimer()
         timer.setSingleShot(True)
@@ -316,17 +340,20 @@ class Canvas(Presentation):
         timer.timeout.connect(self._save_layout)
         return timer
 
+
     def _make_timer(self):
         timer = QTimer()
         timer.setSingleShot(True)
         timer.timeout.connect(lambda: self.dismiss_async('pointer_left'))
         return timer
 
+
     def _make_monitor(self):
         timer = QTimer()
         timer.setInterval(400)
         timer.timeout.connect(self._check_mounts)
         return timer
+
 
     def start(self, port):
         super().start(port)
@@ -335,10 +362,17 @@ class Canvas(Presentation):
         if self.user_access is not None:
             self.user_access.bind(port.id)
             self._load_storage_directory()
+        self.display_port.client = NativeDisplayClient(port)
         if self.application_host is not None:
+            if not self._builtin_registered:
+                self.dispatcher.run(lambda: self.application_host.register_builtin(self.workbench, self.workbench.create_view, component_type='org.polaris.workbench', version='1'))
+                self._builtin_registered = True
+            else:
+                self.application_host.runtime.start_application(WORKBENCH_ID)
             directory = self._storage.path.parent if self._storage.path else None
             self.dispatcher.run(lambda: self.application_host.configure(directory))
         self.dispatcher.run(self._monitor.start)
+
 
     def _load_storage_directory(self):
         with self._lock:
@@ -351,34 +385,56 @@ class Canvas(Presentation):
                     self.size = storage.size
                     self.actions.themeChanged.emit()
 
+
     def stop(self):
+        self._management_control.cancel_pending_ui()
         with self._lock:
             self.running = False
             self._generation += 1
-            self._approvals.clear()
-            self.actions._pending_restore = None
-            records = list(self.mounts.values())
-            self.mounts.clear()
-            for record in records:
-                record["cancelled"] = True
         if self.application_host is not None:
             self.dispatcher.run(self.application_host.close)
+        if self.application_host is not None:
+            self.application_host.runtime.stop_application(WORKBENCH_ID)
         self.dispatcher.run(self._flush_layout)
         self.dispatcher.run(self._timer.stop)
         self.dispatcher.run(self._monitor.stop)
-        # Disposal of the canvas tree releases presentation children, never provider data.
-        for record in records:
-            self._release(record)
         if self.session_id is not None:
             self._finish_session('stopped', publish=True)
         super().stop()
 
+
     def status(self, context=None):
         result = super().status(context)
         with self._lock:
-            mounts = [self._public(r) for r in self.mounts.values()]
+            mounts = [self.workbench._public(r) for r in self.workbench.mounts.values()]
         result.update(sessionId=self.session_id, mounts=mounts)
         return result
+
+
+    def _window(self, operation, params, context):
+        if self._management_context is not None and context is self._management_context:
+            # This signed context is held only by the trusted local shell. Reuse
+            # the native provider's owner/profile checks without granting public
+            # callers any window operations.
+            provider = self._management_control.runtime.component_instance(self.window_id)
+            return provider.call(operation, params, context)
+        return super()._window(operation, params, context)
+
+    def ensure_management_presentation(self):
+        """Local GUI management entry; never exported to application QML."""
+        self.actions.managementChanged.emit()
+        window = self.actions._window
+        if window is not None and window.isVisible():
+            if self._management_context is None:
+                self._management_context = self.user_access.context()
+            self._view_state = self._window('show', {'handle': self.handle}, self._management_context)
+            return self.status()
+        self._management_context = self.user_access.context()
+        return self.show(self._management_context)
+
+    def open_extension_management(self):
+        self.ensure_management_presentation()
+        QMetaObject.invokeMethod(self.actions._window.rootObject(), 'showExtensionManagement', Qt.DirectConnection)
 
     def show(self, context=None, params=None):
         self._load_storage_directory()
@@ -403,12 +459,7 @@ class Canvas(Presentation):
         if previous_handle != self.handle:
             with self._lock:
                 self._generation += 1
-                previous_mounts = list(self.mounts.values())
-                self.mounts.clear()
-                for record in previous_mounts:
-                    record['cancelled'] = True
-            for record in previous_mounts:
-                self._release(record, context=context)
+            self.workbench.reset_presentations(context)
         new_session = str(params.get('sessionId') or uuid.uuid4().hex)
         if self.session_id is not None and self.session_id != new_session:
             self._finish_session('replaced')
@@ -421,10 +472,11 @@ class Canvas(Presentation):
         if pointer.get('pointerInside'):
             self.dispatcher.run(self.pointer_entered)
         self.dispatcher.run(self._schedule_collapse)
-        self.dispatcher.run(lambda: QTimer.singleShot(0, self.actions.restorePending))
+        self.dispatcher.run(lambda: QTimer.singleShot(0, self.workbench.restore_pending))
         if self.application_host is not None:
             self.dispatcher.run(lambda: self.application_host.set_presentation_active(True))
         return dict(result, sessionId=self.session_id)
+
 
     def hide(self, context=None, params=None):
         self.dispatcher.run(self._flush_layout)
@@ -435,6 +487,7 @@ class Canvas(Presentation):
         session_id = self.session_id
         self._finish_session(str(params.get('reason', 'closed')), context=context)
         return dict(result, sessionId=session_id, dismissed=session_id is not None)
+
 
     def _finish_session(self, reason, context=None, publish=True):
         if self.application_host is not None:
@@ -453,15 +506,18 @@ class Canvas(Presentation):
             # A session event retains the original session context, even when a new user closes it.
             self.work(notify)
 
+
     def pointer_entered(self):
         self._pointer_revision += 1
         self._inside = self._entered = True
         self._timer.stop()
 
+
     def pointer_left(self):
         self._pointer_revision += 1
         self._inside = False
         self._schedule_collapse()
+
 
     def hold(self, reason, active):
         if (reason in self._holds) == bool(active):
@@ -474,9 +530,11 @@ class Canvas(Presentation):
             self._holds.discard(reason)
             self._schedule_collapse()
 
+
     def _schedule_collapse(self):
         if self.session_id and self._entered and not self._inside and not self._holds:
             self._timer.start(self._collapse_delay)
+
 
     def dismiss_async(self, reason):
         if self.session_id is None:
@@ -511,6 +569,7 @@ class Canvas(Presentation):
                     self.actions.failed.emit('', error.message)
         self.work(dismiss)
 
+
     def work(self, callback):
         def execute():
             try:
@@ -523,295 +582,6 @@ class Canvas(Presentation):
         self._workers.add(thread)
         thread.start()
 
-    def set_cards(self, params, context):
-        cards = params.get('cards', [])
-        if not isinstance(cards, list) or any(not isinstance(c, dict) for c in cards):
-            raise PlatformError('invalid_params', '卡片应为对象列表')
-        with self._lock:
-            self.cards = [{'title': str(c.get('title', '')), 'text': str(c.get('text', ''))} for c in cards]
-            self.properties['cardsJson'] = json.dumps(self.cards, ensure_ascii=False)
-        if self.handle:
-            self._window('update', {'handle': self.handle, 'properties': self.properties}, context)
-        return {'count': len(self.cards)}
-
-    def request_mount_approval(self, selection):
-        reason = 'approval-' + uuid.uuid4().hex
-        generation, session_id = self._generation, self.session_id
-        self._approvals[reason] = (generation, session_id)
-        self.hold(reason, True)
-        def finished(*_):
-            def release():
-                expected = self._approvals.pop(reason, None)
-                if expected == (self._generation, self.session_id):
-                    self.hold(reason, False)
-            self.dispatcher.run(release)
-        try:
-            self.user_access.prepare_mount(selection['target'], selection['descriptor'], on_finished=finished)
-        except Exception:
-            finished()
-            raise
-
-    @staticmethod
-    def _instance_suffix(component):
-        if component['manifest'].get('instances', {}).get('mode') != 'multiple':
-            return ''
-        if component.get('isDefault', True):
-            return ' · 默认实例'
-        return ' · 实例 ' + component.get('instanceId', component['id'])[:8]
-
-    def refresh_views(self):
-        self.available_views = []
-        if self.user_access is not None:
-            for component in self.user_access.snapshot():
-                if component['state'] != 'running':
-                    continue
-                for descriptor in component.get('description', {}).get('views', []):
-                    if descriptor.get('adapter') == 'qt-quick-item':
-                        self.available_views.append(dict(target=component.get('instanceId', component['id']), stableInstanceId=component.get('instanceId'), componentName=component['manifest']['name'] + self._instance_suffix(component),
-                            title=descriptor.get('title', descriptor['id']), descriptor=descriptor))
-        self.actions.viewsChanged.emit()
-
-    def mount(self, params, context):
-        return self._mount(params, context)
-
-    def _mount(self, params, context, layout_id=None):
-        target = params.get('target')
-        if not isinstance(target, str):
-            raise PlatformError('invalid_params', 'View target is required')
-        descriptor = params.get('descriptor') or {}
-        if descriptor.get('adapter', 'qt-quick-item') != 'qt-quick-item':
-            raise PlatformError('unsupported_view', 'This mount requires the trusted local Qt item profile')
-        view_id = str(params.get('view', descriptor.get('id', 'main')))
-        create = str(descriptor.get('create', 'create_view'))
-        release = str(descriptor.get('release', 'release_view'))
-        client = self.port
-        if client is None or not self.running:
-            raise PlatformError('component_unavailable', 'Canvas is stopped')
-        bound = client.bind(target, create)
-        release_bound = client.bind(target, release)
-        stable_id = getattr(bound, 'instanceId', None)
-        if stable_id:
-            target = stable_id
-        declared = None
-        current = None
-        if self.user_access is not None:
-            current = self.user_access.status(target)
-            declared = next((view for view in current.get('description', {}).get('views', []) if view.get('id') == view_id), None)
-            if declared is not None:
-                descriptor = {**declared, **descriptor}
-                create = str(declared.get('create', 'create_view'))
-                release = str(declared.get('release', 'release_view'))
-                bound = client.bind(target, create)
-                release_bound = client.bind(target, release)
-        policy = (declared or descriptor).get('instancePolicy', 'multiple')
-        if policy not in ('single', 'multiple'):
-            raise PlatformError('invalid_view_policy', 'Unknown view instance policy')
-        if policy == 'single':
-            if self.user_access is None:
-                raise PlatformError('permission_required', 'Single-view reuse requires verified caller authority')
-            checks = [bound, release_bound]
-            for permission in (declared or descriptor).get('permissions', []):
-                if permission.get('kind', 'operation') == 'operation':
-                    checks.append(client.bind(permission.get('target', target), permission['name']))
-            self.user_access.check_capabilities(context, checks)
-        window_state = self._window('status', {'handle': self.handle}, context)
-        if self.session_id is None or not window_state.get('visible'):
-            self.show(context, {})
-        restoring_layout = layout_id is not None
-        layout_id = layout_id or uuid.uuid4().hex
-        mount_id = uuid.uuid4().hex
-        preferred = descriptor.get('preferredSize')
-        preferred = preferred if isinstance(preferred, dict) else {}
-        def dimension(key, fallback, minimum, maximum):
-            value = preferred.get(key)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or (isinstance(value, float) and not math.isfinite(value)):
-                return fallback
-            return max(minimum, min(maximum, int(value)))
-        card_width = dimension('width', 380, 240, 1600)
-        card_height = dimension('height', 340, 130, 1200)
-        with self._lock:
-            # Duplicate selection and insertion share this lock, including
-            # concurrent calls arriving before either provider item is attached.
-            if policy == 'single':
-                duplicate = next((record for record in self.mounts.values()
-                                  if record['target'] == target and record['view'] == view_id
-                                  and not record['cancelled']), None)
-                if duplicate is not None:
-                    if restoring_layout and duplicate['layoutId'] != layout_id:
-                        raise PlatformError('view_layout_conflict', '单视图存在重复保存布局，请移除重复布局后重试')
-                    previous = duplicate['context']
-                    if (previous.origin != context.origin or previous.source != context.source
-                            or previous.origin_installation != context.origin_installation
-                            or not previous.scope <= context.scope):
-                        raise PlatformError('view_context_conflict', '已有视图使用不同授权范围，请先关闭再重新打开')
-                    if duplicate['layout']['collapsed']:
-                        self.set_layout(dict(mountId=duplicate['mountId'], collapsed=False), context)
-                    return dict(mountId=duplicate['mountId'], state=duplicate['state'], reused=True)
-            # Find a free position using current geometries, including user-moved cards.
-            existing = [dict(r['layout']) for r in self.mounts.values()]
-            # Text cards use a Flow with 330×160 items and a 16 px gap.
-            columns = max(1, int((max(0, self.size[0] - 128) + 16) // 346))
-            existing += [dict(x=12 + (i % columns) * 346, y=8 + (i // columns) * 176,
-                              width=330, height=160, collapsed=False) for i in range(len(self.cards))]
-            xs = sorted({16, *(r['x'] + r['width'] + 16 for r in existing)})
-            ys = sorted({8, *(r['y'] + (44 if r['collapsed'] else r['height']) + 16 for r in existing)})
-            limit = max(card_width + 16, self.size[0] - 112)
-            x, y = 16, max(ys)
-            for candidate_y in ys:
-                found = False
-                for candidate_x in xs:
-                    if candidate_x + card_width > limit:
-                        continue
-                    if all(candidate_x + card_width + 16 <= r['x'] or
-                           candidate_x >= r['x'] + r['width'] + 16 or
-                           candidate_y + card_height + 16 <= r['y'] or
-                           candidate_y >= r['y'] + (44 if r['collapsed'] else r['height']) + 16
-                           for r in existing):
-                        x, y, found = candidate_x, candidate_y, True
-                        break
-                if found:
-                    break
-            record = dict(mountId=mount_id, layoutId=layout_id, target=target, stableInstanceId=stable_id, view=view_id, title=str(descriptor.get('title', target)) + (self._instance_suffix(current) if current else ''),
-                          create=create, release=release, bound=bound, release_bound=release_bound, context=context, handle=None,
-                          state='pending', error='', container=None, item=None, client=client, cancelled=False,
-                          preferredSize=(card_width, card_height),
-                          layout=dict(x=x, y=y, width=card_width, height=card_height, collapsed=False))
-            if not self.running or self.port is not client:
-                raise PlatformError('component_unavailable', 'Canvas stopped before mounting')
-            saved = self._storage.entries.get(layout_id)
-            if saved is not None:
-                record['layout'] = dict(saved['layout'])
-                if stable_id and not saved.get('stableInstanceId'):
-                    saved.update(target=target, stableInstanceId=stable_id)
-                    self._save_layout()
-            else:
-                self._storage.entries[layout_id] = dict(id=layout_id, target=target, stableInstanceId=stable_id, view=view_id, layout=dict(record['layout']))
-                self._save_layout()
-            record['generation'] = self._generation
-            self.mounts[mount_id] = record
-        def announce():
-            if self._mount_current(record):
-                self.actions.added.emit(self._public(record))
-                return True
-            return False
-        if not self.dispatcher.run(announce):
-            raise PlatformError('stale_instance', 'The canvas presentation changed before mounting')
-        return {'mountId': mount_id, 'state': 'pending'}
-
-    @staticmethod
-    def _public(record):
-        return {**{key: record[key] for key in ('mountId', 'target', 'view', 'title', 'state', 'error')},
-                'layout': dict(record['layout'])}
-
-    def _mount_current(self, record):
-        with self._lock:
-            return (self.running and not record['cancelled']
-                    and self.port is record['client'] and self._generation == record['generation']
-                    and self.mounts.get(record['mountId']) is record)
-
-    def attach_async(self, mount_id, parent):
-        with self._lock:
-            record = self.mounts.get(mount_id)
-            if record is None or record['state'] != 'pending' or not self._mount_current(record):
-                return
-            record['state'] = 'attaching'
-            record['container'] = parent
-        client, context = record['client'], record['context']
-        def create_on_gui():
-            import shiboken6
-            # Check the native parent on its GUI thread, immediately before entering the provider.
-            if not self._mount_current(record):
-                return
-            if not shiboken6.isValid(parent):
-                with self._lock:
-                    self.mounts.pop(mount_id, None)
-                    record['cancelled'] = True
-                self.actions.removed.emit(mount_id)
-                return
-            result = client.invoke(record['bound'], {'view': record['view'], 'parent': parent}, context=context)
-            if not isinstance(result, dict) or not isinstance(result.get('item'), QQuickItem) or not isinstance(result.get('handle'), str):
-                raise PlatformError('invalid_view', 'Provider must return a native item and an owned handle')
-            item = result['item']
-            if not self._mount_current(record) or not shiboken6.isValid(parent) or not shiboken6.isValid(item):
-                # Dispose using the original identity/handle only; never route to a new instance.
-                try:
-                    client.invoke(record['release_bound'], {'handle': result['handle']}, context=context)
-                except PlatformError:
-                    if shiboken6.isValid(item):
-                        item.setVisible(False)
-                return
-            record['resize_disconnect'] = self._fit_native(item, parent)
-            record.update(handle=result['handle'], item=item, state='mounted')
-        def attach():
-            try:
-                self.dispatcher.run(create_on_gui)
-            except Exception as error:
-                if self._mount_current(record):
-                    record.update(state='unavailable', error=str(error))
-                    self.actions.failed.emit(mount_id, str(error))
-        self.work(attach)
-
-    @staticmethod
-    def _fit_native(item, parent):
-        import shiboken6
-        disconnected = False
-        def fit():
-            if shiboken6.isValid(item) and shiboken6.isValid(parent):
-                item.setWidth(parent.width())
-                item.setHeight(parent.height())
-        def disconnect(*_):
-            nonlocal disconnected
-            if disconnected:
-                return
-            disconnected = True
-            if shiboken6.isValid(parent):
-                for signal in (parent.widthChanged, parent.heightChanged):
-                    try:
-                        signal.disconnect(fit)
-                    except (RuntimeError, TypeError):
-                        pass
-        fit()
-        parent.widthChanged.connect(fit)
-        parent.heightChanged.connect(fit)
-        item.destroyed.connect(disconnect)
-        parent.destroyed.connect(disconnect)
-        return disconnect
-
-    def _release(self, record, context=None):
-        if record.get("resize_disconnect"):
-            self.dispatcher.run(record["resize_disconnect"])
-        if record['handle']:
-            try:
-                record['client'].invoke(record['release_bound'], {'handle': record['handle']}, context=context or record['context'])
-            except PlatformError:
-                pass
-        self.actions.removed.emit(record['mountId'])
-
-    def unmount(self, params, context):
-        mount_id = params.get('mountId')
-        with self._lock:
-            record = self.mounts.pop(mount_id, None)
-            if record is not None:
-                record['cancelled'] = True
-                self._storage.entries.pop(record['layoutId'], None)
-                self._save_layout()
-        if record is not None:
-            self._release(record, context=context)
-        return {'released': record is not None}
-
-    def set_layout(self, params, context):
-        with self._lock:
-            record = self.mounts.get(params.get('mountId'))
-            if record is None:
-                raise PlatformError('missing_view', 'Unknown mount')
-            try:
-                record['layout'] = validate_layout({**record['layout'], **{key: params[key] for key in ('x', 'y', 'width', 'height', 'collapsed') if key in params}})
-            except (ValueError, KeyError, TypeError) as error:
-                raise PlatformError('invalid_params', str(error)) from error
-            self._storage.entries[record['layoutId']]['layout'] = dict(record['layout'])
-            self._save_layout()
-        self.actions.arranged.emit(record['mountId'], record['layout'])
-        return self._public(record)
 
     def _save_layout(self):
         with self._lock:
@@ -820,60 +590,19 @@ class Canvas(Presentation):
             except (OSError, ValueError) as error:
                 self.actions.failed.emit('', str(error))
 
+
     def save_window_size(self, width, height):
         with self._lock:
             if width > 0 and height > 0 and (int(width), int(height)) != self._storage.size:
                 self.size = self._storage.size = (int(width), int(height))
                 self._save_timer.start()
 
+
     def _flush_layout(self):
         if self._save_timer.isActive():
             self._save_timer.stop()
             self._save_layout()
 
-    def restore_layout(self, context):
-        # Rebuild using current public declarations and the caller's existing authority.
-        # A local pointer entry supplies a fresh, canvas-owned user input context.
-        with self._lock:
-            if self._restoring or not self.running or not self.handle:
-                return
-            self._restoring = True
-        try:
-            if self._storage.error is not None:
-                self.actions.failed.emit('', '画布布局文件无法读取，已保留原文件：' + self._storage.error)
-            self.refresh_views()
-            with self._lock:
-                saved_entries = list(self._storage.entries.items())
-            for identity, saved in saved_entries:
-                with self._lock:
-                    existing = next((r for r in self.mounts.values() if r['layoutId'] == identity), None)
-                    if existing is not None:
-                        if existing['state'] != 'unavailable':
-                            continue
-                        self.mounts.pop(existing['mountId'], None)
-                        existing['cancelled'] = True
-                if existing is not None:
-                    self._release(existing, context=context)
-                saved_target = saved.get('stableInstanceId') or saved['target']
-                selection = next((v for v in self.available_views if v['target'] == saved_target and v['descriptor']['id'] == saved['view']), None)
-                if selection is None and not saved.get('stableInstanceId'):
-                    # Legacy aliases may resolve only to the current default instance.
-                    try:
-                        stable = self.user_access.status(saved_target).get('instanceId', saved_target)
-                        selection = next((v for v in self.available_views if v['target'] == stable and v['descriptor']['id'] == saved['view']), None)
-                    except PlatformError:
-                        pass
-                if selection is None:
-                    continue
-                try:
-                    self._mount(dict(target=selection['target'], view=saved['view'], descriptor=selection['descriptor']), context, layout_id=identity)
-                except PlatformError as error:
-                    if error.code == 'view_layout_conflict':
-                        self.actions.failed.emit('', error.message)
-                    pass  # Keep intent intact for a later authorized local input.
-        finally:
-            with self._lock:
-                self._restoring = False
 
     def _check_mounts(self):
         if self.port is None:
@@ -894,19 +623,19 @@ class Canvas(Presentation):
                     self.dismiss_async('unavailable')
                 else:
                     self.actions.failed.emit('', error.message)
-        for mount_id, record in list(self.mounts.items()):
-            try:
-                import shiboken6
-                live_item = record['item'] is None or shiboken6.isValid(record['item'])
-                live_parent = record['container'] is None or shiboken6.isValid(record['container'])
-                if live_item and live_parent and self.port.bind(record['target'], record['create']) == record['bound']:
-                    continue
-            except PlatformError:
-                pass
-            with self._lock:
-                self.mounts.pop(mount_id, None)
-                record['cancelled'] = True
-            self.work(lambda record=record: self._release(record))
+        self.workbench.check_mounts()
+
+    def set_cards(self, params, context):
+        return self.workbench.set_cards(params, context)
+
+    def mount(self, params, context):
+        return self.workbench.mount(params, context)
+
+    def unmount(self, params, context):
+        return self.workbench.unmount(params, context)
+
+    def set_layout(self, params, context):
+        return self.workbench.set_layout(params, context)
 
 
 def create_canvas(runtime=None, window_id='window', cleanup_port=None, collapse_delay=700, data_dir=None):
