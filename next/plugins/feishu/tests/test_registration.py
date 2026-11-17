@@ -70,6 +70,8 @@ class SDKRegistrationTests(unittest.TestCase):
         self.assertEqual(decoded, ADDONS)
         self.assertEqual(query['createOnly'], ['true'])
         self.assertNotIn('user', decoded['scopes'])
+        self.assertIn('im:resource', decoded['scopes']['tenant'])
+        self.assertIn('cardkit:card:write', decoded['scopes']['tenant'])
         self.assertEqual(sum(key == 'verify' for key, _ in records), 1)
         safe = json.dumps([value for value in emitted if value['state'] != 'credentials'])
         self.assertNotIn('private-token', safe)

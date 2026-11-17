@@ -14,3 +14,9 @@
 4. 客户端连接成功后，在飞书后台该应用的「事件与回调 → 事件配置」选择「使用长连接接收事件」并保存，订阅 `im.message.receive_v1`。飞书要求保存该模式时已有正常在线的长连接。事件订阅和权限等配置变更后按飞书提示重新发布。若要测试群聊，先将应用机器人加入目标群。若要接收卡片按钮交互，还需在「事件与回调 → 回调配置」选择长连接并订阅 `card.action.trigger`，按飞书提示发布。
 
 飞书官方说明：[长连接接收事件](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)、[机器人能力与发布](https://open.feishu.cn/document/client-docs/bot-v3/bot-overview?from=home)、[卡片回调](https://open.feishu.cn/document/event-subscription-guide/callback-subscription/receive-and-handle-callbacks)、[消息权限列表及旧权限下线说明](https://open.feishu.cn/document/develop-robots/add-bot-to-external-group?lang=zh-CN)。仅在明确指定目标后发送测试消息。
+
+配置完成后，点击“打开机器人私聊”进入桌面飞书，或点击“手机扫码进入”用手机飞书打开该机器人的聊天。发送消息后，可在此实例查看和回复。
+
+## 附件与流式卡片权限（0.1.4）
+
+新建机器人扫码确认页会额外请求 `im:resource`（收取与上传消息资源）和 `cardkit:card:write`（创建和更新流式卡片）。已有机器人需要在当前应用的飞书官方后台开通这两项并发布；更新组件不会清除凭据、重建机器人或代为扩权。权限不足时相关操作会返回真实飞书错误（例如 `99991672`）；文本消息权限不代表附件或 CardKit 权限已获授权。

@@ -187,13 +187,13 @@ class RealSDKTests(unittest.TestCase):
                 await second.close()
                 channel._sender._driver.create_message = AsyncMock(return_value={'code': 0, 'data': {'message_id': 'om_created'}})
                 channel._sender._driver.reply_message = AsyncMock(return_value={'code': 0, 'data': {'message_id': 'om_reply'}})
-                result = await session.handle('send', {'chatId': 'oc_test', 'text': 'hello', 'requestId': 'request-one'})
+                result = await session.handle('send', {'targetId': 'oc_test', 'receiveIdType': 'chat_id', 'message': {'text': 'hello'}, 'requestId': 'request-one'})
                 self.assertEqual(result['messageId'], 'om_created')
                 call = channel._sender._driver.create_message.call_args.kwargs
                 self.assertEqual(call['receive_id'], 'oc_test')
                 self.assertEqual(json.loads(call['content']), {'text': 'hello'})
                 self.assertEqual(call['uuid'], 'request-one')
-                await session.handle('send', {'chatId': 'oc_test', 'text': 'reply', 'replyMessageId': 'om_source'})
+                await session.handle('send', {'targetId': 'oc_test', 'receiveIdType': 'chat_id', 'message': {'text': 'reply'}, 'replyMessageId': 'om_source'})
                 self.assertEqual(channel._sender._driver.reply_message.call_args.kwargs['message_id'], 'om_source')
                 card = {'elements': [{'tag': 'markdown', 'content': 'Offline card'}]}
                 await session.handle('send_card', {'chatId': 'oc_test', 'card': card, 'requestId': 'card-request'})

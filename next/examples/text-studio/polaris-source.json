@@ -1,1 +1,16 @@
-{"schemaVersion":1,"name":"文本工作室示例组件","components":[{"path":"component"}]}
+{
+  "schemaVersion": 1,
+  "name": "文本工作室示例",
+  "components": [
+    {
+      "path": "component",
+      "description": "示例组件：提供文本整理和规则词频统计。"
+    }
+  ],
+  "applications": [
+    {
+      "path": "application",
+      "description": "示例应用：双栏文本编辑、字符统计及处理结果回填。"
+    }
+  ]
+}

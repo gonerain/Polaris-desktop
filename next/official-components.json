@@ -93,8 +93,8 @@
       "manifest": "components/canvas/manifest.json",
       "instancePolicy": "single (default)",
       "viewPolicy": "main (host presentation)",
-      "responsibility": "画布及视图摆放",
-      "dataOwnership": "画布布局与展示状态",
+      "responsibility": "画布窗口、导航、主题及内置应用承载",
+      "dataOwnership": "窗口尺寸与主题；工作台视图布局共享原画布布局文件",
       "provides": {
         "operations": {
           "status": "polaris.canvas.status@1",
@@ -140,8 +140,8 @@
       "manifest": "components/manager/manifest.json",
       "instancePolicy": "single (default)",
       "viewPolicy": "main",
-      "responsibility": "组件管理界面",
-      "dataOwnership": "管理视图状态",
+      "responsibility": "画布内扩展管理与可信授权控制",
+      "dataOwnership": "扩展管理状态与授权确认计划",
       "provides": {
         "operations": {},
         "events": {}
@@ -294,7 +294,7 @@
     {
       "id": "org.polaris.feishu-bot",
       "group": "external",
-      "version": "0.1.2",
+      "version": "0.1.5",
       "platformApi": 1,
       "factory": "polaris_feishu_bot:create",
       "factoryAliases": [],
@@ -309,14 +309,50 @@
           "status": "polaris.feishu.status@1",
           "read_messages": "polaris.feishu.read-messages@1",
           "read_card_actions": "polaris.feishu.read-card-actions@1",
+          "read_attachment": "polaris.feishu.read-attachment@1",
           "send": "polaris.feishu.send@1",
           "reply": "polaris.feishu.reply@1",
           "send_card": "polaris.feishu.send-card@1",
-          "update_card": "polaris.feishu.update-card@1"
+          "update_card": "polaris.feishu.update-card@1",
+          "upload_media": "polaris.feishu.upload-media@1",
+          "download_resource": "polaris.feishu.download-resource@1",
+          "start_stream": "polaris.feishu.start-stream@1",
+          "update_stream": "polaris.feishu.update-stream@1",
+          "finish_stream": "polaris.feishu.finish-stream@1"
         },
         "events": {}
       },
       "maturity": "initial; capability replacement not certified"
+    },
+    {
+      "id": "org.polaris.codex-cli",
+      "group": "external",
+      "version": "0.1.1",
+      "platformApi": 1,
+      "factory": "polaris_codex_cli:create",
+      "factoryAliases": [],
+      "source": "marketplace/packages/codex-cli",
+      "manifest": null,
+      "instancePolicy": "multiple",
+      "viewPolicy": "main",
+      "responsibility": "Codex CLI 会话运行与管理",
+      "dataOwnership": "实例独立配置、会话身份及回合结果",
+      "provides": {
+        "operations": {
+          "get": "polaris.codex-cli.get@1",
+          "result": "polaris.codex-cli.result@1",
+          "configure": "polaris.codex-cli.configure@1",
+          "send": "polaris.codex-cli.send@1",
+          "new": "polaris.codex-cli.new@1",
+          "compact": "polaris.codex-cli.compact@1",
+          "interrupt": "polaris.codex-cli.interrupt@1",
+          "set_model": "polaris.codex-cli.set_model@1"
+        },
+        "events": {
+          "turn.finished": "polaris.codex-cli.turn-finished@1"
+        }
+      },
+      "maturity": "initial"
     }
   ]
 }

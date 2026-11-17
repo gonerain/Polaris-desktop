@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 Rectangle {
     id: root
@@ -21,6 +22,9 @@ Rectangle {
     property string selectedChatId: ""
     property string replyMessageId: ""
     property string replyPreview: ""
+    property var savingResource: ({})
+    readonly property bool streaming: !!snapshot.streamId
+    readonly property string targetType: ["chat_id", "open_id", "email"][targetKind.currentIndex]
     readonly property var conversations: snapshot.conversations || []
     readonly property var messages: (snapshot.messages || []).filter(function(message) {
         return !!root.selectedChatId && message.chatId === root.selectedChatId
@@ -39,6 +43,7 @@ Rectangle {
     }
     function chooseConversation(chatId) {
         selectedChatId = chatId
+        targetKind.currentIndex = 0
         recipient.text = chatId
         replyMessageId = ""
         replyPreview = ""
@@ -52,7 +57,9 @@ Rectangle {
     }
     function sendDraft() {
         if (!send.enabled || draft.inputMethodComposing) return
-        feishuBot.sendMessage(recipient.text.trim(), draft.text, replyMessageId)
+        if (root.streaming) feishuBot.updateStream(draft.text)
+        else if (cardMode.checked) feishuBot.startStream(root.targetType, recipient.text.trim(), draft.text, replyMessageId, threadReply.checked)
+        else feishuBot.sendDraft(root.targetType, recipient.text.trim(), draft.text, replyMessageId, threadReply.checked)
     }
 
     component ActionButton: Button {
@@ -84,21 +91,41 @@ Rectangle {
             border.color: field.activeFocus ? root.accent : root.line
         }
     }
+    component OptionToggle: CheckBox {
+        id: option
+        implicitHeight: 32; spacing: 6; leftPadding: 0; rightPadding: 0
+        indicator: Rectangle {
+            implicitWidth: 15; implicitHeight: 15
+            x: option.leftPadding; y: (option.height - height) / 2
+            radius: 4; color: option.checked ? root.accent : root.raised
+            border.color: option.visualFocus ? root.accent : root.line
+            Text { anchors.centerIn: parent; text: option.checked ? "✓" : ""; color: root.onAccent; font.pixelSize: 12 }
+        }
+        contentItem: Text {
+            text: option.text; color: option.enabled ? root.ink : root.muted; font.pixelSize: 12
+            verticalAlignment: Text.AlignVCenter; leftPadding: option.indicator.width + option.spacing
+        }
+    }
     component BodyLabel: Text {
         color: root.muted; font.pixelSize: 12; textFormat: Text.PlainText; wrapMode: Text.Wrap
     }
 
     Connections {
         target: feishuBot
+        function onAttachmentSent() {
+            root.replyMessageId = ""
+            root.replyPreview = ""
+        }
         function onMessageSent() {
             draft.clear()
             root.replyMessageId = ""
             root.replyPreview = ""
+            cardMode.checked = false
         }
         function onChanged() {
             if (root.snapshot.selectedChatId && root.snapshot.selectedChatId !== root.selectedChatId) {
                 root.selectedChatId = root.snapshot.selectedChatId
-                recipient.text = root.selectedChatId
+                if (targetKind.currentIndex === 0) recipient.text = root.selectedChatId
             }
         }
     }
@@ -121,6 +148,11 @@ Rectangle {
             ActionButton { objectName: "feishuCancelRegistration"; text: "取消扫码"; visible: root.registering; enabled: !root.busy; onClicked: feishuBot.cancelRegistration() }
             ActionButton { objectName: "feishuRefresh"; text: "刷新"; enabled: !root.busy; onClicked: feishuBot.refresh() }
             ActionButton { objectName: "feishuConnect"; visible: !root.registering; text: root.connected ? "断开" : "连接"; primary: !root.connected; enabled: !root.busy && !!root.snapshot.configured; onClicked: root.connected ? feishuBot.disconnectBot() : feishuBot.connectBot() }
+        }
+        Flow {
+            Layout.fillWidth: true; spacing: 8; visible: !!root.snapshot.configured
+            ActionButton { objectName: "feishuOpenChat"; text: "打开机器人私聊"; primary: true; onClicked: feishuBot.openChat() }
+            ActionButton { objectName: "feishuShowChatQr"; text: "手机扫码进入"; onClicked: chatEntry.open() }
         }
         Rectangle {
             Layout.fillWidth: true; implicitHeight: errorText.implicitHeight + 18
@@ -208,6 +240,26 @@ Rectangle {
                     onActivated: function(index) { root.chooseConversation(root.conversations[index].chatId) }
                     palette.text: root.ink; palette.buttonText: root.ink; palette.base: root.raised; palette.button: root.raised
                 }
+                Repeater {
+                    model: root.snapshot.activeStreams || []
+                    delegate: RowLayout {
+                        id: activeCard
+                        required property var modelData
+                        Layout.fillWidth: true
+                        BodyLabel { Layout.fillWidth: true; text: "未完成卡片 · " + (activeCard.modelData.title || activeCard.modelData.text || "卡片"); maximumLineCount: 1; elide: Text.ElideRight }
+                        ActionButton {
+                            objectName: "feishuResumeStream_" + activeCard.modelData.stream_id
+                            text: "继续编辑"; enabled: !root.busy
+                            onClicked: {
+                                targetKind.currentIndex = ["chat_id", "open_id", "email"].indexOf(activeCard.modelData.targetType || "chat_id")
+                                recipient.text = activeCard.modelData.targetId || activeCard.modelData.chatId || ""
+                                draft.text = activeCard.modelData.text || ""
+                                cardMode.checked = true
+                                feishuBot.resumeStream(activeCard.modelData.stream_id)
+                            }
+                        }
+                    }
+                }
                 ListView {
                     id: messageList; objectName: "feishuMessages"
                     Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 100; clip: true; spacing: 9
@@ -221,24 +273,81 @@ Rectangle {
                             id: messageBody; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; spacing: 7
                             RowLayout {
                                 Layout.fillWidth: true
-                                BodyLabel { Layout.fillWidth: true; color: root.ink; text: ["outgoing", "outbound"].indexOf(messageRow.modelData.direction) >= 0 ? "机器人" : (messageRow.modelData.sender || "收到消息") }
+                                BodyLabel { Layout.fillWidth: true; color: root.ink; text: ["outgoing", "outbound"].indexOf(messageRow.modelData.direction) >= 0 ? "机器人" : (messageRow.modelData.senderLabel || messageRow.modelData.sender || "收到消息") }
                                 BodyLabel { text: root.messageTime(messageRow.modelData.createdAt); font.pixelSize: 10 }
                             }
-                            Text { Layout.fillWidth: true; text: messageRow.modelData.text || "非文本消息"; textFormat: Text.PlainText; wrapMode: Text.WrapAnywhere; color: root.ink; font.pixelSize: 13 }
-                            ActionButton { objectName: "feishuReply_" + messageRow.modelData.messageId; text: "引用回复"; visible: !!messageRow.modelData.messageId; enabled: !root.busy; onClicked: { root.replyMessageId = messageRow.modelData.messageId; root.replyPreview = messageRow.modelData.text || "非文本消息"; draft.forceActiveFocus() } }
+                            Text { Layout.fillWidth: true; text: messageRow.modelData.text || ((messageRow.modelData.normalized || {}).content || {}).text || ""; visible: !!text; textFormat: Text.PlainText; wrapMode: Text.WrapAnywhere; color: root.ink; font.pixelSize: 13 }
+                            BodyLabel {
+                                Layout.fillWidth: true
+                                property var mentions: (messageRow.modelData.normalized || {}).mentions || []
+                                visible: mentions.length > 0
+                                text: mentions.map(function(mention) { return "@" + (mention.name || mention.open_id || mention.key) }).join("  ")
+                                color: root.accent
+                            }
+                            BodyLabel {
+                                Layout.fillWidth: true
+                                property var conversation: (messageRow.modelData.normalized || {}).conversation || {}
+                                property var reply: (messageRow.modelData.normalized || {}).reply || {}
+                                visible: !!conversation.thread_id || !!messageRow.modelData.replyMessageId || !!reply.message_id
+                                text: (conversation.thread_id ? "话题消息" : "") + ((messageRow.modelData.replyMessageId || reply.message_id) ? (conversation.thread_id ? " · " : "") + "引用：" + (reply.text || messageRow.modelData.replyMessageId || reply.message_id) : "")
+                            }
+                            Repeater {
+                                model: (messageRow.modelData.normalized || {}).resources || []
+                                delegate: RowLayout {
+                                    id: attachmentRow
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    BodyLabel { Layout.fillWidth: true; color: root.ink; text: attachmentRow.modelData.file_name || (attachmentRow.modelData.type === "image" ? "图片" : "附件") }
+                                    ActionButton {
+                                        objectName: "feishuSaveAttachment_" + messageRow.modelData.messageId
+                                        text: "保存"; enabled: !root.busy && root.snapshot.readable !== false
+                                        onClicked: {
+                                            root.savingResource = {key: attachmentRow.modelData.file_key || attachmentRow.modelData.image_key, messageId: messageRow.modelData.messageId, type: attachmentRow.modelData.type, name: attachmentRow.modelData.file_name || ""}
+                                            saveAttachment.open()
+                                        }
+                                    }
+                                }
+                            }
+                            ActionButton { objectName: "feishuReply_" + messageRow.modelData.messageId; text: "引用回复"; visible: !!messageRow.modelData.messageId; enabled: !root.busy; onClicked: { root.chooseConversation(messageRow.modelData.chatId); root.replyMessageId = messageRow.modelData.messageId; root.replyPreview = messageRow.modelData.text || "附件消息"; threadReply.checked = !!(((messageRow.modelData.normalized || {}).conversation || {}).thread_id); draft.forceActiveFocus() } }
                         }
                     }
-                    BodyLabel { anchors.fill: parent; anchors.margins: 14; visible: !root.messages.length; text: root.selectedChatId ? "此会话暂无已记录消息。" : "选择最近会话，或在下方输入会话 ID。" }
+                    BodyLabel { anchors.fill: parent; anchors.margins: 14; visible: !root.messages.length; text: root.selectedChatId ? "此会话暂无已记录消息。" : "选择最近会话，或指定发送目标。" }
                     ScrollBar.vertical: ScrollBar { }
                 }
-                Field { id: recipient; objectName: "feishuRecipient"; Layout.fillWidth: true; placeholderText: "会话 ID（oc_…）"; enabled: !root.busy; onTextEdited: { root.selectedChatId = text.trim(); root.replyMessageId = ""; root.replyPreview = "" } }
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 7
+                    ComboBox {
+                        id: targetKind; objectName: "feishuTargetType"; Layout.preferredWidth: 88
+                        model: ["会话", "用户", "邮箱"]; enabled: !root.busy && !root.streaming
+                        palette.text: root.ink; palette.buttonText: root.ink; palette.base: root.raised; palette.button: root.raised
+                        onActivated: { recipient.clear(); root.replyMessageId = ""; root.replyPreview = "" }
+                    }
+                    Field {
+                        id: recipient; objectName: "feishuRecipient"; Layout.fillWidth: true
+                        placeholderText: ["会话 ID（oc_…）", "用户 Open ID（ou_…）", "收件人邮箱"][targetKind.currentIndex]
+                        enabled: !root.busy && !root.streaming
+                        onTextEdited: { if (targetKind.currentIndex === 0) root.selectedChatId = text.trim(); root.replyMessageId = ""; root.replyPreview = "" }
+                    }
+                }
                 Rectangle {
                     Layout.fillWidth: true; implicitHeight: replyText.implicitHeight + 16; visible: !!root.replyMessageId; radius: 7; color: root.raised
                     RowLayout {
                         anchors.fill: parent; anchors.margins: 8
                         Text { id: replyText; objectName: "feishuReplyPreview"; Layout.fillWidth: true; text: "引用：" + root.replyPreview; textFormat: Text.PlainText; color: root.muted; font.pixelSize: 12; maximumLineCount: 2; elide: Text.ElideRight; wrapMode: Text.WrapAnywhere }
+                        OptionToggle { id: threadReply; objectName: "feishuReplyInThread"; text: "话题回复"; palette.windowText: root.ink; enabled: !root.streaming }
                         ActionButton { objectName: "feishuCancelReply"; text: "取消"; onClicked: { root.replyMessageId = ""; root.replyPreview = "" } }
                     }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: !!root.snapshot.attachment
+                    BodyLabel { Layout.fillWidth: true; color: root.ink; text: root.snapshot.attachment ? "附件：" + root.snapshot.attachment.name : "" }
+                    ActionButton { objectName: "feishuRemoveAttachment"; text: "移除"; enabled: !root.busy; onClicked: feishuBot.clearAttachment() }
+                }
+                BodyLabel {
+                    Layout.fillWidth: true
+                    visible: !!root.snapshot.attachment && root.snapshot.attachment.kind === "file" && !!draft.text.trim()
+                    text: "文件将单独发送，正文保留为下一条消息。"
                 }
                 ScrollView {
                     Layout.fillWidth: true; Layout.preferredHeight: root.height < 560 ? 66 : 88; clip: true
@@ -250,13 +359,54 @@ Rectangle {
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    BodyLabel { Layout.fillWidth: true; text: root.busy ? "正在处理…" : "点击发送后，消息将发送到指定飞书会话。" }
-                    ActionButton { id: send; objectName: "feishuSend"; text: root.replyMessageId ? "发送回复" : "发送"; primary: true; enabled: root.connected && root.snapshot.readable !== false && !root.busy && !!recipient.text.trim() && !!draft.text.trim(); onClicked: root.sendDraft() }
+                    ActionButton { objectName: "feishuAddAttachment"; text: "附件"; visible: !cardMode.checked && !root.streaming; enabled: root.connected && !root.busy && root.snapshot.readable !== false; onClicked: chooseAttachment.open() }
+                    OptionToggle { id: cardMode; objectName: "feishuCardMode"; text: "持续更新卡片"; visible: !root.snapshot.attachment; enabled: !root.busy && !root.streaming; palette.windowText: root.ink }
+                    Item { Layout.fillWidth: true }
+                    ActionButton { objectName: "feishuFinishStream"; text: "完成卡片"; visible: root.streaming; enabled: !root.busy; onClicked: feishuBot.finishStream(draft.text) }
+                    ActionButton { id: send; objectName: "feishuSend"; text: root.streaming ? "更新" : cardMode.checked ? "创建卡片" : root.replyMessageId ? "发送回复" : "发送"; primary: true; enabled: root.connected && root.snapshot.readable !== false && !root.busy && !!recipient.text.trim() && (!!draft.text.trim() || !!root.snapshot.attachment); onClicked: root.sendDraft() }
                 }
             }
         }
     }
 
+    FileDialog {
+        id: chooseAttachment; objectName: "feishuChooseAttachmentDialog"
+        title: "选择要发送的附件"; fileMode: FileDialog.OpenFile
+        onAccepted: feishuBot.chooseAttachment(selectedFile.toString())
+    }
+    FileDialog {
+        id: saveAttachment; objectName: "feishuSaveAttachmentDialog"
+        title: "保存飞书附件"; fileMode: FileDialog.SaveFile
+        onAccepted: feishuBot.saveResource(root.savingResource.key, root.savingResource.messageId, root.savingResource.type, root.savingResource.name, selectedFile.toString())
+    }
+    Dialog {
+        id: chatEntry; objectName: "feishuChatEntryDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent; width: Math.min(360, root.width - 24)
+        modal: true; padding: 20; closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: root.surface; radius: 12; border.color: root.line }
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text { text: "手机扫码进入私聊"; color: root.ink; font.pixelSize: 17; font.weight: Font.DemiBold }
+            Rectangle {
+                Layout.alignment: Qt.AlignHCenter
+                implicitWidth: Math.min(288, chatEntry.width - 40); implicitHeight: implicitWidth
+                color: "white"; radius: 7
+                Image {
+                    objectName: "feishuChatQr"; anchors.centerIn: parent
+                    width: root.snapshot.chatQrModules ? root.snapshot.chatQrModules * Math.max(1, Math.floor((parent.width - 12) / root.snapshot.chatQrModules)) : 0
+                    height: width; sourceSize.width: width; sourceSize.height: height
+                    source: root.snapshot.chatQrImageSource || ""; smooth: false; fillMode: Image.PreserveAspectFit
+                }
+            }
+            BodyLabel { Layout.fillWidth: true; text: "用手机飞书扫码，打开此机器人的私聊。发送消息后，即可在这里查看和回复。" }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton { objectName: "feishuCloseChatQr"; text: "关闭"; onClicked: chatEntry.close() }
+            }
+        }
+    }
     Dialog {
         id: settings; objectName: "feishuConfigurationDialog"
         parent: Overlay.overlay

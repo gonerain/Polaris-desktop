@@ -36,7 +36,19 @@ else:
             self.closed = False
         def request(self, operation, params, timeout=35):
             self.requests.append((operation, dict(params), threading.get_ident()))
+            if operation == 'chat_entry':
+                from polaris_feishu_bot.chat import chat_entry
+                return chat_entry(params['appId'])
             if operation == 'connect': return {'connectionState': 'connected'}
+            if getattr(self, 'fail_operation', None) == operation:
+                raise PlatformError('fixture_failure', '测试操作失败，请重新选择或发送')
+            if operation == 'upload_media': return {'mediaKey': 'file_uploaded'}
+            if operation == 'download_resource':
+                path = Path(params['destDir']) / 'download.txt'
+                path.write_bytes(b'attachment content')
+                return {'path': str(path), 'name': 'download.txt'}
+            if operation == 'start_stream':
+                return dict(cardId='card_mock', messageId='om_card', elementId='body', sequence=1, chatId='oc_first')
             return {'success': True, 'messageId': 'om_fake_' + str(len(self.requests))}
         def close(self): self.closed = True
 
@@ -85,6 +97,10 @@ else:
                 time.sleep(.005)
             self.assertTrue(predicate())
         def setUp(self):
+            from unittest.mock import patch
+            self.qr_transport_patch = patch('polaris_feishu_bot.ui.WorkerTransport', FakeTransport)
+            self.qr_transport_patch.start()
+            self.addCleanup(self.qr_transport_patch.stop)
             self.temporary = tempfile.TemporaryDirectory()
             self.directory = Path(self.temporary.name)
             self.registration_sessions = []
@@ -171,6 +187,36 @@ else:
             self.wait(lambda: not bridge._busy and json.loads(bridge.stateJson)['registration']['state'] == 'waiting')
             return component, item, bridge, self.registration_sessions[-1]
 
+        def test_chat_entry_opens_configured_app_and_stays_instance_scoped(self):
+            from unittest.mock import patch
+            self.assertFalse(find(self.views[self.first][1], 'feishuOpenChat').isVisible())
+            component, item, bridge = self.configure_first()
+            expected = 'https://applink.feishu.cn/client/bot/open?appId=cli_native'
+            state = json.loads(bridge.stateJson)
+            self.assertEqual(state['chatUrl'], expected)
+            self.assertTrue(state['chatQrImageSource'].startswith('data:image/svg+xml;base64,'))
+            with patch('polaris_feishu_bot.ui.QDesktopServices.openUrl', return_value=True) as opened:
+                self.click(self.first, 'feishuOpenChat')
+                self.assertEqual(opened.call_args.args[0].toString(), expected)
+            # The second native view configures its own app, without sharing its chat QR.
+            self.click(self.second, 'feishuConfigure')
+            for name, value in [('feishuRobotName', '另一个机器人'), ('feishuAppId', 'cli_second'), ('feishuAppSecret', 'fake-second')]:
+                control = self.windows[1].findChild(QObject, name)
+                control.setProperty('text', value)
+            self.click(self.second, 'feishuSaveConfiguration')
+            second = self.views[self.second][2]
+            self.wait(lambda: json.loads(second.stateJson)['configured'])
+            other = json.loads(second.stateJson)
+            self.assertEqual(other['chatUrl'], 'https://applink.feishu.cn/client/bot/open?appId=cli_second')
+            self.assertNotEqual(other['chatQrImageSource'], state['chatQrImageSource'])
+            with patch('polaris_feishu_bot.ui.WorkerTransport') as encode:
+                bridge.refresh()
+                self.wait(lambda: not bridge._polling)
+                encode.assert_not_called()
+            self.click(self.first, 'feishuShowChatQr')
+            qr = self.windows[0].findChild(QObject, 'feishuChatQr')
+            self.assertEqual(qr.property('source').toString(), state['chatQrImageSource'])
+
         def test_registration_cancel_failure_retry_and_success_from_qml(self):
             component, item, bridge, session = self.start_scan()
             self.assertTrue(json.loads(bridge.stateJson)['registration']['qrImageSource'].startswith('data:image/svg+xml;base64,'))
@@ -193,7 +239,7 @@ else:
             self.wait(lambda: json.loads(bridge.stateJson)['configured'])
             self.assertEqual(component.status()['appId'], 'cli_scanned_mock')
             self.assertNotIn('mock-registration-secret', bridge.stateJson)
-            self.assertEqual([row[0] for row in component._transport.requests], ['connect'])
+            self.assertEqual([row[0] for row in component._transport.requests], ['connect', 'chat_entry'])
             self.assertFalse(self.views[self.second][0].status()['configured'])
             self.assertFalse(find(item, 'feishuOnboarding').isVisible())
 
@@ -288,6 +334,76 @@ else:
             self.assertEqual(len(sends), 1)
             self.assertNotEqual(sends[0][2], threading.get_ident())
             self.assertIsNone(self.views[self.second][0]._transport)
+
+        def test_attachment_upload_send_save_and_failure_preserve_draft(self):
+            component, item, bridge = self.configure_first()
+            component.store.append('message', dict(messageId='om_source', chatId='oc_first', sender='小林', text='附件来源', direction='incoming'))
+            bridge.refresh()
+            self.wait(lambda: not bridge._polling)
+            bridge.selectConversation('oc_first')
+            self.wait(lambda: not bridge._polling)
+            source = self.directory / 'local.txt'
+            source.write_text('本机附件')
+            bridge.chooseAttachment(QUrl.fromLocalFile(str(source)).toString())
+            self.wait(lambda: not bridge._busy)
+            self.assertIsNotNone(json.loads(bridge.stateJson)['attachment'], bridge.stateJson)
+            self.assertEqual(json.loads(bridge.stateJson)['attachment']['media_key'], 'file_uploaded')
+            self.assertFalse(any(row[0] == 'send' for row in component._transport.requests))
+            find(item, 'feishuDraft').setProperty('text', '正文留作下一条')
+            component._transport.fail_operation = 'send'
+            self.click(self.first, 'feishuSend')
+            self.wait(lambda: not bridge._busy)
+            self.assertEqual(find(item, 'feishuDraft').property('text'), '正文留作下一条')
+            self.assertIsNotNone(json.loads(bridge.stateJson)['attachment'])
+            component._transport.fail_operation = None
+            self.click(self.first, 'feishuSend')
+            self.wait(lambda: not bridge._busy and json.loads(bridge.stateJson)['attachment'] is None)
+            self.assertEqual(find(item, 'feishuDraft').property('text'), '正文留作下一条')
+            send = [row for row in component._transport.requests if row[0] == 'send'][-1][1]
+            self.assertEqual(send['message'], {'file': {'source': 'file_uploaded', 'file_name': 'local.txt'}})
+            destination = self.directory / 'saved.txt'
+            bridge.saveResource('file_received', 'om_source', 'file', 'download.txt', QUrl.fromLocalFile(str(destination)).toString())
+            self.wait(lambda: not bridge._busy)
+            self.assertEqual(destination.read_bytes(), b'attachment content')
+            component._transport.fail_operation = 'upload_media'
+            bridge.chooseAttachment(QUrl.fromLocalFile(str(source)).toString())
+            self.wait(lambda: not bridge._busy)
+            self.assertIsNone(json.loads(bridge.stateJson)['attachment'])
+            self.assertIn('测试操作失败', json.loads(bridge.stateJson)['lastError'])
+            self.assertEqual(find(item, 'feishuDraft').property('text'), '正文留作下一条')
+
+        def test_stream_updates_replace_message_and_can_resume(self):
+            component, item, bridge = self.configure_first()
+            bridge.startStream('chat_id', 'oc_first', '初始卡片', '', False)
+            self.wait(lambda: not bridge._busy)
+            stream_id = json.loads(bridge.stateJson)['streamId']
+            self.assertTrue(stream_id, bridge.stateJson)
+            self.wait(lambda: not bridge._polling)
+            component.store.append('message', dict(messageId='om_identity', chatId='oc_first', sender='ou_fallback', text='身份', direction='incoming', normalized=dict(sender=dict(display_name='真实显示名', open_id='ou_sender'))))
+            bridge.updateStream('第一次更新')
+            self.wait(lambda: not bridge._busy)
+            self.wait(lambda: not bridge._polling)
+            bridge.updateStream('最新正文')
+            self.wait(lambda: not bridge._busy)
+            self.wait(lambda: not bridge._polling)
+            messages = json.loads(bridge.stateJson)['messages']
+            cards = [message for message in messages if message['messageId'] == 'om_card']
+            self.assertEqual(len(cards), 1)
+            self.assertEqual(cards[0]['text'], '最新正文')
+            self.assertEqual(next(message for message in messages if message['messageId'] == 'om_identity')['senderLabel'], '真实显示名')
+            self.assertEqual(len(json.loads(bridge.stateJson)['activeStreams']), 1)
+            bridge._state['streamId'] = ''
+            bridge.changed.emit()
+            self.click(self.first, 'feishuResumeStream_' + stream_id)
+            self.assertEqual(find(item, 'feishuDraft').property('text'), '最新正文')
+            self.assertEqual(json.loads(bridge.stateJson)['streamId'], stream_id)
+            bridge.finishStream('已完成')
+            self.wait(lambda: not bridge._busy)
+            self.wait(lambda: not bridge._polling)
+            state = json.loads(bridge.stateJson)
+            self.assertEqual(state['streamId'], '')
+            self.assertEqual(state['activeStreams'], [])
+            self.assertEqual(len([message for message in state['messages'] if message['messageId'] == 'om_card']), 1)
 
         def test_external_calls_cannot_forge_native_action_and_revocation_invalidates_ticket(self):
             component, item, bridge = self.configure_first()

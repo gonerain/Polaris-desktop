@@ -163,3 +163,83 @@ class AssistantTests(unittest.TestCase):
                 for view in views:
                     client.call('assistant', 'release_view', {'handle':view['handle']}, ctx)
                 window.close()
+
+class AssistantApplicationBindingTests(unittest.TestCase):
+    def test_application_can_bind_singleton_without_delegating_tools(self):
+        from uuid import uuid4
+        from polaris_platform.protocol import PlatformError
+        rt = build(default_config())
+        class InspectEngine:
+            def run(self, text, history, tools, cancel):
+                assert tools.allowed == set()
+                with unittest.TestCase().assertRaises(PlatformError):
+                    tools.execute('call', {'component':'toy', 'operation':'write'}, cancel)
+                return AgentResult('ok', [{'role':'user', 'content':text}, {'role':'assistant', 'content':'ok'}])
+        rt.install(manifest('assistant'), lambda: Assistant(InspectEngine()))
+        rt.start_component('assistant')
+        app = uuid4().hex
+        try:
+            rt.register_application_principal(app)
+            instance = rt.status('assistant')['instanceId']
+            rt.register_application_bindings(app, [instance])
+            for op in ('status', 'reply'):
+                rt.grant(app, 'assistant', op)
+            client, ctx = rt.application_client(app), rt.application_context(app)
+            self.assertTrue(client.call('assistant', 'status', context=ctx)['ready'])
+            result = client.call('assistant', 'reply', {'text':'hello', 'conversation':'one', 'allowed':[]}, ctx)
+            self.assertEqual(result['text'], 'ok')
+            self.assertTrue(result['turn'])
+            with self.assertRaises(PlatformError) as failure:
+                rt.destroy_instance(instance)
+            self.assertEqual(failure.exception.code, 'protected_instance')
+        finally:
+            rt.unregister_application_principal(app)
+            for row in reversed(rt.snapshot()):
+                if row['state'] == 'running':
+                    rt.stop_component(row['id'], persist=False)
+
+    def test_application_tools_use_stable_instance_identity(self):
+        from uuid import uuid4
+        from polaris_platform.protocol import PlatformError
+        rt = build(default_config())
+        toy = Component()
+        toy.operation('read', provides='test.toy.read@1', applicationBinding='instance')(lambda p, c: {'value': 42})
+        toy.operation('private', applicationBinding='instance')(lambda p, c: 'private')
+        channel = Component()
+        channel.operation('read', applicationBinding='instance')(lambda p, c: 'channel')
+        for name, component in (('toy', toy), ('channel', channel)):
+            rt.install(dict(id=name, name=name, version='1', platformApi=1, entry=dict(mode='inprocess')), lambda component=component: component)
+            rt.start_component(name)
+        identity = rt.status('toy')['instanceId']
+        class Engine:
+            def run(self, text, history, tools, cancel):
+                catalog = tools.catalog()['operations']
+                assert [(item['component'], item['operation']) for item in catalog] == [(identity, 'read')]
+                assert tools.execute('help', {'component':'toy', 'operation':'read'}, cancel)['id'] == identity
+                assert tools.execute('call', {'component':identity, 'operation':'read'}, cancel) == {'value':42}
+                with unittest.TestCase().assertRaises(PlatformError):
+                    tools.execute('help', {'component':'channel'}, cancel)
+                return AgentResult('ok', [])
+        rt.install(manifest('assistant'), lambda: Assistant(Engine()))
+        rt.start_component('assistant')
+        directory = rt.component_instance('collaboration')
+        app = uuid4().hex
+        try:
+            rt.register_application_principal(app)
+            for target, operation in [('assistant','reply'), ('toy','read'), ('collaboration','discover'), ('collaboration','describe')]:
+                rt.grant(app,target,operation)
+            from polaris_platform.application import ApplicationDefinition
+            client, context = rt.application_client(app), rt.application_context(app)
+            handle = client.bind('assistant', 'reply')
+            status = rt.status('assistant')
+            definition = ApplicationDefinition('test', application_id=app, bindings={
+                'reply': {'target':'assistant', 'installationId':status['installationId'],
+                          'instanceId':status['instanceId'], 'operation':'reply', 'semantic':list(handle.semantic)}})
+            session = definition.open(client, context, rt.status)
+            result = session.call('reply', {'text':'hello','allowed':[{'target':identity,'operation':'read'}]})
+            self.assertEqual(result['text'],'ok')
+            session.stop()
+        finally:
+            rt.unregister_application_principal(app)
+            for row in reversed(rt.snapshot()):
+                if row['state']=='running': rt.stop_component(row['id'],persist=False)

@@ -37,7 +37,7 @@ class ToolExecutor:
             raise PlatformError('ambiguous_component', '组件名称不唯一，请使用组件列表中的完整 id')
         if not matches:
             raise PlatformError('component_not_found', '组件名称不存在，请从组件列表中选择完整 id；这不是权限错误')
-        identity = matches[0]['id']
+        identity = self.record_target(matches[0])
         if identity not in allowed_targets or identity in self.excluded:
             raise PlatformError('denied', '该组件未在本次调用的允许列表中启用')
         return identity
@@ -48,7 +48,7 @@ class ToolExecutor:
         if name == 'components':
             records = self.ctx.call(self.directory_id, 'discover', {}).get('components', [])
             self._records = records
-            filtered = [self.filtered(r) for r in records if any(t == r.get('id') for t, _ in self.allowed)]
+            filtered = [self.filtered(r) for r in records if self.record_target(r) is not None]
             return {'components': [dict(id=r['id'], name=r['name'], operations=[
                 dict(name=n, title=m.get('title', n), access=m.get('access', 'read'))
                 for n, m in r['description']['operations'].items()])
@@ -67,21 +67,24 @@ class ToolExecutor:
         if name != 'call':
             raise PlatformError('invalid_params', '未知工具')
         operation = args.get('operation')
-        if (target, operation) not in self.allowed:
+        record = self.ctx.call(self.directory_id, 'describe', {'target': target})
+        call_target = next((identity for identity in (record.get('installation'), record.get('id'))
+                            if (identity, operation) in self.allowed and identity not in self.excluded), None)
+        if call_target is None:
             raise PlatformError('denied', '该操作未在本次调用的允许列表中启用')
         if (target, operation) not in self.explained:
             raise PlatformError('help_required', '请先查询此组件的操作说明；这不是权限错误')
         arguments = args.get('arguments', {})
         if not isinstance(arguments, dict):
             raise PlatformError('invalid_params', '操作参数必须是对象')
-        live = self.filtered(self.ctx.call(self.directory_id, 'describe', {'target': target}))
+        live = self.filtered(record)
         metadata = live['description']['operations'].get(operation)
         if metadata != self.explained.get((target, operation)):
             raise PlatformError('stale_handle', '操作说明已改变，请重新查询帮助')
         if cancel.is_set():
             raise InterruptedError()
         if metadata.get('access') != 'write':
-            return self.ctx.call(target, operation, arguments)
+            return self.ctx.call(call_target, operation, arguments)
         key = (target, operation, json.dumps(arguments, sort_keys=True, ensure_ascii=False))
         if key in self.writes:
             result, error = self.writes[key]
@@ -91,7 +94,7 @@ class ToolExecutor:
         self.writes[key] = (None, True)
         if self.completions is not None:
             arguments = self.completions.prepare(target, metadata, arguments)
-        result = self.ctx.call(target, operation, arguments)
+        result = self.ctx.call(call_target, operation, arguments)
         self.writes[key] = (deepcopy(result), False)
         return result
 
@@ -101,8 +104,8 @@ class ToolExecutor:
         self._records = records
         entries, size = [], 0
         for record in records:
-            target = record.get('id')
-            if target in self.excluded:
+            target = self.record_target(record)
+            if target is None or target in self.excluded:
                 continue
             for name, metadata in self.filtered(record)['description']['operations'].items():
                 base = dict(component=target, operation=name, title=metadata.get('title', name),
@@ -121,11 +124,20 @@ class ToolExecutor:
                     size += length
         return dict(operations=entries, more=False)
 
+    def record_target(self, record):
+        targets = {target for target, _ in self.allowed}
+        for identity in (record.get('installation'), record.get('id')):
+            if identity in targets and identity not in self.excluded:
+                return identity
+        return None
+
     def filtered(self, record):
-        return {'id': record.get('id'),
+        target = self.record_target(record)
+        return {'id': target,
                 'name': record.get('manifest', {}).get('name', record.get('id')),
                 'description': {'operations': {n: deepcopy(m) for n, m in operations(record).items()
-                                               if (record.get('id'), n) in self.allowed}}}
+                                               if any((identity, n) in self.allowed and identity not in self.excluded
+                                                      for identity in (record.get('installation'), record.get('id')))}}}
 
     def failure_reply(self, reason):
         lines = ['本次处理未能正常结束：' + reason]

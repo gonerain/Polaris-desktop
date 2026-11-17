@@ -1,0 +1,14 @@
+{
+  "id": "org.polaris.feishu-bot",
+  "name": "飞书机器人",
+  "version": "0.1.5",
+  "platformApi": 1,
+  "instances": {
+    "mode": "multiple"
+  },
+  "entry": {
+    "mode": "inprocess",
+    "factory": "polaris_feishu_bot:create",
+    "defer": "desktop"
+  }
+}

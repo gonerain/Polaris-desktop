@@ -1,0 +1,10 @@
+{
+  "id": "assistant",
+  "name": "Polaris Agent",
+  "version": "0.2.1",
+  "platformApi": 1,
+  "entry": {
+    "mode": "inprocess",
+    "factory": "polaris_assistant:create"
+  }
+}

@@ -9,9 +9,10 @@ from polaris_platform.sdk import Component
 from .store import Store
 from .transport import WorkerTransport
 from .registration import RegistrationController
+from .message_backend import MessageBackend
 
 
-class FeishuBot(Component):
+class FeishuBot(MessageBackend, Component):
     def __init__(self, instance_context, transport_factory=None, registration_transport_factory=None):
         super().__init__()
         self.instance_id = instance_context['instanceId']
@@ -33,11 +34,13 @@ class FeishuBot(Component):
             create='create_view', release='release_view', preferredSize=dict(width=760, height=600),
             permissions=[dict(name=name, access='read') for name in ('status', 'read_messages')])]
         for name, handler in [('status', self.status), ('read_messages', self.read_messages),
-                              ('read_card_actions', self.read_card_actions)]:
+                              ('read_card_actions', self.read_card_actions), ('read_attachment', self.read_attachment)]:
             self.operation(name, provides='polaris.feishu.' + name.replace('_', '-') + '@1',
                            applicationBinding='instance')(handler)
         for name, handler in [('send', self.send), ('reply', self.reply), ('send_card', self.send_card),
-                              ('update_card', self.update_card)]:
+                              ('update_card', self.update_card), ('upload_media', self.upload_media),
+                              ('download_resource', self.download_resource), ('start_stream', self.start_stream),
+                              ('update_stream', self.update_stream), ('finish_stream', self.finish_stream)]:
             self.operation(name, access='write', provides='polaris.feishu.' + name.replace('_', '-') + '@1',
                            applicationBinding='instance')(handler)
         for name, handler in [('configure', self.configure), ('connect', self.connect),
@@ -49,6 +52,9 @@ class FeishuBot(Component):
 
     def describe(self):
         value = super().describe()
+        from .api_help import public_help
+        for name, help in public_help().items():
+            value['operations'][name].update(help)
         for name in ('configure', 'connect', 'disconnect', 'prepare_action', 'start_registration', 'cancel_registration', 'registration_checkpoint'):
             value['operations'][name].update(humanOnly=True, modelCallable=False)
         for name in ('create_view', 'release_view'):
@@ -100,7 +106,8 @@ class FeishuBot(Component):
             return dict(instanceId=self.instance_id, instanceName=config['instanceName'],
                 appId=config['appId'], hasSecret=bool(config['secret']),
                 configured=bool(config['appId'] and config['secret']),
-                connectionState=self._state, lastError=self._error, sdkVersion='1.4.0')
+                connectionState=self._state, lastError=self._error, sdkVersion='1.4.0',
+                activeStreams=self.store.active_streams())
 
     @staticmethod
     def _text(value, label, maximum=20000):
@@ -246,21 +253,6 @@ class FeishuBot(Component):
                         replyMessageId=params.get('replyMessageId', '')))
             return result
 
-    def send(self, chat_id, text, reply_message_id=None):
-        chat_id, text = self._text(chat_id, '会话标识', 200), self._text(text, '消息内容')
-        if reply_message_id:
-            known = self.store.message(reply_message_id)
-            if known is None or known['chatId'] != chat_id:
-                raise PlatformError('invalid_reply', '请选择当前实例当前会话中已有的消息进行引用')
-        return self._send('send', dict(chatId=chat_id, text=text, replyMessageId=reply_message_id), text)
-
-    def reply(self, message_id, text):
-        message_id = self._text(message_id, '消息标识', 200)
-        known = self.store.message(message_id)
-        if known is None:
-            raise PlatformError('message_missing', '当前实例没有这条消息')
-        return self.send(known['chatId'], text, message_id)
-
     @staticmethod
     def _card(card):
         import json
@@ -278,7 +270,7 @@ class FeishuBot(Component):
     def update_card(self, message_id, card):
         message_id = self._text(message_id, '消息标识', 200)
         known = self.store.message(message_id)
-        if known is None or known['direction'] != 'outbound' or known.get('messageType') != 'card':
+        if known is None or known['direction'] != 'outbound' or known.get('messageType') not in ('card', 'interactive'):
             raise PlatformError('message_missing', '只能更新当前实例已发送的卡片消息')
         return self._send('update_card', dict(messageId=message_id, card=self._card(card)))
 
@@ -293,7 +285,8 @@ class FeishuBot(Component):
 
     def prepare_action(self, operation, params, ctx):
         self._check()
-        if not getattr(self._view_action, 'active', False) or operation not in ('configure', 'connect', 'disconnect', 'send', 'start_registration', 'cancel_registration'):
+        if not getattr(self._view_action, 'active', False) or operation not in ('configure', 'connect', 'disconnect', 'send', 'upload_media', 'download_resource',
+                'start_stream', 'update_stream', 'finish_stream', 'start_registration', 'cancel_registration'):
             raise PlatformError('permission_denied', '操作必须来自当前本机界面')
         ticket = uuid4().hex
         with self._lock:

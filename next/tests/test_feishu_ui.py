@@ -38,6 +38,7 @@ else:
     class FakeBridge(QObject):
         changed = Signal()
         messageSent = Signal()
+        attachmentSent = Signal()
         def __init__(self, name='测试机器人'):
             super().__init__()
             self.calls = []
@@ -66,6 +67,8 @@ else:
             self.calls.append(('save', name, app_id, bool(secret)))
             self.update(instanceName=name, appId=app_id, hasSecret=True, configured=True)
         @Slot()
+        def openChat(self): self.calls.append(('openChat',))
+        @Slot()
         def connectBot(self): self.calls.append(('connect',))
         @Slot()
         def disconnectBot(self): self.calls.append(('disconnect',))
@@ -75,6 +78,29 @@ else:
         def selectConversation(self, chat_id): self.calls.append(('select', chat_id))
         @Slot(str, str, str)
         def sendMessage(self, chat_id, text, reply_id): self.calls.append(('send', chat_id, text, reply_id))
+        @Slot(str, str, str, str, bool)
+        def sendDraft(self, target_type, target_id, text, reply_id, in_thread):
+            self.calls.append(('send', target_id, text, reply_id))
+            self.last_target = (target_type, target_id, in_thread)
+        @Slot(str)
+        def chooseAttachment(self, url): self.calls.append(('chooseAttachment', url))
+        @Slot()
+        def clearAttachment(self): self.update(attachment=None)
+        @Slot(str, str, str, str, str)
+        def saveResource(self, *args): self.calls.append(('saveResource',) + args)
+        @Slot(str, str, str, str, bool)
+        def startStream(self, target_type, target_id, text, reply_id, in_thread):
+            self.calls.append(('startStream', target_type, target_id, text, reply_id, in_thread))
+            self.update(streamId='stream_fake')
+        @Slot(str)
+        def updateStream(self, text): self.calls.append(('updateStream', text))
+        @Slot(str)
+        def finishStream(self, text):
+            self.calls.append(('finishStream', text))
+            self.update(streamId='')
+            self.messageSent.emit()
+        @Slot(str)
+        def resumeStream(self, stream_id): self.update(streamId=stream_id)
 
     def find(item, name):
         if item.objectName() == name: return item
@@ -119,6 +145,27 @@ else:
                 messages=[dict(messageId='om_test', chatId='oc_test', sender='小林', text='<b>普通文本</b>', createdAt='10:20', direction='incoming')])
             QTest.qWait(20)
             self.click('feishuConversation_oc_test')
+
+        def test_configured_chat_entry_is_available_with_messages_and_on_narrow_screen(self):
+            self.assertFalse(self.control('feishuOpenChat').isVisible())
+            self.assertFalse(self.control('feishuShowChatQr').isVisible())
+            self.ready()
+            self.click('feishuOpenChat')
+            self.assertEqual(self.bridge.calls[-1], ('openChat',))
+            url = 'https://applink.feishu.cn/client/bot/open?appId=cli_test'
+            source, modules = qr_image_source(url, with_modules=True)
+            self.bridge.update(chatUrl=url, chatQrImageSource=source, chatQrModules=modules)
+            self.window.resize(360, 640)
+            self.click('feishuShowChatQr')
+            dialog = self.control('feishuChatEntryDialog')
+            self.assertTrue(dialog.property('visible'))
+            qr = self.control('feishuChatQr')
+            self.assertTrue(qr.isVisible())
+            self.assertEqual(qr.property('source').toString(), source)
+            self.assertLessEqual(dialog.property('width'), 336)
+            self.assertLessEqual(qr.width(), dialog.property('width') - 40)
+            self.click('feishuCloseChatQr')
+            self.assertFalse(dialog.property('visible'))
 
         def test_scan_creation_is_explicit_cancel_retry_and_success(self):
             self.assertTrue(self.control('feishuStartRegistration').isVisible())
@@ -196,6 +243,49 @@ else:
             self.assertFalse(self.control('feishuSend').property('enabled'))
             self.assertEqual(self.control('feishuError').property('text'), '连接失败，请检查应用权限。')
             self.assertEqual(self.control('feishuDraft').property('text'), '失败时保留草稿')
+
+        def test_direct_recipient_attachment_thread_and_card_controls(self):
+            self.ready()
+            self.control('feishuTargetType').setProperty('currentIndex', 2)
+            self.control('feishuRecipient').setProperty('text', 'person@example.com')
+            self.control('feishuDraft').setProperty('text', '定向发送')
+            self.click('feishuSend')
+            self.assertEqual(self.bridge.last_target, ('email', 'person@example.com', False))
+            self.click('feishuReply_om_test')
+            self.control('feishuReplyInThread').setProperty('checked', True)
+            self.click('feishuSend')
+            self.assertTrue(self.bridge.last_target[2])
+            self.click('feishuCancelReply')
+            self.bridge.update(attachment=dict(name='report.pdf', media_key='file_test', kind='file'))
+            self.assertTrue(self.control('feishuRemoveAttachment').isVisible())
+            self.assertFalse(self.control('feishuCardMode').isVisible())
+            self.click('feishuRemoveAttachment')
+            self.assertIsNone(self.bridge.state['attachment'])
+            self.control('feishuCardMode').setProperty('checked', True)
+            self.click('feishuSend')
+            self.assertEqual(self.bridge.calls[-1][0], 'startStream')
+            self.assertFalse(self.control('feishuRecipient').property('enabled'))
+            self.control('feishuDraft').setProperty('text', '编辑后的卡片')
+            self.click('feishuSend')
+            self.assertEqual(self.bridge.calls[-1], ('updateStream', '编辑后的卡片'))
+            self.click('feishuFinishStream')
+            self.assertEqual(self.bridge.calls[-1], ('finishStream', '编辑后的卡片'))
+            self.assertEqual(self.control('feishuDraft').property('text'), '')
+            self.bridge.update(activeStreams=[dict(stream_id='saved', targetType='chat_id', chatId='oc_test', text='恢复正文', title='进度')])
+            self.click('feishuResumeStream_saved')
+            self.assertEqual(self.bridge.state['streamId'], 'saved')
+            self.assertEqual(self.control('feishuDraft').property('text'), '恢复正文')
+
+        def test_normalized_mentions_resources_and_reply_are_visible(self):
+            self.ready()
+            self.bridge.update(messages=[dict(messageId='om_file', chatId='oc_test', sender='小林', text='说明', direction='incoming',
+                normalized=dict(mentions=[dict(name='小王', open_id='ou_wang')],
+                    resources=[dict(type='file', file_key='file_test', file_name='资料.pdf')],
+                    reply=dict(message_id='om_parent'), conversation=dict(thread_id='omt_topic')))])
+            QTest.qWait(20)
+            self.assertTrue(self.control('feishuSaveAttachment_om_file').isVisible())
+            self.click('feishuSaveAttachment_om_file')
+            self.assertTrue(self.control('feishuSaveAttachmentDialog').property('visible'))
 
         def test_compact_layout_and_instance_state_are_independent(self):
             self.ready()

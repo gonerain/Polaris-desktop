@@ -180,3 +180,44 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(TimeoutError): executor.execute('call', args, threading.Event())
         with self.assertRaises(PlatformError): executor.execute('call', args, threading.Event())
         self.assertEqual(ctx.writes, 1)
+
+class StableToolIdentityTests(unittest.TestCase):
+    def test_other_instance_and_changed_capability_are_rejected(self):
+        class Context:
+            def __init__(self):
+                self.meta = {'access':'read', 'major':1, 'revision':1}
+            def call(self, target, operation, params):
+                if operation == 'discover':
+                    return {'components':[self.record()]}
+                if operation == 'describe': return self.record()
+                return 'unexpected'
+            def record(self):
+                return {'id':'toy', 'installation':'stable-one', 'manifest':{'name':'Toy'},
+                        'description':{'operations':{'read':dict(self.meta)}}}
+        ctx=Context(); executor=ToolExecutor(ctx,[{'target':'stable-one','operation':'read'}],'collaboration')
+        cancel=threading.Event()
+        self.assertEqual(executor.execute('help',{'component':'toy'},cancel)['id'],'stable-one')
+        with self.assertRaises(PlatformError):
+            executor.execute('call',{'component':'stable-two','operation':'read'},cancel)
+        ctx.meta['revision']=2
+        with self.assertRaises(PlatformError) as stale:
+            executor.execute('call',{'component':'stable-one','operation':'read'},cancel)
+        self.assertEqual(stale.exception.code,'stale_handle')
+
+    def test_mixed_alias_and_stable_grants_are_merged(self):
+        class Context:
+            def __init__(self): self.calls=[]
+            def call(self, target, operation, params):
+                record={'id':'toy','installation':'stable-one','manifest':{'name':'Toy'},
+                        'description':{'operations':{'read':{'access':'read'},'other':{'access':'read'}}}}
+                if operation=='discover': return {'components':[record]}
+                if operation=='describe': return record
+                self.calls.append((target,operation)); return operation
+        ctx=Context();executor=ToolExecutor(ctx,[{'target':'stable-one','operation':'read'},
+                                                  {'target':'toy','operation':'other'}],'collaboration')
+        self.assertEqual({x['operation'] for x in executor.catalog()['operations']},{'read','other'})
+        cancel=threading.Event()
+        executor.execute('help',{'component':'stable-one'},cancel)
+        self.assertEqual(executor.execute('call',{'component':'stable-one','operation':'read'},cancel),'read')
+        self.assertEqual(executor.execute('call',{'component':'stable-one','operation':'other'},cancel),'other')
+        self.assertEqual(ctx.calls,[('stable-one','read'),('toy','other')])

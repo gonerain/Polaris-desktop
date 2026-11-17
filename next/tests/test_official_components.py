@@ -90,7 +90,11 @@ with tempfile.TemporaryDirectory() as directory:
         sources = json.loads((ROOT / 'components/manager/default-sources.json').read_text(encoding='utf-8'))
         rows = {row['id']: row for row in CATALOG['components']}
         for source in sources:
-            self.assertEqual(rows[source['component']]['source'], source['location'])
+            self.assertTrue(source['defaultCatalog'])
+            for component in source['components']:
+                identity = component['component']
+                self.assertIn(identity, rows)
+                self.assertIn(rows[identity]['source'], source['migrateLegacy']['remoteLocations'])
 
 
 if __name__ == '__main__':
