@@ -1,23 +1,81 @@
 # Polaris
 
-Polaris v0.1.0.3 是基于 Python、PySide6 / Qt Quick 的本地组件工作台。正式入口使用 `next/polaris_platform`：桌宠打开画布，组件管理负责安装、启动、授权和撤销，业务能力由各组件提供。
+**让桌宠成为桌面 AI 与工具的入口。**
 
-## 能力与使用
+[English](README.en.md) · [开始使用](#开始使用) · [预览](#预览) · [版本与安装包](https://github.com/gonerain/Polaris-desktop/releases) · [反馈问题](https://github.com/gonerain/Polaris-desktop/issues)
 
-- [MCP 接入](next/components/mcp/README.md)默认随桌面启动，为 Codex 提供组件目录、操作说明和公开操作调用。默认授予全部可调用公开能力的后台权限，手动撤销后不会补授。
+把 AI 对话、日程待办和工具视图放在同一张画布里，从桌宠随时展开。你可以移动、折叠卡片，在画布设置的扩展管理中安装应用和组件。Polaris 适合希望随手打开 AI、整理桌面小工具，并愿意试用早期组件生态的 Linux 用户。
 
-- 默认鲸鱼娘皮肤复用现有透明动画，支持进入回应、按压、拖放和随机待机；右键打开组件管理或退出。工具窗不接受焦点，身体、气泡和菜单之外的透明区域可穿透输入，实际效果取决于窗口系统。
-- 画布挂载组件自己的原生视图，支持移动、缩放、折叠和布局保存。隐藏或移除视图保留业务数据，停止组件才结束其能力。
-- 微信、日程和 Agent Bridge 通过独立插件源安装；一个仓库可以提供多个插件。
-- 公开能力按安装身份和具体操作授权；新增能力不自动授权，撤权约束已有视图和调用上下文。后台恢复不重新授予已撤销权限。
+当前源码版本 **v0.2.0.0**；以下公开安装包与演示基于 v0.1.0.3。Linux `.deb` 已在 Ubuntu 22.04 amd64 完成构建、安装与启动验收；Windows、macOS 尚未完成实机验收。
 
-首次打开桌面时，组件管理会在后台从官方仓库安装并启动微信、日程和 Agent Bridge。已安装或已卸载的组件保留用户选择。网络失败可在“组件管理 → 插件源”中重试。默认地址见[组件管理配置](next/components/manager/default-sources.json)。
+**[下载 Linux amd64 安装包（.deb）](https://github.com/gonerain/Polaris-desktop/releases/download/v0.1.0.3/polaris_0.1.0.3_amd64.deb)** · [安装说明](#linux-安装包) · [源码运行](#从源码运行)
 
-## 运行
+## 预览
+
+[![Polaris 真实界面演示：桌宠、日程、模型设置与画布导航](docs/media/polaris-v0.1.0.3-demo.gif)](docs/media/polaris-v0.1.0.3-real-demo.mp4)
+
+[完整演示（MP4，23 秒）](docs/media/polaris-v0.1.0.3-real-demo.mp4) · [录制与素材说明](docs/media/README.md)
+
+真实 Qt 界面，虚构演示数据，操作节奏经剪辑。视频使用仓库的矢量演示外观，并非安装包默认皮肤；本片未调用云模型或展示 AI 执行任务。日程视图由独立的日程组件提供。
+
+## 可以做什么
+
+- **从桌宠打开工作台。** 左键打开画布，右键进入画布内的扩展管理；默认鲸鱼娘皮肤带有互动和待机动画。
+- **在画布中与 AI 对话。** Polaris Agent 内置模型设置，可选择 DeepSeek、GLM 或 GLM 国际站，保存自己的 API 密钥后发送消息。
+- **组织组件视图。** 卡片可以移动、缩放、折叠和移除，布局会保存；画布支持横向与纵向滚动，超出窗口的卡片仍可访问。
+- **管理应用与组件。** 在“设置 → 扩展管理”安装、更新和卸载应用，管理组件包及实例；在应用页连接实例并确认所需权限。
+
+## 开始使用
+
+### Linux 安装包
+
+下载 v0.1.0.3 的 [Linux amd64 安装包](https://github.com/gonerain/Polaris-desktop/releases/download/v0.1.0.3/polaris_0.1.0.3_amd64.deb)和 [SHA-256 文件](https://github.com/gonerain/Polaris-desktop/releases/download/v0.1.0.3/polaris_0.1.0.3_amd64.deb.sha256)，在同一目录执行：
+
+```bash
+sha256sum -c polaris_0.1.0.3_amd64.deb.sha256
+sudo apt install ./polaris_0.1.0.3_amd64.deb
+polaris
+```
+
+也可从系统应用菜单打开 **Polaris**。目前验收的分发格式是 Debian/Ubuntu `.deb`；其他 Linux 发行版可尝试源码运行，具体桌面效果需要各自验证。
+
+### 第一次打开
+
+1. 左键点击桌宠，打开画布。
+2. 点击“添加组件”，选择 **Polaris Agent**，按提示确认所需展示权限。
+3. 在聊天卡片点击“模型设置”，选择服务并保存对应的 API 密钥。
+4. 看到“已配置，可发送”后输入消息。需要工具时勾选“授权工具”，模型只使用本次上下文中已有授权的能力。
+
+模型对话需要网络和所选服务的 API 密钥，服务商可能收取费用。保存设置只检查本地格式；真正发送时才连接模型服务，对话及模型使用的工具结果由所选服务处理。配置失败可在设置中修正后继续，无需重启组件。详见 [Polaris Agent 配置说明](next/components/assistant/README.md)。
+
+右键桌宠可打开“画布设置 → 扩展管理”。设置分为外观、扩展管理和关于；扩展管理包含市场、应用、组件三页；市场读取官方 Git 目录及已配置的扩展源，可搜索、筛选和安装应用、组件。组件实例由平台保存，可被多个应用连接，各应用分别授权。停用或卸载应用会保留组件实例；显式删除实例仍需先解除引用并停止。首次启动会从官方 Git 目录安装并启动微信、日程和 Agent Bridge；已有启停和卸载选择会保留。源码运行需要系统 Git；Debian 安装包会声明 Git 依赖。
+
+## 当前边界
+
+- **早期版本。** 当前重点验收 Linux amd64 安装和启动。Windows、macOS 的构建与桌面效果尚待实机验证；Wayland 的窗口位置、置顶及输入区域受合成器控制。
+- **云端模型。** Polaris Agent 当前提供上述三种服务，需要用户自己的 API 密钥与网络；“已配置”表示本地配置可用于发送，不代表服务连接、密钥权限或余额已验证。
+- **组件视图。** 画布承载支持 Polaris 原生视图契约的组件。隐藏或移除卡片会保留业务数据；停止组件才结束其运行能力。
+- **安装与信任。** 插件源支持 Git 或本地仓库。插件依赖由各插件维护，当前没有自动依赖下载或签名发布；安装组件前应确认其来源。
+
+更详细的系统差异、运行依赖与数据位置见[平台兼容说明](docs/platform-compatibility.md)。
+
+## 反馈与贡献
+
+遇到问题可[提交 Issue](https://github.com/gonerain/Polaris-desktop/issues/new)。请附上 Polaris 版本、系统和桌面环境、复现步骤、预期与实际结果；日志或截图请先移除密钥和私人消息。
+
+欢迎提交修复、文档改进、系统验收结果或新组件。开始前可查看[开发说明](next/README.md)、[组件契约](next/CONTRACT.md)和[架构说明](docs/component-platform-design.md)，阅读[扩展市场投稿说明](marketplace/README.md)，或从[现有 Issues](https://github.com/gonerain/Polaris-desktop/issues)选择问题，再通过 [Pull Request](https://github.com/gonerain/Polaris-desktop/pulls)贡献改动。
+
+需要把已运行组件的公开能力接入支持 MCP 的 AI 客户端，可阅读 [MCP 接入说明](next/components/mcp/README.md)，其中包含连接方法和默认授权范围。
+
+## 开发与构建
+
+### 从源码运行
 
 Python 3.10+；在仓库根目录建立独立环境：
 
 ```bash
+git clone https://github.com/gonerain/Polaris-desktop.git
+cd Polaris-desktop
 python -m venv .venv
 # Linux / macOS
 .venv/bin/python -m pip install -r requirements.txt
@@ -31,9 +89,16 @@ python -m venv .venv
 
 平台安装、授权与自启动设置保存在平台数据目录；桌宠位置和画布布局保存在各自组件目录。[平台运行与数据目录](docs/platform-compatibility.md)。
 
-## 打包
+### 打包
 
-在目标操作系统自己的虚拟环境中执行：
+在目标操作系统自己的虚拟环境中执行。Linux 需先编译 Fcitx5 的 Qt 输入插件，否则 Fcitx 环境中只能输入英文。准备与 PySide6 的 `qVersion()` 相同版本的 Qt SDK（包含私有头文件），以及 CMake、Ninja、extra-cmake-modules、libx11-dev、libxcb1-dev 和 libxkbcommon-dev：
+
+```bash
+git clone --depth 1 --branch 5.1.9 https://github.com/fcitx/fcitx5-qt.git /tmp/fcitx5-qt
+python tools/build_fcitx_plugin.py --qt-prefix /path/to/Qt/6.8.3/gcc_64 --source /tmp/fcitx5-qt
+```
+
+该工具将插件安装到当前虚拟环境的 Qt 插件目录，打包时一并携带对应源码和许可。
 
 ```bash
 python -m pip install pyinstaller
@@ -42,7 +107,7 @@ python -m PyInstaller --noconfirm Polaris.spec
 
 输出为 `dist/Polaris/`；Windows 运行 `Polaris.exe`，Linux 运行 `Polaris`。分发时保留整个目录，不能只复制可执行文件。源码和包内默认皮肤均自带动画及许可，不依赖外部素材下载。Windows、macOS 的构建与真实桌面效果仍需分别验收，Linux 构建也不能代替其他系统构建。
 
-### Debian / Ubuntu 安装包与更新
+#### Debian / Ubuntu 安装包与更新
 
 在 Ubuntu 22.04 或相同 glibc 基线的 Linux 环境中构建（架构与构建机一致）：
 
@@ -60,13 +125,13 @@ sudo apt install ./dist/polaris_0.1.0.3_amd64.deb
 
 冻结包中组件命令的 `{python}` 使用随包解释器，提供 Python 标准库基线（不含 Tk/IDLE 和标准库测试资源）及平台 Qt/SDK；第三方依赖须由插件自行提供。需要额外依赖的插件应在自己的环境安装依赖，并在组件命令中指定该环境的解释器。
 
-## 插件源
+### 插件源契约
 
-主仓库的 [next/components](next/components) 按组件分别维护运行管理、协作、授权、窗口承载、画布、桌宠、插件源、组件管理和 Polaris Agent 的清单、实现与资源，随应用分发。其它 Git 或本地插件源可在组件管理中添加，再选择插件安装。仓库根目录使用 `polaris-source.json` 列出插件目录，每个插件维护自己的 `manifest.json`。标准见 [插件源契约](next/CONTRACT.md)。
+主仓库的 [next/components](next/components) 按组件分别维护运行管理、协作、授权、窗口承载、画布、桌宠、插件源、扩展管理和 Polaris Agent 的清单、实现与资源，随应用分发。其它 Git 或本地源可在扩展管理的市场页添加，再选择应用或组件安装。仓库根目录使用 `polaris-source.json` 列出组件与应用目录，分别维护 `manifest.json` 和 `polaris-application.json`。标准见 [插件源契约](next/CONTRACT.md)。
 
 [微信](https://github.com/gonerain/Polaris-weixin)、[日程](https://github.com/gonerain/Polaris-schedule)、[Agent Bridge](https://github.com/gonerain/Polaris-agent) 独立维护和发布。Codex/Pi 接入由 Agent Bridge 提供。随包的 [Polaris Agent](next/components/assistant/README.md) 提供模型对话与工具调用，可在画布独立使用，也可为微信自动回复。插件依赖由各插件维护。
 
-## 组件设计原则
+### 组件设计原则
 
 组件分工、能力调用和故障恢复见[架构说明](docs/component-platform-design.md)。以下是 Polaris 的组件设计约束与演进方向。
 

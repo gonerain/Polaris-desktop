@@ -1,0 +1,25 @@
+name: Validate marketplace
+on:
+  pull_request:
+    paths:
+      - 'marketplace/**'
+      - 'tools/validate_marketplace.py'
+      - 'next/components/sources/**'
+      - 'next/polaris_platform/application_package.py'
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate catalog against pull request base
+        if: github.event_name == 'pull_request'
+        run: python tools/validate_marketplace.py --base "${{ github.event.pull_request.base.sha }}"
+      - name: Validate catalog
+        if: github.event_name != 'pull_request'
+        run: python tools/validate_marketplace.py

@@ -10,10 +10,24 @@ root = Path(SPECPATH)
 sys.path.insert(0, str(root / 'next'))
 from polaris_platform.metadata import APP_NAME, VERSION, AUTHOR, PROJECT_URL
 
+# PySide wheels do not ship Fcitx; Linux packages must include a matching
+# plugin built with tools/build_fcitx_plugin.py, plus its source/licenses.
+if sys.platform == 'linux':
+    from PySide6.QtCore import QLibraryInfo, QPluginLoader
+    fcitx_plugin = Path(QLibraryInfo.path(QLibraryInfo.PluginsPath)) / 'platforminputcontexts/libfcitx5platforminputcontextplugin.so'
+    fcitx_loader = QPluginLoader(str(fcitx_plugin))
+    if not fcitx_loader.load():
+        raise RuntimeError('Build the Fcitx Qt plugin with tools/build_fcitx_plugin.py first: ' + fcitx_loader.errorString())
+    fcitx_loader.unload()
+
 # Component entry packages are reloaded by the source loader at lifecycle start.
 # Frozen bytecode alone cannot satisfy that loader's filesystem reads.
 datas = collect_data_files('polaris_platform', include_py_files=True) + collect_data_files('components', include_py_files=True)
 datas += [(str(path), 'next') for path in sorted((root / 'next').glob('config.*.json'))]
+if sys.platform == 'linux':
+    fcitx_licenses = root / 'build/fcitx5-qt-licenses'
+    for filename in ('BSD-3-Clause.txt', 'LGPL-2.1-or-later.txt', 'fcitx5-qt-source.tar.gz'):
+        datas.append((str(fcitx_licenses / filename), 'licenses/fcitx5-qt'))
 for filename in ('LICENSE', 'README.md', 'CHANGELOG.md'):
     if (root / filename).is_file():
         datas.append((str(root / filename), '.'))
@@ -65,7 +79,9 @@ if sys.platform == 'win32':
     )
 
 a = Analysis(
-    [str(root / 'main.py')], pathex=[str(root / 'next')], binaries=[], datas=datas,
+    [str(root / 'main.py')], pathex=[str(root / 'next')],
+    binaries=[(str(fcitx_plugin), 'PySide6/Qt/plugins/platforminputcontexts')] if sys.platform == 'linux' else [],
+    datas=datas,
     hiddenimports=sorted(hiddenimports), hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=['tkinter', '_tkinter', 'idlelib', 'turtledemo', 'turtle'], noarchive=False, optimize=0,
 )

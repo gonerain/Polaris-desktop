@@ -10,3 +10,9 @@
 - 修改范围限于用户指定的组件及其职责；不得以完善功能、保持一致性或预留扩展为由扩大到其他组件。
 - 当前组件的界面、提示和文档只描述自身能力与数据范围，不主动强调其他组件的行为或数据是否参与。
 - 如果确实需要修改其他组件才能完成需求，先说明原因并征得用户同意，再实施。
+
+## 禁止推测性防御
+
+以清晰、直接的正常流程完成当前需求。只有明确需求、外部接口契约或已证实的问题才能成为新增防护的依据；禁止仅凭“以防万一”增加超时、门禁、重试、兜底、兼容层或抽象。外部输入在边界校验，内部调用信任既有契约，不逐层重复检查。错误应暴露并修复根因，不用默认值或静默降级掩盖。等待用户操作的流程不得擅自设置总时限或清空进度；失效以服务端明确结果为准，刷新和取消由用户决定。
+
+参考：[claude-your-gpt 的 DO NOT OVER-DEFEND](https://github.com/smartcmd/claude-your-gpt/blob/main/AGENTS.md)、[TorchTurbo 的 No speculative defensive checks](https://github.com/inclusionAI/TorchTurbo/blob/main/AGENTS.md)。

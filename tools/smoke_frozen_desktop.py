@@ -41,6 +41,19 @@ def verify():
         return
     if root.property('skinError'):
         raise RuntimeError(root.property('skinError'))
+    # Verify the installed module through the existing managed window engine.
+    from PySide6.QtQml import QQmlComponent
+    from PySide6.QtCore import QUrl
+    component = QQmlComponent(view.engine())
+    component.setData(b'import QtQuick 2.15\nimport Polaris.Ui 1.0 as Ui\nItem { Ui.Theme { id: colors } Ui.Button { objectName: "uiProbeButton"; theme: colors } }', QUrl())
+    probe = component.create()
+    if probe is None:
+        raise RuntimeError('Polaris.Ui import failed: ' + '; '.join(e.toString() for e in component.errors()))
+    from PySide6.QtCore import QObject
+    button = probe.findChild(QObject, 'uiProbeButton')
+    if button is None or button.property('theme') is None:
+        raise RuntimeError('Polaris.Ui button theme was not bound')
+    probe.deleteLater()
     # QML can report skinReady before the first animated image is painted.
     image = view.grabWindow().convertToFormat(QImage.Format_RGBA8888)
     if image.isNull() or not any(image.constBits().tobytes()[3::4]):

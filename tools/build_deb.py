@@ -99,7 +99,7 @@ Priority: optional
 Architecture: {arch}
 Maintainer: gonerain <gonerain@users.noreply.github.com>
 Installed-Size: {size}
-Depends: ca-certificates, libc6 (>= 2.35), libstdc++6 (>= 12), libgcc-s1, zlib1g, libgl1, libegl1, libopengl0, libx11-6, libxcb1, libxkbcommon0, libdbus-1-3, libcrypt1, libnsl2, libdrm2, libwayland-client0, libwayland-cursor0, libwayland-egl1, libwayland-server0
+Depends: ca-certificates, git, libc6 (>= 2.35), libstdc++6 (>= 12), libgcc-s1, zlib1g, libgl1, libegl1, libopengl0, libx11-6, libxcb1, libxkbcommon0, libdbus-1-3, libcrypt1, libnsl2, libdrm2, libwayland-client0, libwayland-cursor0, libwayland-egl1, libwayland-server0
 Recommends: xdg-utils
 Homepage: {PROJECT_URL}
 Description: Polaris desktop component workspace
