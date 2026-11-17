@@ -79,8 +79,10 @@ def failure_state(error):
 async def verify_feishu_credentials(app_id, secret):
     """Verify against a fixed Feishu authority; discard the returned tenant token."""
     import httpx
-    async with httpx.AsyncClient(timeout=8, follow_redirects=False) as client:
-        response = await client.post('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+    from .proxy import http_proxy_kwargs
+    url = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal'
+    async with httpx.AsyncClient(timeout=8, follow_redirects=False, **http_proxy_kwargs(url)) as client:
+        response = await client.post(url,
                                      json={'app_id': app_id, 'app_secret': secret})
         if response.status_code in (408, 429, 500, 502, 503, 504):
             raise RegistrationNetworkError()
@@ -100,8 +102,10 @@ async def register_until_confirmed(**options):
     class UserControlledFlow(_AsyncFlow):
         async def _post(self, data):
             from urllib.parse import urlencode
-            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-                response = await client.post(self._base_url + '/oauth/v1/app/registration',
+            from .proxy import http_proxy_kwargs
+            url = self._base_url + '/oauth/v1/app/registration'
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False, **http_proxy_kwargs(url)) as client:
+                response = await client.post(url,
                     content=urlencode(data), headers={'Content-Type': 'application/x-www-form-urlencoded'})
                 if response.status_code in (408, 429, 500, 502, 503, 504):
                     raise RegistrationNetworkError()

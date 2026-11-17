@@ -91,6 +91,8 @@ def send_result(result):
 class SDKSession:
     def __init__(self, emit, channel_factory=None):
         if channel_factory is None:
+            from .proxy import configure_sdk_proxy
+            configure_sdk_proxy()
             from lark_channel import FeishuChannel
             channel_factory = FeishuChannel
         self.factory = channel_factory

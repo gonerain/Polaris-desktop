@@ -74,7 +74,7 @@
     {
       "type": "application",
       "path": "packages/feishu-agent",
-      "summary": "将飞书文字交给 Polaris Agent 并回复",
+      "summary": "在飞书继续 Codex 会话，接收 Codex 输出与 Bridge 回调",
       "author": "Polaris",
       "icon": "assets/feishu-agent.png",
       "tags": [

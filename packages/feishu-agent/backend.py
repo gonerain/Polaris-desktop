@@ -1,4 +1,4 @@
-"""Feishu text channel with explicitly bound schedule and Agent Bridge tools."""
+"""Durable Feishu channel for one existing Codex CLI session and Bridge outputs."""
 from copy import deepcopy
 import json
 import os
@@ -7,30 +7,18 @@ import threading
 from uuid import uuid4
 
 
-TOOLS = (
-    ('scheduleGet', 'get', '查看日程', 'schedule'),
-    ('scheduleTimeContext', 'time_context', '时间信息', 'schedule'),
-    ('scheduleTasks', 'tasks', '查询任务', 'schedule'),
-    ('scheduleAdd', 'add', '新增任务', 'schedule'),
-    ('scheduleUpdate', 'update', '更新任务', 'schedule'),
-    ('scheduleDelete', 'delete', '删除任务', 'schedule'),
-    ('scheduleUndoDelete', 'undo_delete', '恢复删除', 'schedule'),
-    ('scheduleAddSubtask', 'add_subtask', '新增子任务', 'schedule'),
-    ('scheduleUpdateSubtask', 'update_subtask', '更新子任务', 'schedule'),
-    ('scheduleDeleteSubtask', 'delete_subtask', '删除子任务', 'schedule'),
-    ('scheduleReorder', 'reorder', '调整排序', 'schedule'),
-    ('scheduleMoveOverdue', 'move_overdue', '迁移逾期任务', 'schedule'),
-    ('scheduleOrganizeDay', 'organize_day', '整理当日日程', 'schedule'),
-    ('bridgeSessions', 'sessions', '查询会话', 'bridge'),
-    ('bridgeStatus', 'status', '查询状态', 'bridge'),
-    ('bridgeResult', 'result', '读取结果', 'bridge'),
-    ('bridgeDelivery', 'delivery', '查询投递', 'bridge'),
-    ('bridgeMark', 'mark', '标记会话', 'bridge'),
-    ('bridgeUnmark', 'unmark', '取消标记', 'bridge'),
-    ('bridgeSend', 'send', '发送任务', 'bridge'),
-    ('bridgeRequests', 'requests', '查询请求', 'bridge'),
-)
-TOOL_GROUPS = (('schedule', '日程'), ('bridge', 'Agent Bridge'))
+REJECTED = {'invalid_params', 'busy', 'not_running', 'unavailable', 'not_configured',
+    'permission_required', 'permission_denied', 'application_alias_missing', 'application_binding_missing',
+    'application_binding_unavailable', 'application_binding_unsupported', 'application_closed',
+    'not_connected', 'invalid_reply', 'message_missing', 'feishu_not_connected',
+    'feishu_format_error', 'feishu_target_revoked', 'feishu_rate_limited', 'feishu_permission_denied'}
+
+
+def rejected(error):
+    code = getattr(error, 'code', '')
+    raw = code[7:] if code.startswith('feishu_') else ''
+    return code in REJECTED or raw.isdigit() and not 500 <= int(raw) <= 599
+
 
 class Service:
     interval = 1.2
@@ -42,17 +30,22 @@ class Service:
         self.wake = threading.Event()
         self.thread = None
         self.running = False
-        self.error = ''
-        self.feishu = {}
-        self.agent = {}
-        self.data = dict(cursor=None, tasks=[], conversations={})
+        self.codex = {}
+        self.issues = {}
+        self.paused = set()
+        self.data = dict(schemaVersion=2, cursor=None, channel=None, inputs=[], outputs=[], seenCodex=None, legacy=None)
         if self.path.exists():
-            self.data = json.loads(self.path.read_text(encoding='utf-8'))
-        for task in self.data['tasks']:
-            if task['state'] == 'sending':
-                task.update(state='unknown', error='上次发送在应用停止前未返回结果，请先在飞书中核对。')
-            elif task['state'] == 'generating':
-                task.update(state='failed', error='上次生成在应用停止前未完成，可手动继续。')
+            saved = json.loads(self.path.read_text(encoding='utf-8'))
+            if 'schemaVersion' not in saved:
+                self.data.update(cursor=saved['cursor'], legacy=saved)
+            elif saved['schemaVersion'] == 2:
+                self.data = saved
+            else:
+                raise ValueError('不支持的飞书 Agent 数据版本')
+        for queue in ('inputs', 'outputs'):
+            for item in self.data[queue]:
+                if item['state'] == 'sending':
+                    item.update(state='unknown', error='上次投递未返回结果，请核对后再决定是否重发。')
         self._save()
         self._publish()
 
@@ -62,43 +55,32 @@ class Service:
         temporary.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding='utf-8')
         os.replace(temporary, self.path)
 
+    def _attention(self):
+        rows = []
+        for kind in ('inputs', 'outputs'):
+            for item in self.data[kind]:
+                if item['state'] in ('failed', 'unknown'):
+                    rows.append(dict(id=item['id'], kind=kind, state=item['state'], text=item['text'], error=item['error']))
+        if self.data['legacy'] is not None:
+            for item in self.data['legacy']['tasks']:
+                if item['state'] not in ('done', 'skipped') and not item.get('migratedTo'):
+                    rows.append(dict(id=item['id'], kind='legacy', state=item['state'], text=item['text'],
+                                     error='旧链路任务已保留，尚未交给 Codex。' + item.get('error', '')))
+        return rows
+
     def _publish(self):
         with self.lock:
-            bindings = self.context.bindings
-            attention = {'failed', 'send_failed', 'unknown'}
-            visible = [task for index, task in enumerate(self.data['tasks'])
-                       if index >= len(self.data['tasks']) - 40 or task['state'] in attention]
-            tool_groups = []
-            for key, title in TOOL_GROUPS:
-                entries = [tool for tool in TOOLS if tool[3] == key]
-                tool_groups.append(dict(title=title,
-                    instanceId=bindings.get(entries[0][0], {}).get('instanceId', ''),
-                    labels=[tool[2] for tool in entries]))
-            self.context.publish(dict(toolGroups=tool_groups, running=self.running, error=self.error,
-                initialized=self.data['cursor'] is not None, cursor=self.data['cursor'],
-                feishuInstance=bindings.get('feishuStatus', {}).get('instanceId', ''),
-                agentInstance=bindings.get('agentStatus', {}).get('instanceId', ''),
-                feishu=deepcopy(self.feishu), agent=deepcopy(self.agent),
-                tasks=deepcopy(list(reversed(visible)))))
+            self.context.publish(dict(running=self.running, connected=self.data['channel'] is not None,
+                session=self.codex.get('cwd', ''), sessionId=self.codex.get('threadId'),
+                connection=self.codex.get('connection', 'waiting'),
+                pending=sum(item['state'] == 'queued' for kind in ('inputs', 'outputs') for item in self.data[kind]),
+                issues=list(self.issues.values()), attention=self._attention(),
+                callback=dict(target=self.context.application_id, operation='bridge_output', params={})))
 
-    def _check_bindings(self):
-        bindings = self.context.bindings
-        groups = [('飞书机器人', ('feishuStatus', 'feishuRead', 'feishuReply')),
-                  ('Polaris Agent', ('agentStatus', 'agentReply'))]
-        groups.extend((title, tuple(alias for alias, op, label, group in TOOLS if group == key))
-                      for key, title in TOOL_GROUPS)
-        for title, aliases in groups:
-            identities = [bindings[alias]['instanceId'] for alias in aliases]
-            if len(set(identities)) != 1:
-                raise ValueError('请将' + title + '的全部能力连接到同一个组件实例')
-
-    def _allowed_tools(self):
-        bindings = self.context.bindings
-        return [dict(target=bindings[alias]['target'], operation=bindings[alias]['operation'])
-                for alias, op, label, group in TOOLS]
+    def _stopped(self):
+        return not self.running or self.context.stopped.is_set()
 
     def start(self):
-        self._check_bindings()
         self.running = True
         self._publish()
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -107,158 +89,208 @@ class Service:
     def stop(self):
         self.running = False
         self.wake.set()
-        self._publish()
         if self.thread is not None:
             self.thread.join()
-
-    def _stopped(self):
-        return not self.running or self.context.stopped.is_set()
-
-    def _statuses(self):
-        self.feishu = self.context.call('feishuStatus', {})
-        if self.feishu['connectionState'] == 'connecting':
-            return False
-        if self.feishu['connectionState'] != 'connected':
-            raise ValueError(self.feishu.get('lastError') or '飞书机器人尚未连接，请在组件中连接后手动继续。')
-        self.agent = self.context.call('agentStatus', {})
-        if not self.agent['ready']:
-            raise ValueError(self.agent.get('detail') or 'Polaris Agent 尚未就绪，请处理后手动继续。')
-        return True
-
-    def _initialize_cursor(self):
-        cursor = 0
-        while not self._stopped():
-            batch = self.context.call('feishuRead', dict(after=cursor, limit=500))
-            cursor = batch['nextCursor']
-            if len(batch['items']) < 500:
-                with self.lock:
-                    self.data['cursor'] = cursor
-                    self._save()
-                return
+        self._publish()
 
     @staticmethod
-    def _incoming(message):
-        if message['direction'] not in ('inbound', 'incoming'):
-            return False
-        return message.get('messageType') in ('text', 'post') and bool(message.get('text', '').strip())
+    def _channel(message):
+        normalized = message.get('normalized') or {}
+        thread = (normalized.get('conversation') or {}).get('thread_id') or message.get('threadId') or ''
+        return dict(chatId=message['chatId'], threadId=thread, messageId=message['messageId'])
+
+    @staticmethod
+    def _same_channel(first, second):
+        return (first['chatId'], first['threadId']) == (second['chatId'], second['threadId'])
 
     def _receive(self):
+        if self.data['cursor'] is None:
+            cursor = 0
+            while not self._stopped():
+                batch = self.context.call('feishuRead', dict(after=cursor, limit=500))
+                cursor = batch['nextCursor']
+                if len(batch['items']) < 500:
+                    with self.lock:
+                        self.data['cursor'] = cursor
+                        self._save()
+                    return
+            return
         batch = self.context.call('feishuRead', dict(after=self.data['cursor'], limit=500))
         with self.lock:
-            known = {task['messageId'] for task in self.data['tasks']}
+            known = {item['id'] for item in self.data['inputs']}
             for message in batch['items']:
-                if not self._incoming(message) or message['messageId'] in known:
+                if (message['direction'] not in ('inbound', 'incoming')
+                        or message.get('messageType') not in ('text', 'post')
+                        or not message.get('text', '').strip() or message['messageId'] in known):
                     continue
-                normalized = message.get('normalized') or {}
-                thread_id = (normalized.get('conversation') or {}).get('thread_id') or message.get('threadId') or ''
-                key = json.dumps([message['chatId'], thread_id], ensure_ascii=False)
-                conversation = self.data['conversations'].setdefault(key, uuid4().hex)
-                self.data['tasks'].append(dict(id=uuid4().hex, messageId=message['messageId'],
-                    chatId=message['chatId'], threadId=thread_id, conversation=conversation,
-                    text=message['text'], answer='', turn='', state='pending', error=''))
+                channel = self._channel(message)
+                if self.data['channel'] is None:
+                    self.data['channel'] = channel
+                same = self._same_channel(channel, self.data['channel'])
+                if same:
+                    self.data['channel'] = channel
+                self.data['inputs'].append(dict(id=message['messageId'], channel=channel, text=message['text'],
+                    state='queued' if same else 'failed',
+                    error='' if same else '此应用已连接另一个飞书会话；此消息未交给 Codex。'))
                 known.add(message['messageId'])
             self.data['cursor'] = batch['nextCursor']
             self._save()
 
-    def _transition(self, task, **values):
-        with self.lock:
-            task.update(values)
-            self._save()
-        self._publish()
-
-    def _process(self, task):
-        if task['state'] == 'pending':
-            if len(task['text']) > 8000:
-                self._transition(task, state='failed', error='正文超过 Agent 的 8000 字限制，请在飞书中发送较短消息。')
-                return
-            self._transition(task, state='generating', error='')
-            try:
-                result = self.context.call('agentReply', dict(text=task['text'], conversation=task['conversation'], allowed=self._allowed_tools()))
-                self._transition(task, state='ready', answer=result['text'], turn=result['turn'])
-            except Exception as error:
-                self._transition(task, state='failed', error=str(error))
-                return
-        if self._stopped():
+    def _enqueue_output(self, key, source, text, channel=None):
+        # Caller holds the lock; acceptance means the output is durably owned.
+        existing = next((row for row in self.data['outputs'] if row['id'] == key), None)
+        if existing is not None:
+            if existing['text'] != text:
+                raise ValueError('同一输出标识对应了不同正文')
             return
-        self._transition(task, state='sending', error='')
-        try:
-            result = self.context.call('feishuReply', dict(message_id=task['messageId'], text=task['answer'], reply_in_thread=bool(task['threadId'])))
-            self._transition(task, state='done', sentMessageId=result['messageId'])
-        except Exception as error:
-            code = getattr(error, 'code', '')
-            rejected = code in {'invalid_params', 'invalid_reply', 'message_missing', 'not_connected',
-                'permission_denied', 'permission_required', 'application_binding_unavailable', 'application_binding_unsupported', 'application_closed',
-                'feishu_format_error', 'feishu_target_revoked', 'feishu_rate_limited', 'feishu_permission_denied', 'feishu_not_connected'}
-            raw = code[7:] if code.startswith('feishu_') else ''
-            rejected = rejected or raw.isdigit() and not 500 <= int(raw) <= 599
-            if rejected:
-                self._transition(task, state='send_failed', error='发送被拒绝：' + str(error))
+        self.data['outputs'].append(dict(id=key, source=source, text=text, channel=deepcopy(channel), state='queued', error=''))
+
+    def _poll_codex(self):
+        self.codex = self.context.call('codexGet', {})
+        terminal = [turn for turn in self.codex['turns'] if turn['status'] in ('completed', 'failed', 'interrupted', 'stopped')]
+        with self.lock:
+            if self.data['seenCodex'] is None:
+                self.data['seenCodex'] = [turn['turnId'] for turn in terminal]
             else:
-                self._transition(task, state='unknown', error='发送结果未确认：' + str(error) + '。请先在飞书中核对，再选择处理方式。')
+                seen = set(self.data['seenCodex'])
+                for turn in terminal:
+                    if turn['turnId'] in seen:
+                        continue
+                    route = next((item['channel'] for item in reversed(self.data['inputs'])
+                                  if item.get('turnId') == turn['turnId']), self.data['channel'])
+                    text = turn.get('reply')
+                    if turn['status'] != 'completed':
+                        error = turn.get('error')
+                        detail = error.get('message', '') if isinstance(error, dict) else str(error or '')
+                        text = 'Codex 本轮' + ('失败' if turn['status'] == 'failed' else '已停止') + ('：' + detail if detail else '')
+                    if text:
+                        self._enqueue_output('codex:' + turn['turnId'], 'codex', text, route)
+                    self.data['seenCodex'].append(turn['turnId'])
+                    seen.add(turn['turnId'])
+            self._save()
+
+    def _set(self, item, **values):
+        with self.lock:
+            item.update(values)
+            self._save()
+
+    def _submit(self):
+        with self.lock:
+            item = next((row for row in self.data['inputs'] if row['state'] not in ('submitted', 'skipped')
+                         and self._same_channel(row['channel'], self.data['channel'])), None)
+        if item is None or item['state'] != 'queued' or self.codex.get('connection') != 'ready' or self._stopped():
+            return
+        self._set(item, state='sending', error='')
+        try:
+            result = self.context.call('codexSend', dict(text=item['text'], mode='steer' if self.codex['activeTurnId'] else 'start'))
+            self._set(item, state='submitted', threadId=result['threadId'], turnId=result.get('turnId'))
+        except Exception as error:
+            self._set(item, state='failed' if rejected(error) else 'unknown', error=str(error))
+
+    def _flush(self):
+        with self.lock:
+            item = next((row for row in self.data['outputs'] if row['state'] == 'queued'), None)
+            if item is None or self._stopped():
+                return
+            if item['channel'] is None:
+                if self.data['channel'] is None:
+                    return
+                item['channel'] = deepcopy(self.data['channel'])
+                self._save()
+        self._set(item, state='sending', error='')
+        try:
+            result = self.context.call('feishuReply', dict(message_id=item['channel']['messageId'], text=item['text'],
+                                                        reply_in_thread=bool(item['channel']['threadId'])))
+            self._set(item, state='sent', messageId=result['messageId'])
+        except Exception as error:
+            self._set(item, state='failed' if rejected(error) else 'unknown', error=str(error))
+
+    def _step(self, phase, action):
+        if phase in self.paused or self._stopped():
+            return
+        try:
+            action()
+            self.issues.pop(phase, None)
+        except Exception as error:
+            self.issues[phase] = str(error)
+            self.paused.add(phase)
 
     def _loop(self):
-        try:
-            self._statuses()
-        except Exception as error:
-            self.error = str(error)
-            self._publish()
         while not self._stopped():
-            if not self.error:
-                try:
-                    if not self._statuses():
-                        self._publish()
-                        self.wake.wait(self.interval)
-                        self.wake.clear()
-                        continue
-                    if self.data['cursor'] is None:
-                        self._initialize_cursor()
-                    if self._stopped():
-                        break
-                    self._receive()
-                    # Preserve order within each chat/topic when an earlier task needs attention.
-                    blocked = set()
-                    for task in self.data['tasks']:
-                        conversation = task['conversation']
-                        if task['state'] in ('failed', 'send_failed', 'unknown'):
-                            blocked.add(conversation)
-                        elif task['state'] in ('pending', 'ready') and conversation not in blocked:
-                            if self._stopped():
-                                break
-                            self._process(task)
-                            if task['state'] in ('failed', 'send_failed', 'unknown'):
-                                blocked.add(conversation)
-                    self._publish()
-                except Exception as error:
-                    self.error = str(error)
-                    self._publish()
+            self._step('codex', self._poll_codex)
+            self._step('receive', self._receive)
+            if 'codex' not in self.paused:
+                self._step('submit', self._submit)
+            self._step('output', self._flush)
+            self._publish()
             self.wake.wait(self.interval)
             self.wake.clear()
 
-    def handle(self, command, params):
-        if command == 'continue':
-            self._statuses()
-            self.error = ''
-            self.wake.set()
-            self._publish()
-            return {'success': True}
-        if command not in ('retry', 'skip', 'confirm_sent', 'resend'):
-            raise ValueError('未知操作')
+    def _bridge_output(self, params):
+        result = params.get('result')
+        if (not isinstance(result, dict)
+                or any(not isinstance(result.get(key), str) or not result[key] for key in ('deliveryId', 'sessionId', 'runId', 'status'))
+                or result['status'] not in ('completed', 'failed', 'stopped')
+                or result.get('reply') is not None and not isinstance(result['reply'], str)
+                or 'replyTruncated' in result and type(result['replyTruncated']) is not bool):
+            raise ValueError('Bridge 回调需要有效的 deliveryId、sessionId、runId、status 和 reply')
+        text = result.get('reply') or 'Bridge 任务已完成，无文字输出。'
+        if result['status'] != 'completed':
+            text = 'Bridge 任务' + ('失败' if result['status'] == 'failed' else '已停止') + ('：\n' + result['reply'] if result.get('reply') else '')
+        if result.get('replyTruncated'):
+            text += '\n（Bridge 标记此结果已截短）'
         with self.lock:
-            task = next(task for task in self.data['tasks'] if task['id'] == params['taskId'])
-            if command == 'retry' and task['state'] == 'failed':
-                task.update(state='pending', error='')
-            elif command == 'skip' and task['state'] == 'failed':
-                task.update(state='skipped', error=task['error'])
-            elif command == 'confirm_sent' and task['state'] == 'unknown':
-                task.update(state='done', error='', manuallyConfirmed=True)
-            elif command == 'resend' and task['state'] in ('unknown', 'send_failed'):
-                task.update(state='ready', error='')
-            else:
-                raise ValueError('此请求当前不支持所选操作')
+            self._enqueue_output('bridge:' + result['deliveryId'] + ':' + result['runId'], 'bridge', text, self.data['channel'])
             self._save()
         self.wake.set()
         self._publish()
-        return {'success': True}
+        return dict(accepted=True)
+
+    def handle(self, command, params):
+        if command == 'bridge_output':
+            return self._bridge_output(params)
+        if command == 'continue':
+            self.paused.clear()
+            self.issues.clear()
+            self.wake.set()
+            return dict(success=True)
+        kind = params['kind']
+        with self.lock:
+            if kind == 'legacy':
+                item = next(row for row in self.data['legacy']['tasks'] if row['id'] == params['id'])
+                if item.get('migratedTo') or item['state'] in ('done', 'skipped'):
+                    raise ValueError('此旧任务已经处理')
+                if command == 'skip':
+                    item['state'] = 'skipped'
+                elif command == 'transfer' and item['state'] not in ('unknown', 'sending'):
+                    channel = dict(chatId=item['chatId'], threadId=item['threadId'], messageId=item['messageId'])
+                    if self.data['channel'] is None:
+                        self.data['channel'] = channel
+                    elif not self._same_channel(channel, self.data['channel']):
+                        raise ValueError('旧任务不属于当前连接的飞书会话')
+                    identity = uuid4().hex
+                    self.data['inputs'].append(dict(id=identity, channel=channel, text=item['text'], state='queued', error=''))
+                    item['migratedTo'] = identity
+                else:
+                    raise ValueError('旧发送结果未知，请先核对，不能自动重新处理')
+            elif kind in ('inputs', 'outputs'):
+                item = next(row for row in self.data[kind] if row['id'] == params['id'])
+                if command == 'retry' and item['state'] in ('failed', 'unknown'):
+                    if kind == 'inputs' and not self._same_channel(item['channel'], self.data['channel']):
+                        raise ValueError('此消息不属于当前连接的飞书会话')
+                    item.update(state='queued', error='')
+                elif command == 'confirm' and item['state'] == 'unknown':
+                    item.update(state='submitted' if kind == 'inputs' else 'sent', error='')
+                elif command == 'skip' and item['state'] in ('failed', 'unknown'):
+                    item['state'] = 'skipped'
+                else:
+                    raise ValueError('此项当前不支持所选操作')
+            else:
+                raise ValueError('未知队列')
+            self._save()
+        self.wake.set()
+        self._publish()
+        return dict(success=True)
 
 
 def create(context):

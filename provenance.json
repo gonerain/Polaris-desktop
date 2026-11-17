@@ -19,15 +19,15 @@
   },
   {
     "id": "assistant",
-    "source": "installed snapshot",
-    "revision": "2f72fa989d85abe9e9de43be1f37d3617f706541b67bedaf4e665ddd9c1c5e2f",
-    "contentDigest": "e6e7f6a1bb4c3911c8ac7151b525c47977fc8089a3558b8219bccdb62df7fced"
+    "source": "catalog: instance application bindings",
+    "revision": null,
+    "contentDigest": "2f1c791b035c84f55c9ac6f879fcaf1dec628f7312ead6ed6935045f3a36eb1c"
   },
   {
     "id": "org.polaris.feishu-bot",
-    "source": "installed snapshot",
+    "source": "catalog: per-endpoint proxy selection",
     "revision": null,
-    "contentDigest": "6aa7a952091cfdb513595d94e3a3a1983592fd66c47855050b129c1bae780da6"
+    "contentDigest": "42921f120ad863c43c15b176d7d191bd16e633f2bbf09a0e5428daf140cbdedb"
   },
   {
     "id": "org.example.text-tools",
@@ -37,9 +37,9 @@
   },
   {
     "id": "org.polaris.feishu-agent",
-    "source": "workspace",
+    "source": "catalog: persistent Codex channel and Bridge callbacks",
     "revision": null,
-    "contentDigest": "a80cddbf39d843b190077c05378b3732968b085e32bcdb3234988cfb834b6acb"
+    "contentDigest": "e6bd294e98a81fe2697fe600416414c274aeb1c695719f5d63b7cb5275e56f01"
   },
   {
     "id": "org.example.text-studio",
