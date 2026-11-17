@@ -1,0 +1,22 @@
+{
+  "id": "org.polaris.schedule-app",
+  "name": "日程",
+  "version": "1.0.1",
+  "dependencies": ["org.polaris.schedule"],
+  "entry": {"adapter": "qt-quick", "file": "Main.qml"},
+  "requires": {
+    "get": {"contract":"polaris.schedule.get@1","access":"read","preferredComponentType":"org.polaris.schedule","label":"读取任务和日历"},
+    "add": {"contract":"polaris.schedule.add@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"新增任务"},
+    "update": {"contract":"polaris.schedule.update@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"修改与安排任务"},
+    "delete": {"contract":"polaris.schedule.delete@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"删除任务"},
+    "undo_delete": {"contract":"polaris.schedule.undo-delete@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"撤销删除"},
+    "add_subtask": {"contract":"polaris.schedule.add-subtask@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"新增子任务"},
+    "update_subtask": {"contract":"polaris.schedule.update-subtask@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"完成子任务"},
+    "delete_subtask": {"contract":"polaris.schedule.delete-subtask@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"删除子任务"},
+    "google_connect": {"contract":"polaris.schedule.google-connect@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"连接 Google 日历"},
+    "google_cancel": {"contract":"polaris.schedule.google-cancel@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"取消 Google 授权"},
+    "google_select": {"contract":"polaris.schedule.google-select@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"选择同步日历"},
+    "google_sync": {"contract":"polaris.schedule.google-sync@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"刷新 Google 日历"},
+    "google_disconnect": {"contract":"polaris.schedule.google-disconnect@1","access":"write","preferredComponentType":"org.polaris.schedule","label":"断开 Google 日历"}
+  }
+}
