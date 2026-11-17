@@ -67,6 +67,20 @@ class BackendTests(unittest.TestCase):
         self.assertNotIn('secret', json.dumps(one.status()).lower().replace('hassecret', ''))
         self.assertEqual((one.store.directory / 'configuration.json').stat().st_mode & 0o777, 0o600)
 
+    def test_application_reply_preserves_thread_option(self):
+        bot = self.bot()
+        bot.store.configure(dict(instanceName='One', appId='cli_one', secret='fake', desiredConnected=False))
+        bot._connect()
+        bot._transport.callback('message', dict(messageId='parent', chatId='chat', text='question', direction='inbound'))
+        bot.reply('parent', 'answer', reply_in_thread=True)
+        self.assertTrue(bot._transport.calls[-1][1]['replyInThread'])
+        with self.assertRaises(PlatformError):
+            bot.reply('parent', 'answer', reply_in_thread='yes')
+        session = SDKSession(lambda *_: None, channel_factory=lambda **_: None)
+        session.channel = SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(success=True, message_id='sent')))
+        asyncio.run(session.handle('send', dict(chatId='chat', text='answer', replyMessageId='parent', replyInThread=True)))
+        self.assertTrue(session.channel.send.await_args.args[2]['reply_in_thread'])
+
     def test_polling_cursors_duplicate_and_card_actions(self):
         bot = self.bot()
         for n in range(4):

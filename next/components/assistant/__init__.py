@@ -56,8 +56,8 @@ class Assistant(Component):
                            dict(target=directory_id, name='describe', access='read')])]
         self.operation('create_view', access='write')(self.create_view)
         self.operation('release_view', access='write')(self.release_view)
-        self.operation('status', provides='polaris.agent.status@1')(self.status)
-        self.operation('reply', access='write', provides='polaris.agent.reply@1')(self.reply)
+        self.operation('status', provides='polaris.agent.status@1', applicationBinding='instance')(self.status)
+        self.operation('reply', access='write', provides='polaris.agent.reply@1', applicationBinding='instance')(self.reply)
         self.operation('configure_model', access='write')(self.configure_model)
 
     def describe(self):

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "name": "Polaris官方目录",
+  "components": [
+    {
+      "path": "next/plugins/feishu",
+      "description": "飞书机器人组件：连接飞书并收发消息。"
+    },
+    {
+      "path": "next/examples/text-studio/component",
+      "description": "示例组件：提供文本整理和规则词频统计。"
+    }
+  ],
+  "applications": [
+    {
+      "path": "next/applications/feishu-agent",
+      "description": "在飞书继续 Codex CLI 会话，转发 Codex 输出与 Bridge 结果回调。"
+    },
+    {
+      "path": "next/examples/text-studio/application",
+      "description": "示例应用：双栏文本编辑、字符统计及处理结果回填。"
+    }
+  ]
+}

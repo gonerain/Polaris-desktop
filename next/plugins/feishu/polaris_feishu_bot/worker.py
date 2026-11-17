@@ -58,6 +58,8 @@ class SDKFailure(Exception):
 class SDKSession:
     def __init__(self, emit, channel_factory=None):
         if channel_factory is None:
+            from .proxy import configure_sdk_proxy
+            configure_sdk_proxy()
             from lark_channel import FeishuChannel
             channel_factory = FeishuChannel
         self.factory = channel_factory
@@ -123,6 +125,8 @@ class SDKSession:
             opts = {'receive_id_type': 'chat_id', 'uuid': params.get('requestId')}
             if params.get('replyMessageId'):
                 opts['reply_to'] = params['replyMessageId']
+            if params.get('replyInThread') is not None:
+                opts['reply_in_thread'] = params['replyInThread']
             result = await self.channel.send(params['chatId'], message, opts)
         elif operation == 'update_card':
             result = await self.channel.update_card(params['messageId'], params['card'])

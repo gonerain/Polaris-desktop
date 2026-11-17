@@ -99,4 +99,16 @@ runtime.stop_application(definition.id)
 
 旧 schema 1 流程定义和 schema 2 包引用继续读取。`Application(title, bindings, ...)`、`from_dict`、`save`、`open` 等旧入口保留；新存储与宿主代码使用 `ApplicationDefinition`。迁移保留应用 UUID、授权、连接和原数据目录。
 
-当前不支持资源范围绑定、应用来源的事件订阅、应用后台上下文，以及桌面包就地更新。应用包删除和替换须经过应用宿主，普通组件卸载入口会拒绝操作。普通组件原有的能力和实例协议继续适用。应用获得自身明确授权，宿主管理权限不会随调用下放给应用。
+当前不支持资源范围绑定及应用来源的事件订阅。应用包删除和替换须经过应用宿主，普通组件卸载入口会拒绝操作。普通组件原有的能力和实例协议继续适用。应用获得自身明确授权，宿主管理权限不会随调用下放给应用。
+
+## 应用后台与回调
+
+包可通过 `entry.backend` 指定现有相对 Python 文件。模块提供 `create(context)`，返回有 `start()`、`stop()`、`handle(command, params)` 的服务。上下文仅提供本应用的 `application_id`、`data_directory`、`bindings`、`stopped`、`call(alias, params)` 和 `publish(state)`，不提供 Runtime 管理权限。
+
+后台由用户明确开启，切换或隐藏界面不停止。运行意图持久化，恢复时不自动授予权限；实际调用始终校验绑定及普通授权。依赖组件由可选 `dependencies` 组件类型 ID 数组声明：组件或已连接实例丢失时报错并停止，组件存在但能力不可用时仅警告。
+
+应用包可声明 `callbacks` 映射，每项为 `{contract, parameters, label?}`，其中 `parameters` 是对象参数 schema。宿主将回调注册为应用自身普通、可实例绑定的写能力，调用经正常授权后转交后台 `handle`；后台停止或尚未就绪时返回 `completion_not_ready`。接收者应在持久化接管结果后才返回 `accepted: true`。
+
+QML 的 `appBackend` 提供 `available/running/stopping/error/warningsJson/stateJson`，以及 `start()`、`stop()`、`call(command, params, requestId)`。结果通过 `completed`、`failed` 返回。界面隐藏后仍可接收获授权的回调。
+
+`updateDirectory()` 更新当前应用包，保留应用 UUID、数据和运行意图。先停止并等待旧后台，再原子保存新快照引用；新增能力不自动连接或授权。未知投递结果由应用保留并交给用户核对，不自动重发。

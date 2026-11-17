@@ -1,0 +1,44 @@
+{
+  "id": "org.polaris.feishu-agent",
+  "name": "飞书 Agent",
+  "version": "0.3.0",
+  "dependencies": [
+    "org.polaris.feishu-bot",
+    "org.polaris.codex-cli",
+    "org.polaris.schedule",
+    "org.polaris.agent"
+  ],
+  "entry": {"adapter": "qt-quick", "file": "Main.qml", "backend": "backend.py"},
+  "requires": {
+    "feishuRead": {"contract": "polaris.feishu.read-messages@1", "access": "read", "preferredComponentType": "org.polaris.feishu-bot", "label": "读取飞书消息"},
+    "feishuReply": {"contract": "polaris.feishu.reply@1", "access": "write", "preferredComponentType": "org.polaris.feishu-bot", "label": "向飞书发送输出"},
+    "codexGet": {"contract": "polaris.codex-cli.get@1", "access": "read", "preferredComponentType": "org.polaris.codex-cli", "label": "读取 Codex 会话与输出"},
+    "codexSend": {"contract": "polaris.codex-cli.send@1", "access": "write", "preferredComponentType": "org.polaris.codex-cli", "label": "向 Codex 增量发送消息"}
+  },
+  "callbacks": {
+    "bridge_output": {
+      "contract": "polaris.feishu-agent.bridge-output@1",
+      "label": "将 Bridge 回调输出转发到飞书",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "object",
+            "properties": {
+              "deliveryId": {"type": "string"},
+              "sessionId": {"type": "string"},
+              "runId": {"type": "string"},
+              "status": {"type": "string", "enum": ["completed", "failed", "stopped"]},
+              "reply": {"type": ["string", "null"]},
+              "replyTruncated": {"type": "boolean"}
+            },
+            "required": ["deliveryId", "sessionId", "runId", "status"],
+            "additionalProperties": true
+          }
+        },
+        "required": ["result"],
+        "additionalProperties": false
+      }
+    }
+  }
+}

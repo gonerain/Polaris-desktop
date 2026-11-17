@@ -246,20 +246,22 @@ class FeishuBot(Component):
                         replyMessageId=params.get('replyMessageId', '')))
             return result
 
-    def send(self, chat_id, text, reply_message_id=None):
+    def send(self, chat_id, text, reply_message_id=None, reply_in_thread=None):
         chat_id, text = self._text(chat_id, '会话标识', 200), self._text(text, '消息内容')
+        if reply_in_thread is not None and type(reply_in_thread) is not bool:
+            raise PlatformError('invalid_params', 'reply_in_thread 须为布尔值')
         if reply_message_id:
             known = self.store.message(reply_message_id)
             if known is None or known['chatId'] != chat_id:
                 raise PlatformError('invalid_reply', '请选择当前实例当前会话中已有的消息进行引用')
-        return self._send('send', dict(chatId=chat_id, text=text, replyMessageId=reply_message_id), text)
+        return self._send('send', dict(chatId=chat_id, text=text, replyMessageId=reply_message_id, replyInThread=reply_in_thread), text)
 
-    def reply(self, message_id, text):
+    def reply(self, message_id, text, reply_in_thread=None):
         message_id = self._text(message_id, '消息标识', 200)
         known = self.store.message(message_id)
         if known is None:
             raise PlatformError('message_missing', '当前实例没有这条消息')
-        return self.send(known['chatId'], text, message_id)
+        return self.send(known['chatId'], text, message_id, reply_in_thread)
 
     @staticmethod
     def _card(card):
