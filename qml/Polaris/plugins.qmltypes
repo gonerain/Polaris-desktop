@@ -116,6 +116,7 @@ Module {
         Property { name: "storageError"; type: "QString"; isReadonly: true }
         Property { name: "storageNotice"; type: "QString"; isReadonly: true }
         Property { name: "storagePath"; type: "QString"; isReadonly: true }
+        Property { name: "cloudSync"; type: "QObject*"; isReadonly: true }
         Property { name: "storageDirectoryUrl"; type: "QString"; isReadonly: true }
         Method { name: "retrySave"; type: "bool" }
         Method { name: "undoDelete"; type: "bool" }

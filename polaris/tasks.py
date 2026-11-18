@@ -5,10 +5,12 @@ import re
 from contextlib import contextmanager
 from datetime import date, timedelta
 from itertools import count
+from copy import deepcopy
+from uuid import uuid4
 
 from PySide6.QtCore import QCoreApplication, QObject, Property, QTimer, Signal, Slot, QUrl
 
-from .storage import SnapshotRepository, StorageError
+from .storage import SnapshotRepository, StorageError, validate_snapshot
 
 _WEEKDAYS = "一二三四五六日"
 _TIME_PATTERN = re.compile(r"^(\d{1,2})[:：](\d{1,2})$")
@@ -50,6 +52,7 @@ class TaskEntry(QObject):
         super().__init__(parent)
         self._ids = ids
         self._id = next(ids)
+        self._sync_id = str(uuid4())
         self._title = title
         self._time = time
         self._done = False
@@ -174,6 +177,7 @@ class CalendarTaskStore(QObject):
     contentChanged = Signal()
     undoChanged = Signal()
     storageChanged = Signal()
+    syncChanged = Signal()
 
     def __init__(self, parent=None, *, today=None):
         super().__init__(parent)
@@ -187,6 +191,8 @@ class CalendarTaskStore(QObject):
         self._last_added_timer.setInterval(500)
         self._last_added_timer.timeout.connect(self._clear_last_added)
         self._repository = None
+        self._sync = None
+        self._sync_state = {"version": 1, "records": {}}
         self._storage_error = ""
         self._storage_notice = ""
         self._undo = None
@@ -200,6 +206,7 @@ class CalendarTaskStore(QObject):
             self._day_timer.start()
         self.contentChanged.connect(self._save)
 
+    cloudSync = Property(QObject, lambda self: self._sync, notify=syncChanged)
     storageError = Property(str, lambda self: self._storage_error, notify=storageChanged)
     storageNotice = Property(str, lambda self: self._storage_notice, notify=storageChanged)
     storagePath = Property(str, lambda self: str(self._repository.path) if self._repository else "",
@@ -221,13 +228,9 @@ class CalendarTaskStore(QObject):
         self._repository = SnapshotRepository(path)
         try:
             document = self._repository.load()
-            groups = [*document["days"].values(), document.get("inbox", [])]
-            maximum = max((entry["id"] for entries in groups
-                           for task in entries for entry in [task, *task.get("subtasks", [])]), default=0)
-            self._ids = count(maximum + 1)
+            self._sync_state = document["syncState"]
+            self._ids = count(document["nextId"])
             for value, entries in document["days"].items():
-                if document["version"] == 1:
-                    entries = sorted(entries, key=lambda entry: (bool(entry.get("time")), entry.get("time", "")))
                 self._tasks_by_day[date.fromisoformat(value)] = [self._restore(entry) for entry in entries]
             self._tasks_by_day[None] = [self._restore(entry, inbox=True) for entry in document.get("inbox", [])]
             self._storage_notice = self._repository.warning
@@ -244,6 +247,7 @@ class CalendarTaskStore(QObject):
     def _restore(self, record, parent=None, subtask=False, *, inbox=False):
         entry = TaskEntry(record["title"], count(record["id"]), parent or self,
                           is_subtask=subtask, time="" if inbox else record.get("time", ""))
+        entry._sync_id = record["syncId"]
         entry._inbox = inbox
         entry._ids = self._ids
         entry._done = record["done"]
@@ -267,14 +271,51 @@ class CalendarTaskStore(QObject):
 
     @staticmethod
     def _record(entry):
-        return {"id": entry.entryId, "title": entry.title, "time": entry.time,
+        return {"id": entry.entryId, "syncId": entry._sync_id, "title": entry.title, "time": entry.time,
                 "done": entry.done, "notes": entry.notes, "important": entry.important,
                 "subtasks": [CalendarTaskStore._record(child) for child in entry.subtasks]}
 
     def _snapshot(self):
-        return {"version": 2, "days": {day.isoformat(): [self._record(entry) for entry in entries]
+        return {"version": 3, "days": {day.isoformat(): [self._record(entry) for entry in entries]
                     for day, entries in self._tasks_by_day.items() if day is not None and entries},
-                "inbox": [self._record(entry) for entry in self._entries_for(None)]}
+                "inbox": [self._record(entry) for entry in self._entries_for(None)],
+                "syncState": deepcopy(self._sync_state), "nextId": next(deepcopy(self._ids))}
+
+    def export_sync_snapshot(self):
+        if self._repository is None or self._repository.blocked or self._storage_error:
+            raise StorageError("请先修复本地保存错误，再进行云同步")
+        return self._snapshot()
+
+    def checkpoint_sync(self, state):
+        previous = self._sync_state
+        self._sync_state = deepcopy(state)
+        if not self._save():
+            self._sync_state = previous
+            raise StorageError(self._storage_error)
+
+    def apply_sync_snapshot(self, document):
+        """Commit data and causal metadata atomically before replacing Qt models."""
+        validate_snapshot(document)
+        if self._repository is None or self._repository.blocked:
+            raise StorageError("本地存储不可写")
+        document = deepcopy(document)
+        document["nextId"] = max(document["nextId"], next(deepcopy(self._ids)))
+        self._repository.save(document)
+        old_entries = [entry for entries in self._tasks_by_day.values() for entry in entries]
+        self._tasks_by_day = {}
+        self._sync_state = deepcopy(document["syncState"])
+        self._ids = count(document["nextId"])
+        for day, entries in document["days"].items():
+            self._tasks_by_day[date.fromisoformat(day)] = [self._restore(entry) for entry in entries]
+        self._tasks_by_day[None] = [self._restore(entry, inbox=True) for entry in document.get("inbox", [])]
+        self._undo = None
+        self._last_added_id = 0
+        self._storage_error = ""
+        for signal in (self.tasksChanged, self.summaryChanged, self.calendarChanged, self.scheduleChanged,
+                       self.agendaChanged, self.undoChanged, self.lastAddedTaskIdChanged, self.storageChanged):
+            signal.emit()
+        for entry in old_entries:
+            entry.deleteLater()
 
     @Slot(result=bool)
     def retrySave(self):
@@ -287,7 +328,8 @@ class CalendarTaskStore(QObject):
         if self._repository is None:
             return True
         try:
-            self._repository.save(self._snapshot())
+            document = self._snapshot()
+            self._repository.save(document)
             self._storage_error = ""
         except StorageError as error:
             self._storage_error = "保存失败：" + str(error)

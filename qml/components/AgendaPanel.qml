@@ -99,6 +99,7 @@ ColumnLayout {
             buttonSize: 26
             onClicked: root.taskStore.goToday()
         }
+        CalendarSyncButton { taskStore: root.taskStore }
         IconButton {
             objectName: "openFocusButton"
             visible: root.showFocusButton

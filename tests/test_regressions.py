@@ -74,13 +74,15 @@ class CalendarTests(unittest.TestCase):
         entries[1].setDone(True)
         self.assertFalse(self.store.reorderToday(entries[0].entryId, entries[1].entryId))
 
-    def test_legacy_inbox_time_is_normalized_on_load(self):
+    def test_unsupported_storage_is_not_converted_or_overwritten(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
             path = Path(directory) / "tasks.json"
-            path.write_text(json.dumps({"version": 2, "days": {}, "inbox": [
-                {"id": 1, "title": "old inbox", "done": False, "time": "09:30"}]}), encoding="utf8")
+            original = json.dumps({"version": 2, "days": {}, "inbox": []})
+            path.write_text(original, encoding="utf8")
             self.store.initialize_storage(path)
-            self.assertEqual(self.store.allEntries[0]["task"].time, "")
+            self.assertTrue(self.store.storageError)
+            self.assertFalse(self.store.retrySave())
+            self.assertEqual(path.read_text(encoding="utf8"), original)
 
 
 class ApprovalTests(unittest.TestCase):

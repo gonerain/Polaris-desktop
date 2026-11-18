@@ -18,6 +18,7 @@ from polaris.pet_api import PetAPI
 from polaris.local_bridge import LocalBridge
 from polaris.weixin import WeixinClient
 from polaris.deepseek_chat import DeepSeekChat
+from polaris.calendar_sync import CalendarSync
 
 
 QML_FILE = Path(__file__).resolve().parent / "qml" / "Main.qml"
@@ -56,6 +57,7 @@ def create_engine(*, storage_path=None) -> QQmlApplicationEngine:
         raise RuntimeError("找不到日程组件或联动协调器")
     if storage_path is not None:
         store.initialize_storage(storage_path)
+        engine._calendar_sync = CalendarSync(store, Path(storage_path).parent / "onedrive-config.json", engine)
     engine._components.register("calendar", CalendarAPI(store))
     engine._components.register("agents", engine._agents)
     engine._components.register("pet", PetAPI(window))
@@ -102,6 +104,7 @@ def main() -> int:
     coordinator.attach(window.findChild(QObject, "calendarTaskStore"))
     engine._bridge.start(data_directory)
     app.aboutToQuit.connect(engine._bridge.stop)
+    app.aboutToQuit.connect(engine._calendar_sync.shutdown)
     app.aboutToQuit.connect(engine._weixin.disconnectAccount)
     if engine._weixin.hasAccount:
         QTimer.singleShot(0, engine._weixin.connectAccount)

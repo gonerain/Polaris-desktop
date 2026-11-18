@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+from uuid import UUID
 
 from PySide6.QtCore import QSaveFile, QIODevice
 
@@ -17,19 +18,24 @@ class SnapshotFormatError(StorageError):
 
 
 class UnsupportedVersionError(SnapshotFormatError):
-    """A newer format must not be rolled back to an older backup."""
+    """An unsupported format must not trigger backup rollback or overwrite."""
+
+
+def empty_snapshot():
+    return {"version": 3, "days": {}, "inbox": [], "nextId": 1,
+            "syncState": {"version": 1, "records": {}}}
 
 
 def validate_snapshot(document):
-    if isinstance(document, dict) and type(document.get("version")) is int and document["version"] not in (1, 2):
-        raise UnsupportedVersionError("数据由不支持的版本创建，请使用兼容版本打开")
-    if (not isinstance(document, dict) or type(document.get("version")) is not int
-            or document["version"] not in (1, 2)):
-        raise SnapshotFormatError("不支持的数据版本")
+    if not isinstance(document, dict) or type(document.get("version")) is not int:
+        raise SnapshotFormatError("日程数据格式无效")
+    if document["version"] != 3:
+        raise UnsupportedVersionError("仅支持当前日程数据格式，不读取或转换旧格式")
     days = document.get("days")
     if not isinstance(days, dict):
         raise SnapshotFormatError("日程数据格式损坏")
     ids = set()
+    sync_ids = set()
 
     def validate_entry(entry, subtask=False):
         if not isinstance(entry, dict):
@@ -38,6 +44,13 @@ def validate_snapshot(document):
         if type(identity) is not int or not 0 < identity <= 2_147_483_647 or identity in ids:
             raise SnapshotFormatError("任务编号无效或重复")
         ids.add(identity)
+        try:
+            uid = str(UUID(entry["syncId"]))
+        except (KeyError, ValueError, TypeError, AttributeError):
+            raise SnapshotFormatError("同步编号无效") from None
+        if uid != entry["syncId"] or uid in sync_ids:
+            raise SnapshotFormatError("同步编号无效或重复")
+        sync_ids.add(uid)
         if not isinstance(entry.get("title"), str) or not entry["title"].strip():
             raise SnapshotFormatError("任务名称无效")
         if type(entry.get("done")) is not bool:
@@ -63,11 +76,15 @@ def validate_snapshot(document):
             raise SnapshotFormatError("日期列表损坏")
         for entry in entries:
             validate_entry(entry)
-    inbox = document.get("inbox", [])
-    if not isinstance(inbox, list) or (document["version"] == 1 and inbox):
+    inbox = document.get("inbox")
+    if not isinstance(inbox, list):
         raise SnapshotFormatError("收集箱格式无效")
     for entry in inbox:
         validate_entry(entry)
+    if type(document.get("nextId")) is not int or not max(ids, default=0) < document["nextId"] <= 2_147_483_648:
+        raise SnapshotFormatError("下一个任务编号无效")
+    from .sync_merge import validate_state
+    validate_state(document.get("syncState"))
     return document
 
 
@@ -90,12 +107,12 @@ class SnapshotRepository:
 
     def load(self):
         if not self.path.exists() and not self.backup.exists():
-            return {"version": 2, "days": {}, "inbox": []}
+            return empty_snapshot()
         try:
             return self.read(self.path)
         except UnsupportedVersionError as error:
             self.blocked = True
-            raise StorageError("数据格式比当前版本更新，已停止写入；请升级程序，不会回退到旧备份") from error
+            raise StorageError("数据格式不受支持，已停止写入；原文件保持不变，不自动转换或回退备份") from error
         except StorageError:
             try:
                 recovered = self.read(self.backup)
@@ -127,8 +144,6 @@ class SnapshotRepository:
         validate_snapshot(document)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            if self._recovered and document["version"] == 2:
-                self._preserve_legacy(self.read(self.backup))
             if self.path.exists():
                 try:
                     previous = self.read(self.path)
@@ -139,21 +154,11 @@ class SnapshotRepository:
                     # load() already preserved the damaged file during recovery.
                     previous = None
                 if previous is not None:
-                    if previous["version"] > document["version"]:
-                        raise StorageError("不能使用旧格式覆盖新版数据")
-                    if document["version"] == 2:
-                        self._preserve_legacy(previous)
                     self.atomic_write(self.backup, self.encode(previous))
             self.atomic_write(self.path, self.encode(document))
             self._recovered = False
         except OSError as error:
             raise StorageError(str(error)) from error
-
-    def _preserve_legacy(self, document):
-        if document["version"] == 1:
-            path = self.path.with_name(self.path.stem + ".v1-backup.json")
-            if not path.exists():
-                self.atomic_write(path, self.encode(document))
 
     @staticmethod
     def encode(document):

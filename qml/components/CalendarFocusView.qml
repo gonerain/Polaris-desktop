@@ -272,6 +272,7 @@ Rectangle {
                         elide: Text.ElideRight
                     }
                 }
+                CalendarSyncButton { taskStore: root.taskStore }
                 IconButton {
                     objectName: "workbenchSearch"
                     text: qsTr("搜索")

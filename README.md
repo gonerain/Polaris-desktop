@@ -12,6 +12,7 @@
 - 参考 Super Productivity 的任务优先工作流：先收集，再主动选择今天的事；旧安排单独整理，不自动堆进今日清单。
 - 过期待办可以单项或全部移到今天，已完成任务默认收起。
 - 自动保存、上个版本备份、损坏保护、主任务删除撤销和单实例锁。
+- 日程标题栏 `☁` 可启用 OneDrive 同步预览版：需自备微软应用 Client ID，本地优先，并发修改保留冲突副本；云端暂为明文、凭证仅本次运行有效。[配置与限制](docs/onedrive-sync.md)。
 - 组件支持画布态与独立完整态，以及连续展开 / 返回动画。
 - 默认 2×2 画布：日程申请两个 cell，Agent 和微信各申请一个；不加顶栏分页。
 - 微信 ClawBot 内置极简 DeepSeek Agent，默认以可配置的鲸鱼娘人设自动回复；通过独立读取授权与按请求的操作计划调用 Polaris 组件。仅新增任务和子任务的首份计划默认自动执行，其余计划通过本机或微信一次性审批。本机保存开关、最近聊天与有限上下文，Key 只读 `DEEPSEEK_API_KEY`，不依赖 OpenClaw。[微信组件说明](docs/weixin-component.md)。
@@ -69,7 +70,7 @@ py -3.13 -m venv .venv
 
 Windows 与 WSL 的 Agent 接入通过显式 `--bridge-stdio` 本机中继连接，不假定两侧共享套接字，也不开放 TCP 端口。使用 `POLARIS_RELAY` 配置命令参数数组，见 [接入说明](integrations/README.md)。
 
-参见 [组件协议](docs/component-board.md) 和 [日程设计、存储恢复及已知边界](docs/schedule-design.md)。当前没有云同步、重复任务或程序关闭后的后台提醒。
+参见 [组件协议](docs/component-board.md) 和 [日程设计、存储恢复及已知边界](docs/schedule-design.md)。OneDrive 云同步目前为需自行配置的预览版；当前没有重复任务或程序关闭后的后台提醒。
 
 ## 素材与非商业使用限制
 
