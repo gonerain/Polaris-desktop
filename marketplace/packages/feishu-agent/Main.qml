@@ -87,6 +87,23 @@ Rectangle {
             Action { text: "查看"; onClicked: root.settingsOpen = true }
             Action { objectName: "feishuAgentContinue"; text: "继续"; onClicked: root.command("continue") }
         }
+        ColumnLayout {
+            Layout.fillWidth: true; spacing: 8
+            Label { Layout.fillWidth: true; text: "飞书内发送「面板」或「日程」，即可打开交互卡片。" }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                Action {
+                    objectName: "feishuAgentSessionsCard"; text: "发送会话卡片"
+                    enabled: root.running && root.snapshot.connected === true
+                    onClicked: root.command("show_sessions")
+                }
+                Action {
+                    objectName: "feishuAgentScheduleCard"; text: "发送日程卡片"
+                    enabled: root.running && root.snapshot.connected === true
+                    onClicked: root.command("show_schedule")
+                }
+            }
+        }
         ScrollView {
             Layout.fillWidth: true; Layout.fillHeight: true; clip: true
             contentWidth: availableWidth
@@ -139,7 +156,7 @@ Rectangle {
                     Layout.fillWidth: true; visible: root.settingsOpen; spacing: 10
                     Label {
                         Layout.fillWidth: true
-                        text: "在应用连接中选择同一个飞书实例，以及一个 Codex CLI 实例。首条新消息连接一个飞书会话。"
+                        text: "飞书消息、卡片操作和卡片更新连接同一个机器人实例；会话列表和回复详情连接同一个 Agent Bridge 实例。首条新消息连接一个飞书会话。"
                     }
                     Label {
                         objectName: "feishuAgentWarnings"; Layout.fillWidth: true

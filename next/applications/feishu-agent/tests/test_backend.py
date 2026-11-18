@@ -4,13 +4,16 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
 import threading
 import time
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location('feishu_agent_backend', Path(__file__).parents[1] / 'backend.py')
+spec = importlib.util.spec_from_file_location('feishu_agent_backend', Path(__file__).parents[1] / 'backend.py',
+    submodule_search_locations=[str(Path(__file__).parents[1])])
 backend = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = backend
 spec.loader.exec_module(backend)
 
 
@@ -298,9 +301,12 @@ class BackendTests(unittest.TestCase):
         finally:
             native.stop()
 
-    def test_manifest_contains_only_channel_and_codex_bindings(self):
+    def test_manifest_adds_read_only_data_and_card_bindings(self):
         manifest = json.loads((Path(__file__).parents[1] / 'polaris-application.json').read_text())
-        self.assertEqual(set(manifest['requires']), {'feishuRead', 'feishuReply', 'codexGet', 'codexSend'})
+        self.assertEqual(set(manifest['requires']), {'feishuRead', 'feishuReply', 'codexGet', 'codexSend',
+            'feishuActions', 'feishuUpdateCard', 'bridgeSessions', 'bridgeResult', 'scheduleGet'})
+        for alias in ('bridgeSessions', 'bridgeResult', 'scheduleGet'):
+            self.assertEqual(manifest['requires'][alias]['access'], 'read')
         self.assertIn('org.polaris.codex-cli', manifest['dependencies'])
         self.assertIn('bridge_output', manifest['callbacks'])
 

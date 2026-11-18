@@ -6,6 +6,8 @@ from pathlib import Path
 import threading
 from uuid import uuid4
 
+from .panels import COMMANDS, panel_state, render_panel
+
 
 REJECTED = {'invalid_params', 'busy', 'not_running', 'unavailable', 'not_configured',
     'permission_required', 'permission_denied', 'application_alias_missing', 'application_binding_missing',
@@ -22,17 +24,21 @@ def rejected(error):
 
 class Service:
     interval = 1.2
+    card_interval = 0.15
 
     def __init__(self, context):
         self.context = context
         self.path = Path(context.data_directory) / 'state.json'
         self.lock = threading.RLock()
         self.wake = threading.Event()
+        self.card_wake = threading.Event()
         self.thread = None
+        self.card_thread = None
         self.running = False
         self.codex = {}
         self.issues = {}
         self.paused = set()
+        self.card_action = None
         self.data = dict(schemaVersion=2, cursor=None, channel=None, inputs=[], outputs=[], seenCodex=None, legacy=None)
         if self.path.exists():
             saved = json.loads(self.path.read_text(encoding='utf-8'))
@@ -42,6 +48,8 @@ class Service:
                 self.data = saved
             else:
                 raise ValueError('不支持的飞书 Agent 数据版本')
+        self.data.setdefault('actionCursor', 0)
+        self.data.setdefault('panels', {})
         for queue in ('inputs', 'outputs'):
             for item in self.data[queue]:
                 if item['state'] == 'sending':
@@ -61,6 +69,9 @@ class Service:
             for item in self.data[kind]:
                 if item['state'] in ('failed', 'unknown'):
                     rows.append(dict(id=item['id'], kind=kind, state=item['state'], text=item['text'], error=item['error']))
+        if self.card_action is not None and 'cards' in self.paused:
+            rows.append(dict(id=str(self.card_action['cursor']), kind='cards', state='failed',
+                             text='飞书卡片操作未完成', error=self.issues['cards']))
         if self.data['legacy'] is not None:
             for item in self.data['legacy']['tasks']:
                 if item['state'] not in ('done', 'skipped') and not item.get('migratedTo'):
@@ -84,13 +95,18 @@ class Service:
         self.running = True
         self._publish()
         self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.card_thread = threading.Thread(target=self._card_loop, daemon=True)
         self.thread.start()
+        self.card_thread.start()
 
     def stop(self):
         self.running = False
         self.wake.set()
+        self.card_wake.set()
         if self.thread is not None:
             self.thread.join()
+        if self.card_thread is not None:
+            self.card_thread.join()
         self._publish()
 
     @staticmethod
@@ -129,9 +145,12 @@ class Service:
                 same = self._same_channel(channel, self.data['channel'])
                 if same:
                     self.data['channel'] = channel
+                panel_view = COMMANDS.get(message['text'].strip()) if same else None
                 self.data['inputs'].append(dict(id=message['messageId'], channel=channel, text=message['text'],
-                    state='queued' if same else 'failed',
+                    state='handled' if panel_view else 'queued' if same else 'failed',
                     error='' if same else '此应用已连接另一个飞书会话；此消息未交给 Codex。'))
+                if panel_view:
+                    self._enqueue_panel('panel:' + message['messageId'], panel_view, channel)
                 known.add(message['messageId'])
             self.data['cursor'] = batch['nextCursor']
             self._save()
@@ -144,6 +163,45 @@ class Service:
                 raise ValueError('同一输出标识对应了不同正文')
             return
         self.data['outputs'].append(dict(id=key, source=source, text=text, channel=deepcopy(channel), state='queued', error=''))
+
+    def _enqueue_panel(self, key, view, channel):
+        self._enqueue_output(key, 'panel', '标记会话卡片' if view == 'sessions' else '日程任务卡片', channel)
+        row = next(row for row in self.data['outputs'] if row['id'] == key)
+        row['panel'] = panel_state(view)
+
+    def _render_panel(self, state):
+        result = None
+        if state['view'] == 'sessions':
+            data = self.context.call('bridgeSessions', dict(marked=True))
+            if state['detailId'] is not None and any(row['id'] == state['detailId'] for row in data):
+                result = self.context.call('bridgeResult', dict(session_id=state['detailId'], completed_only=True))
+        else:
+            data = self.context.call('scheduleGet', {})
+        return render_panel(self.context.application_id, state, data, result)
+
+    def _receive_actions(self):
+        if self.data['channel'] is None:
+            return
+        self.card_action = None
+        batch = self.context.call('feishuActions', dict(after=self.data['actionCursor'], limit=100))
+        for event in batch['items']:
+            with self.lock:
+                known = deepcopy(self.data['panels'].get(event['messageId']))
+            action = event['action']
+            value = action.get('value')
+            if (known is not None and event['chatId'] == known['channel']['chatId']
+                    and isinstance(value, dict) and value.get('app') == self.context.application_id):
+                self.card_action = event
+                state = panel_state(value['view'], filter=value['filter'], page=value['page'], detailId=value['detailId'])
+                card, state = self._render_panel(state)
+                self.context.call('feishuUpdateCard', dict(message_id=event['messageId'], card=card))
+                with self.lock:
+                    self.data['panels'][event['messageId']] = dict(state, channel=known['channel'])
+                self.card_action = None
+            with self.lock:
+                self.data['actionCursor'] = event['cursor']
+                self._save()
+        return bool(batch['items'])
 
     def _poll_codex(self):
         self.codex = self.context.call('codexGet', {})
@@ -176,7 +234,7 @@ class Service:
 
     def _submit(self):
         with self.lock:
-            item = next((row for row in self.data['inputs'] if row['state'] not in ('submitted', 'skipped')
+            item = next((row for row in self.data['inputs'] if row['state'] not in ('submitted', 'skipped', 'handled')
                          and self._same_channel(row['channel'], self.data['channel'])), None)
         if item is None or item['state'] != 'queued' or self.codex.get('connection') != 'ready' or self._stopped():
             return
@@ -197,23 +255,48 @@ class Service:
                     return
                 item['channel'] = deepcopy(self.data['channel'])
                 self._save()
+        if 'panel' in item:
+            try:
+                card, state = self._render_panel(item['panel'])
+            except Exception as error:
+                self._set(item, state='failed', error=str(error))
+                return
+            content = dict(message={'card': card})
+        else:
+            content = dict(text=item['text'])
         self._set(item, state='sending', error='')
         try:
-            result = self.context.call('feishuReply', dict(message_id=item['channel']['messageId'], text=item['text'],
-                                                        reply_in_thread=bool(item['channel']['threadId'])))
-            self._set(item, state='sent', messageId=result['messageId'])
+            result = self.context.call('feishuReply', dict(message_id=item['channel']['messageId'],
+                reply_in_thread=bool(item['channel']['threadId']), **content))
+            with self.lock:
+                if 'panel' in item:
+                    self.data['panels'][result['messageId']] = dict(state, channel=deepcopy(item['channel']))
+                self._set(item, state='sent', messageId=result['messageId'])
         except Exception as error:
             self._set(item, state='failed' if rejected(error) else 'unknown', error=str(error))
 
     def _step(self, phase, action):
-        if phase in self.paused or self._stopped():
-            return
+        with self.lock:
+            if phase in self.paused or self._stopped():
+                return
         try:
-            action()
-            self.issues.pop(phase, None)
+            result = action()
+            with self.lock:
+                self.issues.pop(phase, None)
+            return result
         except Exception as error:
-            self.issues[phase] = str(error)
-            self.paused.add(phase)
+            with self.lock:
+                self.issues[phase] = str(error)
+                self.paused.add(phase)
+
+    def _card_loop(self):
+        while not self._stopped():
+            previous_error = self.issues.get('cards')
+            changed = self._step('cards', self._receive_actions)
+            if changed or self.issues.get('cards') != previous_error:
+                self._publish()
+            self.card_wake.wait(self.card_interval)
+            self.card_wake.clear()
 
     def _loop(self):
         while not self._stopped():
@@ -249,10 +332,21 @@ class Service:
     def handle(self, command, params):
         if command == 'bridge_output':
             return self._bridge_output(params)
-        if command == 'continue':
-            self.paused.clear()
-            self.issues.clear()
+        if command in ('show_sessions', 'show_schedule'):
+            with self.lock:
+                if self.data['channel'] is None:
+                    raise ValueError('请先在飞书发送一条新消息建立连接')
+                self._enqueue_panel(uuid4().hex, 'sessions' if command == 'show_sessions' else 'schedule', self.data['channel'])
+                self._save()
             self.wake.set()
+            self._publish()
+            return dict(success=True)
+        if command == 'continue':
+            with self.lock:
+                self.paused.clear()
+                self.issues.clear()
+            self.wake.set()
+            self.card_wake.set()
             return dict(success=True)
         kind = params['kind']
         with self.lock:
@@ -273,6 +367,14 @@ class Service:
                     item['migratedTo'] = identity
                 else:
                     raise ValueError('旧发送结果未知，请先核对，不能自动重新处理')
+            elif kind == 'cards':
+                if self.card_action is None or str(self.card_action['cursor']) != params['id'] or command not in ('retry', 'skip'):
+                    raise ValueError('此卡片操作已处理或不支持所选操作')
+                if command == 'skip':
+                    self.data['actionCursor'] = self.card_action['cursor']
+                    self.card_action = None
+                self.paused.discard('cards')
+                self.issues.pop('cards', None)
             elif kind in ('inputs', 'outputs'):
                 item = next(row for row in self.data[kind] if row['id'] == params['id'])
                 if command == 'retry' and item['state'] in ('failed', 'unknown'):
@@ -289,6 +391,7 @@ class Service:
                 raise ValueError('未知队列')
             self._save()
         self.wake.set()
+        self.card_wake.set()
         self._publish()
         return dict(success=True)
 

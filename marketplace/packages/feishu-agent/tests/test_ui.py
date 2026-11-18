@@ -82,6 +82,17 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(self.backend.calls, [('start',)])
         self.click('feishuAgentToggle')
         self.assertEqual(self.backend.calls[-1], ('stop',))
+    def test_card_buttons_are_explicit_and_require_running_connected_chat(self):
+        self.assertFalse(find(self.view.rootObject(), 'feishuAgentSessionsCard').property('enabled'))
+        self.click('feishuAgentToggle')
+        self.click('feishuAgentSessionsCard')
+        self.click('feishuAgentScheduleCard')
+        self.assertEqual(self.backend.calls[-2:], [('show_sessions', {}), ('show_schedule', {})])
+        self.backend.state['connected'] = False
+        self.backend.changed.emit()
+        self.app.processEvents()
+        self.assertFalse(find(self.view.rootObject(), 'feishuAgentSessionsCard').property('enabled'))
+        self.assertFalse(find(self.view.rootObject(), 'feishuAgentScheduleCard').property('enabled'))
     def test_only_attention_items_are_listed_and_retries_are_explicit(self):
         self.backend.state['attention'] = [dict(id='failed', kind='inputs', state='failed', text='new input', error='denied')]
         self.backend.changed.emit()
