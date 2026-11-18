@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { BridgeClient } from '../client.mjs';
 import { digest, metadata, Session } from './session.mjs';
+import { sendDesktopMessage, sendModes } from './desktop-ipc.mjs';
 
 const MAX = 65536;
 const daemon = process.argv[2] === '--daemon';
@@ -35,8 +36,38 @@ async function forward(path, data) {
 
 async function start(path, initial) {
     const relay = process.env.POLARIS_RELAY ? JSON.parse(process.env.POLARIS_RELAY) : undefined;
-    const client = new BridgeClient({ name: 'Codex hooks', relay });
+    const client = new BridgeClient({ name: 'Codex 插件', pluginId: 'polaris.codex', relay });
     const state = new Session(client, initial);
+    state.sendModes = sendModes;
+    const deliveries = new Map();
+    let sending = false;
+    client.on('command', async command => {
+        const params = command.params;
+        if (!params || params.sessionId !== state.sessionId || typeof command.id !== 'string' || command.id.length > 128) return;
+        const key = digest(JSON.stringify(params));
+        const old = deliveries.get(command.id);
+        if (old) {
+            if (old.key === key && old.result) client.event('command.result', old.result);
+            return;
+        }
+        // Keep all attempted IDs for this helper lifetime: eviction would permit a replay.
+        if (deliveries.size >= 1024) {
+            client.event('command.result', { deliveryId: command.id, sessionId: state.sessionId, status: 'failed', error: 'limit_exceeded' });
+            return;
+        }
+        const entry = { key, result: null };
+        deliveries.set(command.id, entry);
+        let result;
+        if (sending) result = { status: 'failed', error: 'send_pending' };
+        else if (params.mode === 'start' && state.runId) result = { status: 'failed', error: 'session_busy' };
+        else {
+            sending = true;
+            try { result = await sendDesktopMessage({ sessionId: state.sessionId, text: params.text, mode: params.mode, project: state.project }); }
+            finally { sending = false; }
+        }
+        entry.result = { deliveryId: command.id, sessionId: state.sessionId, ...result };
+        client.event('command.result', entry.result);
+    });
     client.on('connected', () => state.snapshot());
     let lease;
     const stop = () => {
@@ -91,7 +122,7 @@ try {
         process.stdin.setEncoding('utf8');
         for await (const chunk of process.stdin) {
             raw += chunk;
-            // Hooks can contain a long prompt/reply, but it is never forwarded or saved.
+            // Only selected metadata and a bounded Stop reply are forwarded; prompts are discarded.
             if (Buffer.byteLength(raw) > 4 * 1024 * 1024) throw new Error('Hook too large');
         }
         const data = metadata(JSON.parse(raw));

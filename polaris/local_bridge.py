@@ -34,11 +34,13 @@ class LocalBridge(QObject):
         self._clock.setInterval(5000)
         self._clock.timeout.connect(self._check)
         hub.permissionRequested.connect(self._grant)
+        hub.commandRequested.connect(self._command)
 
     def start(self, data_directory):
         try:
             if self.server.isListening():
                 return
+            self.hub.load_permissions(data_directory)
             address, self._temporary = socket_address()
             if not self.server.listen(address):
                 raise OSError(self.server.errorString())
@@ -85,17 +87,22 @@ class LocalBridge(QObject):
         self.hub.prune()
 
     def _grant(self, instance, component, level):
-        if instance in self._instances and level in ("none", "read", "write"):
+        if level in ("none", "read", "write"):
             try:
                 self.components.help(component)
             except ApiError:
                 return
             self.hub.grant(instance, component, level)
 
+    def _command(self, instance, message):
+        peer = self._instances.get(instance)
+        if peer is not None:
+            peer._send(encode(message))
+
     def dispatch(self, peer, message):
         if peer.instance is None:
             arguments(message, ("id", "method", "params"), ("id", "method", "params"))
-            params = arguments(message["params"], ("protocol", "token", "instanceId", "name"),
+            params = arguments(message["params"], ("protocol", "token", "instanceId", "name", "pluginId"),
                                ("protocol", "token", "instanceId", "name"))
             if (message["method"] != "hello" or type(params["protocol"]) is not int or params["protocol"] != 1
                     or not isinstance(params["token"], str) or not hmac.compare_digest(params["token"], self._token)):
@@ -104,15 +111,19 @@ class LocalBridge(QObject):
             name = text(params["name"], "name", 64)
             if instance in self._instances:
                 raise ApiError("instance_in_use", "实例已有活跃连接，请使用独立 instanceId")
+            plugin_id = text(params["pluginId"], "pluginId", 128) if "pluginId" in params else None
             peer.instance = instance
             peer._auth_timer.stop()
             self._instances[instance] = peer
-            self.hub.connect_client(instance, name)
+            self.hub.connect_client(instance, name, plugin_id)
             return {"protocol": 1, "heartbeatSeconds": 15}
         if "event" in message:
             arguments(message, ("event", "data"), ("event", "data"))
             event = text(message["event"], "event", 64)
-            self.hub.event(peer.instance, event, message["data"])
+            if event == "command.result":
+                self.hub.command_result(peer.instance, message["data"])
+            else:
+                self.hub.event(peer.instance, event, message["data"])
             return None
         arguments(message, ("id", "method", "params"), ("id", "method"))
         params = message.get("params", {})

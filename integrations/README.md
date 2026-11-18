@@ -17,18 +17,21 @@
 官方配置及信任规则见 [插件打包](https://developers.openai.com/plugins/build/plugins) 与 [Hooks](https://learn.chatgpt.com/docs/hooks)。
 
 先启动 Polaris。`SessionStart / UserPromptSubmit / Stop / Interrupt / SessionEnd` 通过命令 hook
-把少量元数据交给每会话的本机助手，由助手保持到 Polaris 的连接。无需模型调用工具，也不轮询会话、扫描进程或解析聊天文件。
+把生命周期元数据及 Stop 的最新助手回复交给每会话的本机助手，由助手保持到 Polaris 的连接。无需模型调用工具，也不轮询会话、扫描进程或解析聊天文件。
 仅连接心跳和故障重连使用定时器。可沿用下文 `POLARIS_ENDPOINT / POLARIS_RELAY`；环境变量必须由 Codex 宿主继承。
 
 **结束语义有限制：Codex 没有这里可用的 Pi `agent_settled` 等价事件。**
 `Stop` 是一次停止尝试，其他 hook 仍可要求继续；此插件在 Stop 上报 `unknown`，会触发 Polaris 的现有结束气泡，
 不保证是最终静止状态或任务成功。同一 turn 的重复 Stop 只提醒一次。要求严格最终结束时，不应把这个提示当作最终确认。
 `Interrupt` 上报 `cancelled`，未匹配当前 turn 的结束事件忽略；没有可靠失败字段时不猜测 failed。
+Stop 的 `last_assistant_message` 会上报到 Agent 的 `session.reply`（最多8000字符，超长标记截断）；只采集启用后的结束回复，不补读历史日志。
 hooks 不提供原生会话标题，列表及气泡使用 `Codex · 项目名 · 会话短ID`，不读取提示词来推断标题。
+插件将 hook 的原始 `session_id` 直接作为 `sessionId` 上报，Agent 组件原样保存；不加前缀、不做哈希或 ID 转换。
 不监听子代理事件，避免把子代理结束误当主会话结束；压缩 SessionStart 保留正在运行的状态。
 
-每个会话助手占一个桥连接；三个组件工具另占一个独立连接，名称为 `Codex tools`，
-在 Polaris 的 Agent 完整视图里为这个工具连接按组件授权。工具与 Pi 一样为
+每个会话助手占一个桥连接；三个组件工具另占一个独立连接，与助手在授权面板统一显示为“Codex 插件”，
+Codex 工具和 hooks 使用固定插件身份 `polaris.codex`，在 Polaris 的 Agent 完整视图按组件授权一次；
+授权保存在本机，断线、重启、reload 后继续有效，可在面板撤销。工具与 Pi 一样为
 `polaris_components / polaris_help / polaris_call`；默认拒绝数据访问，不自动重试写入。
 因此还受核心最多32连接的总量限制。MCP 不可用不影响已经启动的 hooks 助手。
 
@@ -40,6 +43,17 @@ Polaris 重启时助手只发送当前快照，不补发离线 Stop。插件禁�
 验证使用临时端点与内存数据：覆盖真实 Qt LocalBridge/AgentHub 认证、会话开始、Stop 去重、取消、注销，
 以及 Node 管道重连、MCP 初始化、工具发现/调用、权限拒绝与参数校验。未调用收费模型、未接触真实日程。
 真实 Codex 桌面的安装、hook 信任及宿主事件触发仍需在安装后验收。
+
+### Codex 反向发送（Linux）
+
+会话助手现可接收 Polaris Agent 组件的 `session.send` 指令，按原始会话 ID 找到桌面持有者并投递文字。
+支持明确指定 `start`（新一轮）或 `steer`（执行中追加指导），结果通过 `session.delivery` 查询。
+详见[发送协议](../docs/agent-bridge.md#发送文字与查询回执)。没有新增发送界面。
+
+使用桌面私有 IPC，当前按 Linux 桌面捆绑 Codex 0.160.1 验证。完整链路的 steer 已实机收到测试消息；
+start 仅完成假 IPC 验证。协议不兼容或结果未知时不会另开运行、自动重试或切换发送模式。
+安装更新需一并复制 `client.mjs`、`codex/hook.mjs`、`codex/session.mjs`、`codex/desktop-ipc.mjs`。
+已运行的助手不会热加载代码，重启 Polaris 和相应 Codex 宿主后再使用发送能力。
 
 ## Pi：Windows / Linux 同环境
 
@@ -120,7 +134,7 @@ client.start();
 ```
 
 跨 WSL 客户端传入 `{ name, relay: [可执行文件, ...参数] }`。
-不要上传提示词或回复全文，不要用运行结束替代任务成功；离线事件不补发。
+不要上传提示词；回复正文仅通过明确的结束回复字段上报，最长8000字符并声明截断。不要用运行结束替代任务成功；离线事件不补发。
 组件写请求超时、断连或 `applied=true` 时都不能盲目重试，先查询实际结果。
 
 ## 回归检查

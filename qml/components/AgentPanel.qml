@@ -168,14 +168,14 @@ Rectangle {
                         height: 4
                     }
                     Text {
-                        text: qsTr("组件访问 · 当前连接有效")
+                        text: qsTr("组件访问 · 插件授权持续有效")
                         color: Theme.ink
                         font.pixelSize: 12
                         font.bold: true
                     }
                     Text {
                         width: parent.width
-                        text: qsTr("默认不允许读取或修改数据。只给你信任的连接授权。来源名称由客户端自报。")
+                        text: qsTr("默认不允许读取或修改数据。有插件身份的授权会保存并用于重连，可随时撤销；未声明身份的连接仅临时有效。身份由本机客户端自报。")
                         wrapMode: Text.Wrap
                         color: Theme.muted
                         font.pixelSize: 11
@@ -189,7 +189,7 @@ Rectangle {
                             spacing: 4
                             Text {
                                 width: parent.width
-                                text: clientRow.modelData.name + " · " + clientRow.modelData.instanceId.slice(0, 8)
+                                text: clientRow.modelData.pluginId ? clientRow.modelData.name : clientRow.modelData.name + " · " + clientRow.modelData.instanceId.slice(0, 8)
                                 textFormat: Text.PlainText
                                 elide: Text.ElideRight
                                 color: Theme.ink

@@ -7,7 +7,7 @@ const tools = definitions.map(({ method, ...tool }) => tool);
 let relay;
 try { if (process.env.POLARIS_RELAY) relay = JSON.parse(process.env.POLARIS_RELAY); }
 catch { process.stderr.write('Invalid POLARIS_RELAY: expected JSON argv array\n'); process.exit(1); }
-const client = new BridgeClient({ name: 'Codex tools', relay });
+const client = new BridgeClient({ name: 'Codex 插件', pluginId: 'polaris.codex', relay });
 client.start();
 const send = message => {
     const line = JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n';

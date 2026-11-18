@@ -19,10 +19,11 @@ export function defaultEndpoint() {
 }
 
 export class BridgeClient extends EventEmitter {
-    constructor({ name, instanceId = randomUUID(), endpoint, relay } = {}) {
+    constructor({ name, instanceId = randomUUID(), pluginId, endpoint, relay } = {}) {
         super();
         this.name = name || "Agent";
         this.instanceId = instanceId;
+        this.pluginId = pluginId;
         this.endpoint = endpoint;
         // Explicit argv array: e.g. ["/mnt/d/.../Polaris.exe", "--bridge-stdio"].
         this.relay = relay;
@@ -80,7 +81,7 @@ export class BridgeClient extends EventEmitter {
                 socket.on("close", () => disconnected("Polaris disconnected"));
             }
             this.buffer = Buffer.alloc(0);
-            await this.request("hello", { protocol: 1, token, instanceId: this.instanceId, name: this.name }, true);
+            await this.request("hello", { protocol: 1, token, instanceId: this.instanceId, name: this.name, ...(this.pluginId ? {pluginId: this.pluginId} : {}) }, true);
             if (this.stopped || !this.stream || generation !== this.generation) return;
             this.ready = true;
             this.lastError = "";
@@ -107,6 +108,10 @@ export class BridgeClient extends EventEmitter {
             this.buffer = this.buffer.subarray(index + 1);
             try {
                 const response = JSON.parse(line);
+                if (response.command === 'session.send' && typeof response.id === 'string' && this.ready) {
+                    this.emit('command', response);
+                    continue;
+                }
                 const pending = this.pending.get(response.id);
                 if (!pending) continue;
                 this.pending.delete(response.id);
