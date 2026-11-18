@@ -146,6 +146,35 @@ class MCPTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.rpc('ping')
 
+    def test_callback_delegation_preserves_background_authority_and_live_revocation(self):
+        self.mcp.default_all = False
+        receiver = Component()
+        receiver.operation('complete', access='write')(
+            lambda params, context: self.calls.append((params, context.source)) or {'accepted': True})
+        self.add('receiver', receiver)
+        self.toy.operation('delegate', access='write')(
+            lambda params, context: self.toy.port.remember_task('callback', [('receiver', 'complete')], context)
+            or {'accepted': True})
+        self.rt.grant('mcp', 'toy', 'delegate', background=True)
+        self.rt.grant('mcp', 'receiver', 'complete')
+        error, result = self.call('delegate')
+        self.assertTrue(error)
+        self.assertEqual(result['code'], 'permission_required')
+        self.assertIsNone(self.toy.port.resume_task('callback'))
+        self.rt.grant('mcp', 'receiver', 'complete', background=True)
+        self.assertEqual(self.call('delegate'), (False, {'accepted': True}))
+        context = self.toy.port.resume_task('callback')
+        self.assertEqual(context.source, 'background')
+        self.assertEqual(context.origin, 'mcp')
+        self.assertEqual(len(context.scope), 1)
+        self.assertEqual(self.toy.port.call('receiver', 'complete', {'reply': 'final'}, context=context),
+                         {'accepted': True})
+        self.rt.revoke('mcp', 'receiver', 'complete', background=True)
+        with self.assertRaises(PlatformError) as denied:
+            self.toy.port.call('receiver', 'complete', {}, context=self.toy.port.resume_task('callback'))
+        self.assertEqual(denied.exception.code, 'permission_required')
+        self.assertEqual(self.calls, [({'reply': 'final'}, 'background')])
+
     def test_second_owner_cannot_delete_live_endpoint(self):
         duplicate = MCP(self.rt, data_dir=self.mcp.directory)
         with self.assertRaises(OSError):

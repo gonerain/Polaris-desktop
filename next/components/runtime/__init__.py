@@ -466,17 +466,20 @@ class Runtime(Component):
         return self._record(client.id)['installation'] + ':' + name
 
     def remember_task(self, client, name, operations, context):
-        """Persist a user-authorized delegation, never a serialized Context."""
+        """Persist selected live authority without changing its user/background source."""
         self.validate_context(context)
-        if context.source != 'user':
-            raise PlatformError('permission_denied', 'Task setup requires user authority')
+        if context.source not in ('user', 'background'):
+            raise PlatformError('permission_denied', 'Task setup requires user or background authority')
         key = self._task_key(client, name)
-        selected = {(self._record(target)['installation'], operation) for target, operation in operations}
-        scope = [list(cap) for cap in context.scope
-                 if cap[1] == 'operation' and (cap[0], cap[2]) in selected]
+        selected = {self.collaboration.bind(self._address(target), operation).semantic
+                    for target, operation in operations}
+        for cap in selected:
+            self.authorization.check(context, cap)
+        scope = [list(cap) for cap in selected]
         with self._lock:
             previous = self._tasks.get(key)
-            self._tasks[key] = dict(origin=context.origin, originInstallation=context.origin_installation, scope=scope)
+            self._tasks[key] = dict(origin=context.origin, originInstallation=context.origin_installation,
+                                    source=context.source, scope=scope)
             try:
                 self._persist_tasks()
             except Exception:
@@ -506,8 +509,9 @@ class Runtime(Component):
             origin = self._record(task['origin'])
             if origin['installation'] != task['originInstallation']:
                 raise PlatformError('stale_instance', 'Task authorization owner was replaced')
-            # Every operation still checks the current authorization record.
-            return self._stamp(Context(task['origin'], client.id, 'user',
+            # Records predating source persistence could only originate from user contexts.
+            # Every operation still checks the live grants for the original source.
+            return self._stamp(Context(task['origin'], client.id, task.get('source', 'user'),
                 frozenset(tuple(cap) for cap in task['scope']), origin_installation=task['originInstallation']))
 
     def _persist_tasks(self):

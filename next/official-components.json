@@ -43,7 +43,7 @@
     {
       "id": "runtime",
       "group": "foundation",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "platformApi": 1,
       "factory": "components.runtime:create_runtime",
       "factoryAliases": [],
