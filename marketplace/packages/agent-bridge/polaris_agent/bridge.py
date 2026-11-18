@@ -24,6 +24,7 @@ class Bridge:
         self.endpoint = self.directory / 'endpoint.json'
         self.token = secrets.token_urlsafe(32)
         self.peers = {}
+        self._history_queries = {}
         self._workers = set()
         self._connections = set()
         self.lock = threading.RLock()
@@ -144,6 +145,7 @@ class Bridge:
             with self.lock:
                 previous = self.peers.get(identity)
                 if previous:
+                    self._fail_history(previous, 'host_connection_replaced')
                     with self.store.transaction():
                         for row in self.store.rows.values():
                             if (row['adapter'], row['clientId']) == identity: self.interactions.expire(row['id'])
@@ -184,6 +186,7 @@ class Bridge:
                 try:
                     if identity and self.peers.get(identity) is peer:
                         del self.peers[identity]
+                        self._fail_history(peer, 'host_disconnected')
                         with self.store.transaction():
                             for row in self.store.rows.values():
                                 if (row['adapter'], row['clientId']) == identity:
@@ -203,6 +206,18 @@ class Bridge:
         adapter, client_id = identity
         if frame.get('type') == 'event':
             event = frame.get('event')
+            if event == 'history.result':
+                query = self._history_queries.get(frame.get('requestId'))
+                if query is None or query['peer'] is not peer or query['sessionId'] != frame.get('sessionId'):
+                    raise ValueError('unclaimed history query')
+                if isinstance(frame.get('error'), str):
+                    query['error'] = frame['error']
+                elif isinstance(frame.get('result'), dict) and isinstance(frame['result'].get('items'), list):
+                    query['result'] = frame['result']
+                else:
+                    query['error'] = 'invalid history result'
+                query['ready'].set()
+                return None
             if event == 'command.result':
                 with self.store.transaction():
                     delivery = self.store.deliveries.get(frame.get('requestId'))
@@ -221,13 +236,15 @@ class Bridge:
             sid = text(frame.get('sessionId'), 'sessionId')
             key = session_key(adapter, client_id, sid)
             if event == 'session.snapshot':
-                return self.store.snapshot(adapter, client_id, sid, **{k: frame[k] for k in ('title', 'cwd', 'canSend', 'liveness') if k in frame})
+                return self.store.snapshot(adapter, client_id, sid, **{k: frame[k] for k in ('title', 'cwd', 'canSend', 'canReadHistory', 'liveness') if k in frame})
             if event == 'session.removed':
                 with self.store.transaction():
                     self.store.require(key).update(online=False, canSend=False)
                     self.interactions.expire(key)
                     self.store.changed()
                 return None
+            if event == 'run.input':
+                return self.store.run_input(key, frame.get('runId'), frame.get('id'), frame.get('text'), frame.get('timestamp'))
             if event == 'run.ended' and frame.get('status') not in ('completed', 'failed', 'stopped', 'unknown'):
                 raise ValueError('invalid run status')
             if event in ('run.started', 'run.ended'):
@@ -268,6 +285,40 @@ class Bridge:
                 raise ValueError('wrong delivery owner')
             return result
         raise ValueError('unknown operation')
+
+    def _fail_history(self, peer, error):
+        for query in self._history_queries.values():
+            if query['peer'] is peer and not query['ready'].is_set():
+                query['error'] = error
+                query['ready'].set()
+
+    def history(self, session_id, cursor=None, limit=50):
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('limit must be an integer between 1 and 100')
+        if cursor is not None:
+            text(cursor, 'cursor')
+        with self.lock, self.store.lock:
+            row = self.store.require(session_id)
+            if not row['online']:
+                raise ValueError('host offline')
+            if not row.get('canReadHistory'):
+                raise ValueError('host does not expose history')
+            peer = self.peers[(row['adapter'], row['clientId'])]
+            request_id = uuid.uuid4().hex
+            query = {'peer': peer, 'sessionId': row['sessionId'], 'ready': threading.Event()}
+            self._history_queries[request_id] = query
+        try:
+            self.write(peer, dict(type='command', command='session.history', requestId=request_id,
+                                 sessionId=query['sessionId'], cursor=cursor, limit=limit))
+            # The host reads an in-memory snapshot. A response or explicit
+            # disconnect completes the read; there is no user-wait deadline.
+            query['ready'].wait()
+            if 'error' in query:
+                raise ValueError(query['error'])
+            return query['result']
+        finally:
+            with self.lock:
+                self._history_queries.pop(request_id, None)
 
     def send(self, session_id, message, delivery_id=None, mode=None, on_complete=None, on_interaction=None):
         if mode not in ('start', 'steer'):
@@ -320,6 +371,8 @@ class Bridge:
         with self.lock:
             connections = list(self._connections)
             workers = list(self._workers)
+            for peer in self.peers.values():
+                self._fail_history(peer, 'bridge_stopped')
             for connection in connections:
                 try:
                     connection.shutdown(socket.SHUT_RDWR)

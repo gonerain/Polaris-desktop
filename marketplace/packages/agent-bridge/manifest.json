@@ -1,7 +1,7 @@
 {
   "id": "org.polaris.agent",
   "name": "Agent Bridge",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "platformApi": 1,
   "entry": {
     "mode": "inprocess",

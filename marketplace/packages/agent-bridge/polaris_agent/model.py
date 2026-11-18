@@ -124,7 +124,7 @@ class AgentStore:
             if name and os.path.exists(name): os.unlink(name)
 
     def notify(self, row, event, identity, **fields):
-        if row['adapter'].lower() != 'codex': return
+        if row['adapter'].lower() not in ('codex', 'pi'): return
         key = hashlib.sha256(json.dumps([row['id'], event, identity]).encode()).hexdigest()
         events = self.notifications['events']
         if any(e['id'] == key for e in events): return
@@ -156,6 +156,10 @@ class AgentStore:
             if liveness not in ('host', 'connection', 'unverified'):
                 raise ValueError('invalid liveness')
             row.update(online=True, liveness=liveness, canSend=bool(fields.get('canSend', False)) and liveness == 'host')
+            if 'canReadHistory' in fields:
+                if type(fields['canReadHistory']) is not bool:
+                    raise ValueError('invalid canReadHistory')
+            row['canReadHistory'] = fields.get('canReadHistory', False)
             for field in ('title', 'cwd'):
                 if field in fields and isinstance(fields[field], str):
                     row[field] = fields[field][:4096]
@@ -189,6 +193,27 @@ class AgentStore:
                     row.update(online=False, canSend=False)
             self.changed()
 
+    def run_input(self, key, run_id, identity, message, timestamp):
+        text(run_id, 'runId')
+        text(identity, 'input id')
+        if not isinstance(message, str) or not isinstance(timestamp, str):
+            raise ValueError('invalid run input')
+        with self.transaction():
+            row = self.require(key)
+            run = next((r for r in row['runs'] if r['id'] == run_id), None)
+            if run is None:
+                raise ValueError('unknown run')
+            inputs = run.setdefault('inputs', [])
+            if any(item['id'] == identity for item in inputs):
+                return copy.deepcopy(run)
+            inputs.append(dict(id=identity, text=message, timestamp=timestamp))
+            if len(inputs) == 1:
+                run.update(prompt=message[:4000], promptTruncated=len(message) > 4000)
+            self.notify(row, 'run.input', [run_id, identity], runId=run_id, inputId=identity,
+                        text=message, timestamp=timestamp)
+            self.changed()
+            return copy.deepcopy(run)
+
     def run_event(self, key, run_id, status=None, reply=None, detail='', reply_truncated=False, prompt=None, prompt_truncated=False):
         text(run_id, 'runId')
         if status not in (None, 'completed', 'failed', 'stopped', 'unknown'):
@@ -200,6 +225,8 @@ class AgentStore:
                 run = {'id': run_id, 'status': 'running', 'reply': None, 'startedAt': time.time()}
                 row['runs'].append(run)
                 row['runs'] = row['runs'][-100:]
+                if status is None and row['adapter'].lower() == 'pi':
+                    self.notify(row, 'run.started', run_id, runId=run_id)
             if isinstance(prompt, str):
                 run.update(prompt=prompt[:4000], promptTruncated=bool(prompt_truncated) or len(prompt) > 4000)
             previous_status = run['status']

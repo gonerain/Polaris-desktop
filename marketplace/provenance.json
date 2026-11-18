@@ -13,9 +13,9 @@
   },
   {
     "id": "org.polaris.agent",
-    "source": "Polaris-agent working tree, notification recovery",
+    "source": "Polaris-agent working tree, Pi native inputs/history/final replies",
     "revision": "406b371b2da4933ad281b25d8f79fc892c1e980b",
-    "contentDigest": "91efa73ae14dfcefbc3a5e7ca34e7652d482121bae1b5318af2de9dff6dfc060"
+    "contentDigest": "caf0d6e96f71e7862521b82b1aef0650c9f6bf294ae1b7d3bffe00c0ae9f48df"
   },
   {
     "id": "assistant",

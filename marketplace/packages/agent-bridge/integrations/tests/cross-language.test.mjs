@@ -61,17 +61,21 @@ test('real Python bridge and real Node Pi adapter agree on lifecycle, mark and s
         class ConnectedClient extends BridgeClient {
             constructor(options) { super({...options, endpoint}); client = this; }
         }
-        const handlers = {}, tools = {}, messages = [];
+        const handlers = {}, tools = {}, messages = [], entries = [];
+        const append = entry => entries.push({...entry, id: 'entry-' + entries.length, timestamp: '2026-01-01T00:00:00Z'});
         const pi = {
             on: (name, handler) => { handlers[name] = handler; },
             registerCommand() {},
+            appendEntry: (customType, data) => append({type: 'custom', customType, data}),
             registerTool: tool => { tools[tool.name] = tool; },
             sendUserMessage: (text, options) => { messages.push({text, options}); },
         };
         install(pi, {}, ConnectedClient);
         const context = {
             cwd: dir, isIdle: () => true,
-            sessionManager: {getSessionId: () => 'fixture-pi-session', getSessionName: () => 'Fixture chat'},
+            sessionManager: {getSessionId: () => 'fixture-pi-session', getSessionName: () => 'Fixture chat',
+                getLeafId: () => entries.at(-1)?.id ?? null,
+                getBranch: id => id ? entries.slice(0, entries.findIndex(e => e.id === id) + 1) : entries},
         };
         handlers.session_start({}, context);
         shutdown = handlers.session_shutdown;
@@ -82,7 +86,8 @@ test('real Python bridge and real Node Pi adapter agree on lifecycle, mark and s
         assert.equal(rows[0].marked, true);
         assert.equal(rows[0].sessionId, 'fixture-pi-session');
         handlers.agent_start();
-        handlers.message_end({message: {role: 'assistant', stopReason: 'stop', content: [{type: 'text', text: 'Fixture final reply'}]}});
+        append({type: 'message', message: {role: 'assistant', stopReason: 'stop', content: [{type: 'text', text: 'Fixture final reply'}]}});
+        handlers.agent_before_settle({outcome: 'completed'});
         handlers.agent_settled({aborted: false});
         const status = await client.request('session.status', {sessionId: 'fixture-pi-session'});
         assert.equal(status.runs.at(-1).status, 'completed');

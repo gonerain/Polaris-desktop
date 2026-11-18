@@ -18,6 +18,7 @@ export class BridgeClient extends EventEmitter {
         this.pending = new Map();
         this.ready = false;
         this.stopped = true;
+        this.lastError = '';
     }
     start() {
         if (!this.stopped) return;
@@ -43,7 +44,7 @@ export class BridgeClient extends EventEmitter {
             const handshake = setTimeout(() => { if (!this.ready) socket.destroy(); }, 5000);
             handshake.unref?.();
             socket.setEncoding('utf8');
-            socket.on('error', () => socket.destroy());
+            socket.on('error', error => { this.lastError = error.message; socket.destroy(); });
             socket.on('close', () => {
                 clearTimeout(handshake);
                 if (this.socket !== socket) return;
@@ -71,11 +72,15 @@ export class BridgeClient extends EventEmitter {
                     if (frame.type === 'hello' && frame.ok) {
                         clearTimeout(handshake);
                         this.ready = true;
+                        this.lastError = '';
                         this.emit('connected');
                     } else if (frame.type === 'command' && this.ready) this.emit('command', frame);
                     else if (frame.type === 'response') {
                         const pending = this.pending.get(frame.requestId);
-                        if (!pending) continue;
+                        if (!pending) {
+                            if (frame.error) this.emit('protocol_error', Error(frame.error));
+                            continue;
+                        }
                         this.pending.delete(frame.requestId);
                         clearTimeout(pending.timer);
                         if (frame.error) pending.reject(Error(frame.error));
@@ -83,7 +88,7 @@ export class BridgeClient extends EventEmitter {
                     }
                 }
             });
-        } catch { this.schedule(); }
+        } catch (error) { this.lastError = error.message; this.schedule(); }
         finally { this.connecting = false; }
     }
     schedule() {
@@ -104,7 +109,8 @@ export class BridgeClient extends EventEmitter {
         try {
             this.send({type: 'event', event, ...data});
             return true;
-        } catch {
+        } catch (error) {
+            this.lastError = error.message;
             this.socket?.destroy();
             return false;
         }

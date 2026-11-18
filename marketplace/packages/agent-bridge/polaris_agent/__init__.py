@@ -31,10 +31,10 @@ class Agent(Component):
         self.bridge = None
         self.completions = None
         self.store.listeners.append(self._changed)
-        for name in ('get', 'sessions', 'status', 'result', 'delivery', 'codex_plugin_status', 'requests'):
+        for name in ('get', 'sessions', 'status', 'result', 'delivery', 'codex_plugin_status', 'requests', 'history'):
             metadata = (dict(provides='polaris.agent-bridge.' + name.replace('_', '-') + '@1',
                              applicationBinding='instance')
-                        if name in ('sessions', 'status', 'result', 'delivery', 'requests') else {})
+                        if name in ('sessions', 'status', 'result', 'delivery', 'requests', 'history') else {})
             self.operation(name, **metadata)(getattr(self, name))
         for name in ('mark', 'unmark', 'send', 'create_view', 'release_view', 'codex_plugin_install', 'respond'):
             metadata = (dict(provides='polaris.agent-bridge.' + name.replace('_', '-') + '@1',
@@ -120,7 +120,7 @@ class Agent(Component):
             for row in self.store.rows.values():
                 if marked is not None and bool(row['marked']) != marked:
                     continue
-                item = {k: row.get(k) for k in ('id', 'title', 'adapter', 'marked', 'online', 'canSend', 'cwd')}
+                item = {k: row.get(k) for k in ('id', 'title', 'adapter', 'marked', 'online', 'canSend', 'canReadHistory', 'cwd')}
                 runs = row['runs']
                 item['runCount'] = len(runs)
                 item['lastRun'] = {k: runs[-1].get(k) for k in ('id', 'status')} if runs else None
@@ -143,6 +143,11 @@ class Agent(Component):
                              for i, r in reversed(list(enumerate(self.store.require(session_id)['runs'])))
                              if r['status'] == 'completed'), None)
         return self.store.result(session_id, run_id)
+
+    def history(self, session_id, cursor=None, limit=50):
+        if self.bridge is None:
+            raise ValueError('Agent bridge is not running')
+        return self.bridge.history(session_id, cursor, limit)
 
     def delivery(self, delivery_id):
         return self.store.delivery(delivery_id)
@@ -185,6 +190,8 @@ class Agent(Component):
             'status': ('查看会话状态', '返回指定会话详情。', {'session_id': session}, ['session_id']),
             'result': ('查看运行结果', '默认返回最近一次运行，可能正在运行。completed_only=true 返回最近已完成一轮，没有则为 null，并提供在保留历史中的序号 historyIndex（从 1 开始）；不能同时指定 run_id。id 是精确轮次标识。',
                        {'session_id': session, 'run_id': {'type': 'string'}, 'completed_only': {'type': 'boolean'}}, ['session_id']),
+            'history': ('读取会话历史', '从在线会话读取当前分支的历史输入和最终回复，包括接入前及 compact 前的记录。items 保留原生消息 id；回复 finality=confirmed 表示有结束标记，unknown 表示旧日志候选回复，不能据此确认完成。nextCursor 非空时继续翻页。读取不触发任务或回调。',
+                        {'session_id': session, 'cursor': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100}}, ['session_id']),
             'delivery': ('查看投递状态', '查询 send 返回的投递记录。pending=本机排队待确认；accepted=宿主已接收，仍不代表运行完成；rejected=宿主拒绝；unknown=结果未知。',
                          {'delivery_id': {'type': 'string'}}, ['delivery_id']),
             'mark': ('标记会话', '标记已有会话并返回会话记录；marked=true 表示标记成功。',
