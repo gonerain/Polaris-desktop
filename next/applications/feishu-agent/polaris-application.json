@@ -1,7 +1,7 @@
 {
   "id": "org.polaris.feishu-agent",
   "name": "飞书 Agent",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "dependencies": [
     "org.polaris.feishu-bot",
     "org.polaris.codex-cli",

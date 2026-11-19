@@ -12,6 +12,13 @@ Rectangle {
     property bool settingsOpen: false
     readonly property bool running: appBackend && appBackend.running
     readonly property var attention: snapshot.attention || []
+    readonly property var reminders: snapshot.reminders || ({})
+    property bool remindersOpen: false
+    function saveReminders(enabled, preferences) {
+        commandError = ""
+        appBackend.call("configure_reminders", {enabled: enabled, preferences: preferences}, "reminders:" + Date.now())
+    }
+    function localTime(value) { return value ? new Date(value).toLocaleString() : "尚无" }
     readonly property var warnings: appBackend ? JSON.parse(appBackend.warningsJson || "[]") : []
     readonly property color ink: "#e9e9e5"
     readonly property color muted: "#a1a29d"
@@ -109,6 +116,64 @@ Rectangle {
             contentWidth: availableWidth
             ColumnLayout {
                 width: parent.width; spacing: 12
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label {
+                        Layout.fillWidth: true
+                        text: "日程提醒 · " + (root.reminders.enabled ? root.reminders.scheduled + " 条待发送 / " + root.reminders.pending + " 项待规划" : "未开启")
+                    }
+                    Action {
+                        objectName: "feishuAgentReminders"
+                        text: root.remindersOpen ? "收起提醒" : "提醒设置"
+                        onClicked: root.remindersOpen = !root.remindersOpen
+                    }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true; visible: root.remindersOpen; spacing: 8
+                    Label {
+                        Layout.fillWidth: true
+                        text: "每小时仅将新增、变更及刚进入未来七天的事项交给 AI；包含有日期的未完成任务。到点校验后直接发飞书。取消、完成或改期会使旧提醒失效，以本机已同步数据为准。"
+                    }
+                    Action {
+                        objectName: "feishuAgentRemindersToggle"
+                        text: root.reminders.enabled ? "关闭日程提醒" : "开启日程提醒"
+                        enabled: !!appBackend
+                        onClicked: root.saveReminders(!root.reminders.enabled, root.reminders.preferences)
+                    }
+                    TextArea {
+                        id: reminderPreferences
+                        objectName: "feishuAgentReminderPreferences"
+                        Layout.fillWidth: true; wrapMode: TextEdit.WrapAnywhere; selectByMouse: true
+                        text: root.reminders.preferences || ""
+                        color: root.ink; font.pixelSize: 12
+                        background: Rectangle { radius: 6; color: "#292a30" }
+                    }
+                    Action {
+                        text: "保存提醒偏好"
+                        enabled: !!appBackend && reminderPreferences.text.trim().length > 0
+                        onClicked: root.saveReminders(root.reminders.enabled === true, reminderPreferences.text)
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "最近检查：" + root.localTime(root.reminders.lastCheck) + "\n最近规划：" + root.localTime(root.reminders.lastPlanned) + "\n下次检查：" + root.localTime(root.reminders.nextCheck)
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Google 最近同步：" + root.localTime(root.reminders.googleSync)
+                              + (root.reminders.googleError ? "\n同步错误：" + root.reminders.googleError : "")
+                    }
+                    Label { Layout.fillWidth: true; text: "规划使用当前 Codex 会话的空闲回合；规划期间的新聊天暂存，完成后继续。停止应用时不检查、不发送，恢复后不补发过期提醒。" }
+                    Repeater {
+                        model: root.remindersOpen ? (root.reminders.plans || []).slice().reverse() : []
+                        delegate: Label {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            text: ({scheduled: "待触发", queued: "待投递", sent: "已发送", cancelled: "已取消", expired: "已过期", failed: "失败", unknown: "结果未知", skipped: "已跳过"}[modelData.state] || modelData.state)
+                                  + " · " + root.localTime(modelData.sendAt) + "\n" + modelData.text
+                                  + (modelData.reason ? "\n" + modelData.reason : "")
+                        }
+                    }
+                }
                 Label { visible: root.attention.length > 0; text: "待处理 · " + root.attention.length; color: root.ink }
                 Repeater {
                     model: root.attention

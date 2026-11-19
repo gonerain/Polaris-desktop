@@ -77,6 +77,19 @@ class NativeTests(unittest.TestCase):
         self.click('feishuAgentSettings')
         self.assertTrue(find(self.view.rootObject(), 'feishuAgentCallback').property('visible'))
         self.assertTrue(find(self.view.rootObject(), 'feishuAgentWarnings').property('visible'))
+    def test_reminder_settings_are_folded_and_toggle_is_explicit(self):
+        self.backend.state['reminders'] = dict(enabled=False, preferences='提前二十分钟提醒', plans=[], pending=0, scheduled=0)
+        self.backend.changed.emit()
+        self.app.processEvents()
+        control = find(self.view.rootObject(), 'feishuAgentRemindersToggle')
+        self.assertFalse(control.property('visible'))
+        self.click('feishuAgentReminders')
+        self.assertTrue(control.property('visible'))
+        self.click('feishuAgentRemindersToggle')
+        self.assertEqual(self.backend.calls[-1], ('configure_reminders',
+            dict(enabled=True, preferences='提前二十分钟提醒')))
+        self.assertTrue(find(self.view.rootObject(), 'feishuAgentReminderPreferences').property('visible'))
+
     def test_run_and_stop_are_explicit(self):
         self.click('feishuAgentToggle')
         self.assertEqual(self.backend.calls, [('start',)])

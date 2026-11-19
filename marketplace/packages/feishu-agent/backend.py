@@ -1,5 +1,6 @@
 """Durable Feishu channel for one existing Codex CLI session and Bridge outputs."""
 from copy import deepcopy
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import threading
 from uuid import uuid4
 
 from .panels import COMMANDS, panel_state, render_panel
+from . import reminders
 
 
 REJECTED = {'invalid_params', 'busy', 'not_running', 'unavailable', 'not_configured',
@@ -50,10 +52,15 @@ class Service:
                 raise ValueError('不支持的飞书 Agent 数据版本')
         self.data.setdefault('actionCursor', 0)
         self.data.setdefault('panels', {})
+        self.data.setdefault('reminders', reminders.initial_state())
         for queue in ('inputs', 'outputs'):
             for item in self.data[queue]:
                 if item['state'] == 'sending':
                     item.update(state='unknown', error='上次投递未返回结果，请核对后再决定是否重发。')
+        for output in self.data['outputs']:
+            if output['source'] == 'reminder' and output['state'] == 'unknown':
+                plan = next(row for row in self.data['reminders']['plans'] if row['id'] == output['reminderId'])
+                plan['state'] = 'unknown'
         self._save()
         self._publish()
 
@@ -68,7 +75,10 @@ class Service:
         for kind in ('inputs', 'outputs'):
             for item in self.data[kind]:
                 if item['state'] in ('failed', 'unknown'):
-                    rows.append(dict(id=item['id'], kind=kind, state=item['state'], text=item['text'], error=item['error']))
+                    planning = item.get('source') == 'reminder-plan'
+                    rows.append(dict(id=item['id'], kind=kind, state=item['state'],
+                                     text='内部提醒规划请求未完成' if planning else item['text'],
+                                     error=item['error'] + ('。核对后跳过旧规划，使用最新增量重新规划。' if planning else '')))
         if self.card_action is not None and 'cards' in self.paused:
             rows.append(dict(id=str(self.card_action['cursor']), kind='cards', state='failed',
                              text='飞书卡片操作未完成', error=self.issues['cards']))
@@ -86,6 +96,7 @@ class Service:
                 connection=self.codex.get('connection', 'waiting'),
                 pending=sum(item['state'] == 'queued' for kind in ('inputs', 'outputs') for item in self.data[kind]),
                 issues=list(self.issues.values()), attention=self._attention(),
+                reminders=reminders.summary(self.data['reminders']),
                 callback=dict(target=self.context.application_id, operation='bridge_output', params={})))
 
     def _stopped(self):
@@ -214,6 +225,12 @@ class Service:
                 for turn in terminal:
                     if turn['turnId'] in seen:
                         continue
+                    if any(item.get('source') == 'reminder-plan' and
+                           (item.get('turnId') == turn['turnId'] or turn.get('message') == item['text'])
+                           for item in self.data['inputs']):
+                        self.data['seenCodex'].append(turn['turnId'])
+                        seen.add(turn['turnId'])
+                        continue
                     route = next((item['channel'] for item in reversed(self.data['inputs'])
                                   if item.get('turnId') == turn['turnId']), self.data['channel'])
                     text = turn.get('reply')
@@ -234,9 +251,16 @@ class Service:
 
     def _submit(self):
         with self.lock:
+            active = self.data['reminders']['activeInput']
+            if active is not None:
+                planning = next(row for row in self.data['inputs'] if row['id'] == active)
+                if planning['state'] == 'submitted' and not planning.get('planFinished'):
+                    return  # Never steer a chat message into an internal planning turn.
             item = next((row for row in self.data['inputs'] if row['state'] not in ('submitted', 'skipped', 'handled')
                          and self._same_channel(row['channel'], self.data['channel'])), None)
         if item is None or item['state'] != 'queued' or self.codex.get('connection') != 'ready' or self._stopped():
+            return
+        if item.get('source') == 'reminder-plan' and self.codex['activeTurnId']:
             return
         self._set(item, state='sending', error='')
         try:
@@ -255,6 +279,23 @@ class Service:
                     return
                 item['channel'] = deepcopy(self.data['channel'])
                 self._save()
+        if item['source'] == 'reminder':
+            try:
+                with self.lock:
+                    plan = next(row for row in self.data['reminders']['plans'] if row['id'] == item['reminderId'])
+                    if not self.data['reminders']['enabled'] or plan['state'] != 'queued':
+                        self._set(item, state='skipped', error=plan['reason'] or '提醒已关闭')
+                        return
+                self._observe_reminders()
+                with self.lock:
+                    if not self.data['reminders']['enabled'] or plan['state'] != 'queued':
+                        self._set(item, state='skipped', error=plan['reason'] or '提醒已关闭')
+                        return
+            except Exception as error:
+                with self.lock:
+                    plan.update(state='failed', reason=str(error))
+                    self._set(item, state='failed', error=str(error))
+                return
         if 'panel' in item:
             try:
                 card, state = self._render_panel(item['panel'])
@@ -271,9 +312,89 @@ class Service:
             with self.lock:
                 if 'panel' in item:
                     self.data['panels'][result['messageId']] = dict(state, channel=deepcopy(item['channel']))
+                if item['source'] == 'reminder':
+                    plan.update(state='sent', sentAt=self._now().isoformat(), reason='')
                 self._set(item, state='sent', messageId=result['messageId'])
         except Exception as error:
-            self._set(item, state='failed' if rejected(error) else 'unknown', error=str(error))
+            with self.lock:
+                if item['source'] == 'reminder':
+                    plan.update(state='failed' if rejected(error) else 'unknown', reason=str(error))
+                self._set(item, state='failed' if rejected(error) else 'unknown', error=str(error))
+
+    def _now(self):
+        return datetime.now().astimezone()
+
+    def _observe_reminders(self):
+        snapshot = self.context.call('scheduleGet', {})
+        now = self._now()
+        with self.lock:
+            before = deepcopy(self.data['reminders'])
+            reminders.reconcile(self.data['reminders'], snapshot, now)
+            # Invalidate queued/failed outputs too; unknown sends require human reconciliation.
+            plans = {row['id']: row for row in self.data['reminders']['plans']}
+            outputs_changed = False
+            for output in self.data['outputs']:
+                if output['source'] == 'reminder' and output['state'] in ('queued', 'failed'):
+                    plan = plans[output['reminderId']]
+                    if plan['state'] in ('cancelled', 'expired'):
+                        output.update(state='skipped', error=plan['reason'])
+                        outputs_changed = True
+            if outputs_changed or before != self.data['reminders']:
+                self._save()
+        return now
+
+    def _remind(self):
+        state = self.data['reminders']
+        if not state['enabled'] and state['activeInput'] is None:
+            return
+        now = self._observe_reminders() if state['enabled'] else self._now()
+        with self.lock:
+            active = state['activeInput']
+            if active is not None:
+                item = next(row for row in self.data['inputs'] if row['id'] == active)
+                if item['state'] == 'skipped':
+                    state['activeInput'] = None
+                elif item['state'] == 'submitted' and not item.get('planFinished'):
+                    turn = next((row for row in self.codex['turns'] if row['turnId'] == item['turnId']), None)
+                    if turn is not None and turn['status'] != 'running':
+                        if turn['status'] != 'completed':
+                            item['planFinished'] = True
+                            state['activeInput'] = None
+                            self._save()
+                            raise ValueError('提醒规划回合未完成：' + turn['status'])
+                        try:
+                            reminders.accept(state, item['planningBatch'], turn['reply'], now)
+                        except Exception:
+                            item['planFinished'] = True
+                            state['activeInput'] = None
+                            self._save()
+                            raise
+                        item['planFinished'] = True
+                        state['activeInput'] = None
+                        self._save()
+            if not state['enabled']:
+                return
+            for plan in state['plans']:
+                if plan['state'] == 'scheduled' and reminders.instant(plan['sendAt']) <= now:
+                    self._enqueue_output('reminder:' + plan['id'], 'reminder', plan['text'], self.data['channel'])
+                    self.data['outputs'][-1]['reminderId'] = plan['id']
+                    plan['state'] = 'queued'
+                    self._save()
+            if (state['activeInput'] is not None or self.data['channel'] is None or
+                    state['nextCheck'] is not None and reminders.instant(state['nextCheck']) > now):
+                return
+            if state['pending'] and (self.codex.get('connection') != 'ready' or self.codex.get('activeTurnId') or
+                    any(row['state'] == 'queued' for row in self.data['inputs'])):
+                return  # Wait for the current conversation, rather than steering it.
+            state['lastCheck'] = now.isoformat()
+            state['nextCheck'] = (now + timedelta(hours=1)).isoformat()
+            if state['pending']:
+                request = reminders.batch(state)
+                identity = uuid4().hex
+                self.data['inputs'].append(dict(id=identity, source='reminder-plan', planningBatch=request,
+                    channel=deepcopy(self.data['channel']), text=reminders.prompt(request, now), state='queued', error=''))
+                state['activeInput'] = identity
+            self._save()
 
     def _step(self, phase, action):
         with self.lock:
@@ -302,6 +423,7 @@ class Service:
         while not self._stopped():
             self._step('codex', self._poll_codex)
             self._step('receive', self._receive)
+            self._step('reminders', self._remind)
             if 'codex' not in self.paused:
                 self._step('submit', self._submit)
             self._step('output', self._flush)
@@ -330,6 +452,20 @@ class Service:
         return dict(accepted=True)
 
     def handle(self, command, params):
+        if command == 'configure_reminders':
+            with self.lock:
+                reminders.configure(self.data['reminders'], params['enabled'], params['preferences'])
+                # Disabling also prevents an unsent internal request from running later.
+                active = self.data['reminders']['activeInput']
+                if active is not None:
+                    item = next(row for row in self.data['inputs'] if row['id'] == active)
+                    if item['state'] == 'queued':
+                        item['state'] = 'skipped'
+                        self.data['reminders']['activeInput'] = None
+                self._save()
+            self.wake.set()
+            self._publish()
+            return dict(success=True)
         if command == 'bridge_output':
             return self._bridge_output(params)
         if command in ('show_sessions', 'show_schedule'):
@@ -343,6 +479,8 @@ class Service:
             return dict(success=True)
         if command == 'continue':
             with self.lock:
+                if 'reminders' in self.paused:
+                    self.data['reminders']['nextCheck'] = None
                 self.paused.clear()
                 self.issues.clear()
             self.wake.set()
@@ -378,13 +516,34 @@ class Service:
             elif kind in ('inputs', 'outputs'):
                 item = next(row for row in self.data[kind] if row['id'] == params['id'])
                 if command == 'retry' and item['state'] in ('failed', 'unknown'):
+                    if item.get('source') == 'reminder-plan':
+                        raise ValueError('请跳过旧规划并点击「继续」，使用最新增量重新规划')
+                    if kind == 'outputs' and item['source'] == 'reminder':
+                        plan = next(row for row in self.data['reminders']['plans'] if row['id'] == item['reminderId'])
+                        if plan['state'] in ('cancelled', 'expired') or not self.data['reminders']['enabled']:
+                            raise ValueError('提醒已失效，不能重发')
+                        plan.update(state='queued', reason='')
                     if kind == 'inputs' and not self._same_channel(item['channel'], self.data['channel']):
                         raise ValueError('此消息不属于当前连接的飞书会话')
                     item.update(state='queued', error='')
                 elif command == 'confirm' and item['state'] == 'unknown':
+                    if item.get('source') == 'reminder-plan' and not item.get('turnId'):
+                        turn = next((row for row in self.codex['turns'] if row.get('message') == item['text']), None)
+                        if turn is None:
+                            raise ValueError('尚未找到对应的 Codex 规划回合；请核对后跳过旧规划')
+                        item.update(turnId=turn['turnId'], threadId=turn['threadId'])
+                    if kind == 'outputs' and item['source'] == 'reminder':
+                        plan = next(row for row in self.data['reminders']['plans'] if row['id'] == item['reminderId'])
+                        plan.update(state='sent', sentAt=self._now().isoformat())
                     item.update(state='submitted' if kind == 'inputs' else 'sent', error='')
                 elif command == 'skip' and item['state'] in ('failed', 'unknown'):
                     item['state'] = 'skipped'
+                    if kind == 'outputs' and item['source'] == 'reminder':
+                        plan = next(row for row in self.data['reminders']['plans'] if row['id'] == item['reminderId'])
+                        plan.update(state='skipped', reason='用户跳过')
+                    if item.get('source') == 'reminder-plan':
+                        self.data['reminders']['activeInput'] = None
+                        self.data['reminders']['nextCheck'] = None
                 else:
                     raise ValueError('此项当前不支持所选操作')
             else:
